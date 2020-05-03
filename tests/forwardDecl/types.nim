@@ -4,10 +4,10 @@ const maxEnts* = 10_000
 
 registerComponents(maxEnts):
   type
-    IncComp* = object
-    B* = object
-      value*: int
-    C* = object
-      value*: int
+    Value* = object
+      amount*: int
+    IncValue* = object
+    AddValue* = object
+      amount*: int
 
 

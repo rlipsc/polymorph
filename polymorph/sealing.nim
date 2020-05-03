@@ -1,4 +1,7 @@
-import macros, sharedtypes, private/utils, components, entities, systems, statechanges, typetraits, tables
+import
+  macros, sharedtypes, private/utils, components, entities, #systems,
+  statechanges, typetraits, runtimeconstruction
+import tables, strutils
 export
   onAddCallback, onRemoveCallback,
   onAdd, onRemove, onInit, onInterceptUpdate,
@@ -54,11 +57,6 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
     template entityData*(`entIdNode`: EntityId): untyped = `entAccess`
     proc lastEntityId*: EntityId = (`ecStateVarIdent`.nextEntityId.IdBaseType - 1.IdBaseType).EntityId
 
-    ## Entities start at 1 so a zero EntityId is invalid or not found
-    template valid*(entityId: EntityId): bool = entityId != NO_ENTITY
-    proc `eqIdent`*(e1, e2: EntityId): bool {.inline.} = e1.IdBaseType == e2.IdBaseType
-    proc `eqIdent`*(e1, e2: EntityRef): bool {.inline.} =
-      e1.entityId.IdBaseType == e2.entityId.IdBaseType and e1.instance.IdBaseType == e2.instance.IdBaseType
     proc `eqIdent`*(eRef: EntityRef, e: EntityId): bool {.inline.} =
       eRef.entityId.IdBaseType == e.IdBaseType and
         eRef.instance.IdBaseType == entityData(e).instance.IdBaseType
@@ -359,11 +357,11 @@ template getComponentUpdatePerformance: seq[ComponentUpdatePerfTuple] =
   ## Needs to be late bound as a template; as a proc it will bind when ecsComponentsToBeSealed is
   ## empty and not update.
   var r: seq[ComponentUpdatePerfTuple]
+  let systemsByCompId = compSystems()
   for tId in ecsComponentsToBeSealed:
     # Each component gets a direct access addComponent
     let
       typeIdx = tId.int
-      systemsByCompId = compSystems()
       tyNameStr = tNames[typeIdx]
       relevantSystems = systemsByCompId[typeIdx]
     r.add((tyNameStr, relevantSystems.len))
@@ -398,19 +396,11 @@ proc makeEntities(entOpts: ECSEntityOptions): NimNode =
 
 # Runtime systems
 
-type
-  ## Constructor called on first create.
-  ConstructorProc = proc (entity: EntityRef, component: Component, master: EntityRef)
-  ## Constructor called after all entities in a template have been constructed.
-  PostConstructorProc = proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
-  ## Constructor called when `clone` is invoked.
-  CloneConstructorProc = proc (entity: EntityRef, component: ComponentRef)
-    
 proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
   ## These tools need to use `addComponent` generated in `commitSystems`.
   let
     res = ident "result"
-    compCount = newIntLitNode ecsComponentsToBeSealed.len    
+    compCount = newIntLitNode ecsComponentsToBeSealed.len
     strOp = nnkAccQuoted.newTree(ident "$")
     # compInst matches the template provided by caseComponent.
     compName = ident "componentName"
@@ -436,7 +426,7 @@ proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
           try:
             `res` &= componentInstanceType()(componentRef.index.int).access.repr
           except:
-            `res` &= "<Error accessing>"
+            `res` &= "<Error accessing>\n"
 
     proc `strOp`*(componentRef: ComponentRef, showData: bool = true): string = componentRef.toString(showData)
 
@@ -487,147 +477,35 @@ proc makeConstructionTools(entOpts: ECSEntityOptions): NimNode =
     entityIdIdent = ident "entityId"
     tcIdent = ident typeClassName()
     componentsLen = componentRefsLen(entityIdIdent, entOpts)
-  result = quote do:
-    ###############
-    #
-    # Construction
-    #
-    ###############
+    arrayType = genArray(tNames.len, quote do: seq[ComponentTypeId])
+    ownedComponentsVar = ident "ownedComponents"
+    ownedComps = nnkBracket.newTree()
 
-    # Note: A destructor mechanism has not been included as it would incur a fixed performance penalty for every single component that's
-    # removed or destroyed. Use Nim's built in destructors if required.
-    # It's possible to set a flag on the entity storage when a component is used that's also flagged for manual destruction,
-    # but removing that flag would incur a penalty by needing to scan for other components that still need the bit set.
-    # The functionality can be easily manually performed by using a wrapper proc before calling entity.delete that performs actions.
+  for i in 0 ..< tNames.len:
+    let
+      compOwner = componentSystemOwner[i]
+      owned = compOwner != InvalidSystemIndex
+      noneOwned = quote do: newSeq[ComponentTypeId]()
+    if not owned: ownedComps.add(noneOwned)
+    else:
+      if sysRequirements.len > 0:
+        var comps = nnkPrefix.newTree()
+        comps.add ident "@"
+        var compItems = nnkBracket.newTree()
+        for ownedSysComp in sysRequirements[compOwner.int]:
+          compItems.add newDotExpr(newLit(ownedSysComp.int), ident "ComponentTypeId")
+        comps.add compItems
+        ownedComps.add comps
+      else:
+        ownedComps.add noneOwned
 
-    var
-      # Note: As zero is an invalid component, a component count of eg 5 indicates valid indices of 0..5, not 0..4.
-      manualConstruct: array[componentCount() + 1, ConstructorProc]
-      # Post constructors are called after an entity template has been constructed.
-      postConstruct: array[componentCount() + 1, PostConstructorProc]
-      # Clone constructors allow custom handling of components by type when `clone` is called on an entity.
-      cloneConstruct: array[componentCount() + 1, CloneConstructorProc]
+  # Build static array of system components.
+  let ownedComponents = quote do:
+    const `ownedComponentsVar`: `arrayType` = `ownedComps`
 
-    # Do not rely on the order a callback is invoked when constructing templates
+  result = newStmtList()
 
-    proc registerConstructor*(typeId: ComponentTypeId, callback: ConstructorProc) =
-      ## Adds a callback that is invoked when this component type is used in `construct`
-      manualConstruct[typeId.int] = callback
-
-    template registerConstructor*(t: typedesc[`tcIdent`], callback: ConstructorProc) =
-      registerConstructor(t.typeId, callback)
-
-    proc registerPostConstructor*(typeId: ComponentTypeId, callback: PostConstructorProc) =
-      ## Adds a callback that is invoked when this component type is used in `construct`
-      postConstruct[typeId.int] = callback
-
-    template registerPostConstructor*(t: typedesc[`tcIdent`], callback: PostConstructorProc) =
-      registerPostConstructor(t.typeId, callback)
-
-    proc registerCloneConstructor*(typeId: ComponentTypeId, callback: CloneConstructorProc) =
-      ## Adds a callback that is invoked when this component type is used in `construct`
-      cloneConstruct[typeId.int] = callback
-
-    template registerCloneConstructor*(t: typedesc[`tcIdent`], callback: CloneConstructorProc) =
-      registerCloneConstructor(t.typeId, callback)
-
-    proc clone*(`entIdent`: EntityRef): EntityRef =
-      ## Copy an entity's components to a new entity.
-      ## Note that copying objects with pointers/references can have undesirable results.
-      ## For special setup, use `registerCloneConstructor` for the type. This gets passed
-      ## the clone type it would have added. You can then add a modified component or 
-      ## entirely different set of components, or ignore it by not adding anything.
-      assert `entIdent`.alive
-      `res` = newEntity()
-
-      for compRef in `entIdent`.components:
-        caseComponent compRef.typeId:
-          # `componentType` gives the compile-time type for the case branch being tested,
-          # `storage` returns the access array for this type's component data.
-
-          # trigger construction callback if present
-          let cb = cloneConstruct[compRef.typeId.int]
-          if cb != nil:
-            # The callback is responsible for adding reference(s) from the source entity.
-            # Callbacks may add multiple sets of components or none at all.
-            # `compRef` is the reference to the original component we are cloning.
-            cb(`res`, compRef)
-          else:
-            `res`.addComponent componentType.storage[compRef.index.int]
-    
-    proc construct*(components: ComponentList, master = NO_ENTITY_REF): EntityRef =
-      ## Create a runtime entity from a list of components
-      ## The user may use `registerCallback` to control construction of particular types.
-      ## `master` is usually the first entity in the construction list,
-      ## and allows constructing many entities with some link to another
-      `res` = newEntity()
-      # master defaults to the current entity if nothing specified
-      let
-        masterRef = if master.entityId != NO_ENTITY:
-          master
-        else:
-          `res`
-
-      for i in 0 ..< components.len:
-        let curTypeId = components[i].typeId
-        caseComponent curTypeId:
-          # trigger construction callback if present
-          let cb = manualConstruct[curTypeId.int]
-          if cb != nil:
-            # The callback is responsible for adding reference(s) from the source entity.
-            # Callbacks may add multiple sets of components or none at all.
-            cb(`res`, components[i], masterRef)
-          else:
-            # Default operation is to copy component data into storage and generate a reference.
-            # We cast the component back to it's reference type (provided by caseComponent) to obtain the value.
-            `res`.addComponent componentRefType()(components[i]).value
-
-    proc construct*(entityTemplates: ConstructionTemplate): Entities =
-      ## Constructs multiple entities and returns their entity ids.
-      ## The first entity in the list is passed to the others as the "master".
-      ## This same entity is also passed to each individual component's constructor,
-      ## this allows components to have some reference to their construction environment.
-      ## For example, the first entity can contain a physics body component that others may
-      ## reference.
-      ## No other structure is assumed, and the meaning of 'master' is defined by the user.
-      ## Components are constructed in order, calling manual construction code per type,
-      ## then a second parse calls post construction calls with reference to the completed component list.
-      ## This second parse tests for and triggers post construction hooks, which are fed the fully
-      ## constructed entity and it's existing component, along with the rest of the constructed entities
-      ## in this template. This allows fetching components to read initialised values.
-      if entityTemplates.len > 0:
-        `res`.setLen(entityTemplates.len)
-
-        # First the "master" entity is constructed.
-        # Often when constructing from templates, we want to be able to refer to
-        # another entity, such as an entity that stores the mass body or ai controller.
-        `res`[0] = entityTemplates[0].construct()
-        let master = `res`[0]
-        for i in 1 ..< entityTemplates.len:
-          # Pass the first entity as a reference for the user to use or ignore.
-          `res`[i] = entityTemplates[i].construct(master)
-          
-        # Re-parse components to check for and activate post construction callbacks.
-        # This post-step allows the user to do any multi-entity work that may be required
-        # such as physics setup and so on.
-        for i in 0 ..< `res`.len:
-          let ent = `res`[i]
-          for compRef in ent.components:
-            let tId = compRef.typeId
-            let pc = postConstruct[tId.int]
-            if pc != nil:
-              # Callback passes this entity and the fully constructed result array.
-              pc(ent, compRef, `res`)
-
-    proc toTemplate*(`entIdent`: EntityRef): seq[Component] =
-      ## Creates a list of components ready to be used for cloning.
-      assert `entIdent`.alive
-      let `entityIdIdent` = `entIdent`.entityId
-      let length = `componentsLen`
-      `res` = newSeq[Component](length)
-      for i, compRef in `entityIdIdent`.componentPairs:
-        caseComponent(compRef.typeId):
-          `res`[i] = componentInstanceType()(compRef.index).makeContainer()
+  result.add makeRuntimeConstruction(entOpts)
 
   genLog "# Construction tools:\n", result.repr
 
@@ -639,6 +517,11 @@ proc makeRuntimeDebugOutput: NimNode =
     totalCount = allSystemsNode.len
     tsc = ident("totalSystemCount")
     strOp = nnkAccQuoted.newTree(ident "$")
+  var ownedComponents = nnkBracket.newTree()
+  for c, owner in componentSystemOwner:
+    if owner != InvalidSystemIndex:
+      ownedComponents.add newDotExpr(newLit c, ident "ComponentTypeId")
+  
   result = quote do:
     proc listComponents*(entity: EntityRef, showData = true): string =
       ## List all components attached to an entity.
@@ -649,9 +532,14 @@ proc makeRuntimeDebugOutput: NimNode =
         for compRef in entityId.components:
           let compDesc = `strOp`(compRef, showData)
           `res` &= compDesc
-          if not compRef.valid:
-            # $typeId returns the string of the storage type for this component.
-            `res` &= " <INVALID COMPONENT Type: " & $compRef.typeId & " idx " & $int(compRef.index) & ">\n"
+          if compRef.typeId in `ownedComponents`:
+            if not compRef.alive:
+              # $typeId returns the string of the storage type for this component.
+              `res` &= " <DEAD OWNED COMPONENT Type: " & $compRef.typeId & " idx " & $int(compRef.index) & ">\n"
+          else:
+            if not compRef.valid:
+              # $typeId returns the string of the storage type for this component.
+              `res` &= " <INVALID COMPONENT Type: " & $compRef.typeId & " idx " & $int(compRef.index) & ">\n"
           if showData:
             # Helps separate large components
             `res` &= "----\n"
@@ -680,11 +568,12 @@ proc makeRuntimeDebugOutput: NimNode =
 
     proc `strProcName`*(sysIdx: SystemIndex): string =
       ## Outputs the system name passed to `sysIdx`.
-      matchSystem(sysIdx):
-        "System " & system.name & " (" & $sysIdx.int & ")"
+      caseSystem sysIdx:
+        "System " & sys.name & " (" & $int(sysIdx) & ")"
 
     ## Total number of systems defined
     const `tsc`* = `totalCount`
+  
   genLog "# Runtime debug output:\n", result.repr
 
 proc makeListSystem: NimNode =
@@ -747,7 +636,7 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
     actions = ident "actions"
     id = ident "id"
   var caseStmt = nnkCaseStmt.newTree()
-  caseStmt.add: `id`
+  caseStmt.add quote do: `id`.int
 
   for i in componentsToInclude:
     let
@@ -756,7 +645,7 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
 
     var
       ofNode = nnkOfBranch.newTree()
-      compVal = nnkDotExpr.newTree(newIntLitNode(compIdx), ident "ComponentTypeId")
+      compVal = newIntLitNode(compIdx)
     ofNode.add compVal
     let
       tyStr = tNames[compIdx]
@@ -771,6 +660,19 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       # reference the storage object
       storageFieldIdent = newIdentNode storageFieldName(tyStr)
       tyInstanceIds = newIdentNode instanceIdsName(tyStr)
+      sysIdx = newDotExpr(newLit componentSystemOwner[compIdx].int, ident "SystemIndex")
+    var
+      accessOwningSystem = newStmtList()
+      isOwnedComponent: NimNode
+    
+    if componentSystemOwner[compIdx] != InvalidSystemIndex:
+      isOwnedComponent = newLit true
+      let sysOwner = allSystemsNode[componentSystemOwner[compIdx].int]
+      accessOwningSystem.add(quote do:
+        template owningSystem: untyped {.used.} = `sysOwner`
+      )
+    else:
+      isOwnedComponent = newLit false
 
     # Following templates are available for use within the case statement.
     # These aren't compiled in unless the invoker uses them.
@@ -790,11 +692,14 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       template componentRefInit: untyped {.used.} = `tyRefInit`
       template componentDel(index: `tyInstance`): untyped {.used.} = `tyDel`(index)
       template componentAlive: untyped {.used.} = `aliveStateIdent`
+      template componentGenerations: untyped {.used.} = `tyInstanceIds`
       template componentInstanceType: untyped {.used.} = `tyInstance`
-      template componentInstanceIds: untyped {.used.} = `tyInstanceIds`
       # Component data is similar to `access` but provides the whole array for you to use.
       # Eg; `echo componentData[myComponentRef.index.int].repr`
       template componentData: untyped {.used.} = `storageFieldIdent`
+      template isOwned: bool {.used.} = `isOwnedComponent`
+      template owningSystemIndex: SystemIndex {.used.} = `sysIdx`
+      `accessOwningSystem`
       `actions`
     )
     caseStmt.add ofNode
@@ -811,7 +716,7 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       ##   actions
       ## * the same action block is compiled for every choice, but you can use the
       ##   local `component` template to fetch any outer scope entities you wish
-      ## on type.
+      ##   on the branch qualified type type.
       ##
       ## The following will display the statically compiled name and ComponentTypeId
       ## for every component.
@@ -827,13 +732,13 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       ##   * componentId: the ComponentTypeId of the component
       ##   * componentName: string name
       ##   * componentType: static type represented by `id`
-      ##   * componentIndexType: index type, eg; MyComponentIndex
+      ##   * componentInstanceType: index type, eg; MyComponentInstance
       ##   * componentRefType: ref type for this component, eg: MyComponentRef
-      ##   * componentInit: Initialiser procedure for this type
+      ##   * componentInit: initialiser procedure for this type
       ##   * componentRefInit: Ref initialiser procedure for this type
       ##   * componentDel: delete procedure for this type
       ##   * componentAlive: direct access to proc to test if this component is alive
-      ##   * ComponentGeneration: the typed index. With this, you can directly access the fields.
+      ##   * componentGenerations: direct access to the generation values for this type
       `caseStmt`
   )
   #genLog "# Component case:\n", result.repr
@@ -852,28 +757,23 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
   ## This allows you to write generic code that dynamically applies to any system
   ## chosen at runtime.
   let
-    indexer = ident("i")
     actions = ident "actions"
     index = ident "index"
   var body = newStmtList()
-  body.add(quote do:
-    let `indexer` = `index`)
-
   var caseStmt = nnkCaseStmt.newTree()
-  caseStmt.add indexer
+  
+  caseStmt.add quote do: `index`.int
 
   for sysId in systemsToInclude:
     let sysIdx = sysId.int
     var ofNode = nnkOfBranch.newTree()
-    ofNode.add nnkDotExpr.newTree(newIntLitNode(sysIdx), ident"SystemIndex")
+    ofNode.add newIntLitNode(sysIdx)
     var
       curSys = allSystemsNode[sysIdx]
       curSysTuple = ident(systemNames[sysIdx].tupleName)
-      sysTypeIdent = ident("SystemType")
-      sys = ident("system")
     ofNode.add(quote do:
-      template `sys`: untyped {.used.} = `curSys`
-      template `sysTypeIdent`: typedesc {.used.} = `curSysTuple`
+      template sys: untyped {.used.} = `curSys`
+      template SystemTupleType: typedesc {.used.} = `curSysTuple`
       `actions`
     )
     caseStmt.add ofNode
@@ -881,33 +781,38 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
   caseStmt.add(nnkElse.newTree(elseCode))
   body.add caseStmt
 
-  let sys = ident("system")
   var allSysBody = newStmtList()
   for i in 0 ..< systemsToInclude.len:
-    let curSys = allSystemsNode[i]
+    let
+      curSysIdx = systemsToInclude[i]
+      curSys = allSystemsNode[curSysIdx.int]
+      curSysTuple = ident(systemNames[curSysIdx.int].tupleName)
     allSysBody.add(quote do:
       block:
-        template `sys`: untyped = `curSys`
+        template sys: untyped {.used.} = `curSys`
+        template SystemTupleType: typedesc {.used.} = `curSysTuple`
         `actions`
     )
 
   result = quote do:
-    template matchSystem*(`index`: SystemIndex, `actions`: untyped): untyped =
+    template caseSystem*(`index`: SystemIndex, `actions`: untyped): untyped =
       `body`
 
     template forAllSystems*(`actions`: untyped): untyped =
-      ## This macro will perform `actions` for every system.
-      ## Injects the `system` template for easier operation.
+      ## This will perform `actions` for every system.
+      ## Injects the `sys` template for easier operation.
       `allSysBody`
 
   genLog "# System matchers:\n", result.repr
 
-template alive*(compRef: ComponentRef): bool =
-  ## Check if this component ref's index is still valid (not to be confused with the type's generated reference type).
-  ## Not super fast due to the case statement.
-  let index = compRef.index.int
-  caseComponent compRef.typeId:
-    componentAlive()[index] and compRef.generation.int == componentInstanceIds()[index]
+proc makeCompRefAlive: NimNode =
+  quote do:
+    template alive*(compRef: ComponentRef): bool =
+      ## Check if this component ref's index is still valid and active.
+      ## Requires use of run-time case statement to match against type id.
+      let index = compRef.index.int
+      caseComponent compRef.typeId:
+        componentAlive()[index] and compRef.generation.int == componentGenerations()[index]
 
 proc sealComps(entOpts: ECSEntityOptions): NimNode =
   assert ecsComponentsToBeSealed.len > 0, "No components defined"
@@ -930,8 +835,10 @@ template addPerformanceLog =
 
 proc sealEntities(entOpts: ECSEntityOptions): NimNode =
   result = newStmtList()
+  result.add generateTypeStorage()
   result.add genTypeAccess()
   result.add makeEntities(entOpts)
+  result.add makeCompRefAlive()
   result.add makeCaseComponent(ecsComponentsToBeSealed)
   result.add makeFetchComponent(entOpts)
   result.add makeDelete(entOpts)
@@ -956,16 +863,20 @@ proc addNonNilItems(node: var NimNode, toAdd: seq[NimNode]) =
 macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   ## Seal all components, create access functions that allow adding/removing/deleting components,
   ## and instantiate entity storage.
+  echo "Building ECS..."
   result = newStmtList()
   result.add doStartLog()
   addPerformanceLog()
   result.addNonNilItems(addForwardDecls)
-
   result.addNonNilItems(removeForwardDecls)
   result.add sealEntities(entOpts)
   result.add sealRuntimeTools(entOpts)
   result.add sealComps(entOpts)
+  when defined(debugSystemPerformance):
+    echo "Sealing complete."
   result.add makeConstructionTools(entOpts)
+  when defined(debugSystemPerformance):
+    echo "Construction tools complete."
 
   result.addNonNilItems(addCallbackProcs)
   result.addNonNilItems(removeCallbackProcs)
@@ -982,7 +893,7 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   # Since the events are tied to type id, and component type ids are not
   # cleared, we can assume there will be no clashing upon further
   # events when registerComponents is invoked again.
-
+  echo "ECS Built."
   result.add doWriteLog()
 
 template makeEcs*(maxEnts: static[int] = defaultMaxEntities): untyped =

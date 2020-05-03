@@ -1,6 +1,6 @@
 import polymorph
 
-template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions): untyped {.dirty.} =
+template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions) {.dirty.} =
   import unittest
 
   registerComponents(compOpts):
@@ -14,8 +14,11 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
       DeleteArb = object
       RemoveSelf = object
       RemDelSelf = object
+      NoSystemsComp = object
 
-  makeSystemOpts("incInt", [AddOne, IntCont], sysOpts):
+  defineSystem("incInt", [AddOne, IntCont], sysOpts)
+
+  makeSystem("incInt", [AddOne, IntCont]):
     all:
       item.intCont.value += 1
 
@@ -83,12 +86,18 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         ents.add e    
 
       test "Add component":
-        let e = newEntity()
+        let
+          e = newEntity()
+          lastCount = sysIncInt.count
         ents.add e
         e.addComponent IntCont(value: 5)
+        check sysIncInt.count == lastCount
 
         e.fetchCheck IntCont:
           check comp.value == 5
+
+        e.addComponent AddOne()
+        check sysIncInt.count == lastCount + 1
 
       test "New entity with component":
         var e = newEntityWith(FloatCont(value: 12.34), AddOne(), IntCont(value: 12))
@@ -116,12 +125,38 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
           check comp.value == 12.34
 
       test "Remove component":
-        let e = newEntity()
-        ents.add e
-        e.addComponent IntCont()
-        e.removeComponent IntCont
-        check not e.hasComponent IntCont
-        check e.componentCount == 0
+        block:
+          # One component on a one component system.
+          let
+            e = newEntity()
+            lastCount = sysDelOwnEnt.count
+          ents.add e
+          e.addComponent DeleteSelf()
+          check sysDelOwnEnt.count == lastCount + 1
+
+          e.removeComponent DeleteSelf
+          check not e.hasComponent DeleteSelf
+
+          check e.componentCount == 0
+          check sysDelOwnEnt.count == lastCount
+          e.delete
+        block:
+          # Two components.
+          let
+            e = newEntity()
+            lastCount = sysIncInt.count
+          ents.add e
+          
+          e.addComponent IntCont()
+          check sysIncInt.count == lastCount
+          e.addComponent AddOne()
+          check sysIncInt.count == lastCount + 1
+          
+          e.removeComponent IntCont
+          check not e.hasComponent IntCont
+          check e.componentCount == 1
+          check sysIncInt.count == lastCount
+          e.delete
 
       test "Delete":
         # No need to update ents for transient entity.
@@ -169,6 +204,12 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         doRemoveSelf()
         check sysRemoveSelf.count == 0
         remEnts.deleteAll
+
+      test "Remove component with no systems":
+        var ent = newEntityWith(NoSystemsComp())
+        check ent.hasComponent NoSystemsComp
+        ent.removeComponent NoSystemsComp
+        check not(ent.hasComponent NoSystemsComp)
 
       test "Check some system values":
         let e = newEntity()

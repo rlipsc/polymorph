@@ -8,27 +8,32 @@ proc runForwardDecl* =
       const maxEnts = 4
       var ents = newSeq[EntityRef]()
 
-      for i in 0 ..< maxEnts div 2:
-        ents.add newEntityWith(IncComp(), B())
-        ents.add newEntityWith(IncComp(), B(), C())
+      for i in 0 ..< maxEnts:
+        let v = i + 1
+        if i mod 2 == 0:
+          ents.add newEntityWith(Value(amount: v), AddValue(amount: v))
+        else:
+          ents.add newEntityWith(AddValue(amount: v), IncValue())
 
       runAllSystems()
       
       for i, ent in ents:
         let
-          incComp = ent.fetchComponent IncComp
-          b = ent.fetchComponent B
-          c = ent.fetchComponent C
+          value = ent.fetchComponent Value
+          incValue = ent.fetchComponent IncValue
+          addValue = ent.fetchComponent AddValue
         
-        check incComp.valid
+        check addValue.valid
 
         if i mod 2 == 0:
           check:
-            b.valid
-            not c.valid
+            value.valid
+            not incValue.valid
+            value.amount == (i + 1) * 2 
         else:
           check:
-            b.valid
-            c.valid
-            b.value == 2
-            c.value == 1
+            incValue.valid
+            addValue.amount == (i + 1) + 1
+
+when isMainModule:
+  runForwardDecl()

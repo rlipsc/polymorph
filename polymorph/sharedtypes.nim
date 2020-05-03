@@ -2,25 +2,16 @@
   Everything in this module is exported to the user.
 ]#
 
+
+# ECS generation options and types.
 type
-  # Base type for all ids.
-  IdBaseType* = int32
-  ## Used to look up systems in allSystemsNode
-  SystemIndex* = distinct int
-
-  # This ideally needs to be redefined as the set size is.
-  # stored value as the minimum set size and type cast to it everywhere from
-  # user provided ComponentTypeIds.
-  ComponentTypeIDBase* = uint16
-  ComponentTypeId* = distinct ComponentTypeIDBase
-
-  # Entity storage options
   ECSCompStorage* = enum csSeq, csArray, csTable
   ECSCompDuplicates* = enum cdAssertRaise, cdRaise
   ECSEntityItemStorage* = enum esSeq, esArray, esPtrArray
   ECSRecyclerFormat* = enum rfSeq, rfArray
   ECSEntityOptions* = object
     ## Controls the maximum amount of entities to be instantiated at any one time.
+    ## This is ignored for dynamically sized storage such as seq and Table.
     maxEntities*: Natural
     ## Choose format of component list in entity items.
     componentStorageFormat*: ECSCompStorage
@@ -50,7 +41,7 @@ type
     ## Note that with cdRaise, the component list is searched for duplicates each
     ## time a component is added, even with release/danger.
     duplicates*: ECSCompDuplicates
-  
+
   # Component storage options
   ECSAccessMethod* = enum amDotOp, amFieldTemplates
   ECSCompItemStorage* = enum cisSeq, cisArray
@@ -164,4 +155,91 @@ const
   defaultComponentOptions* = dynamicSizeComponents()
   defaultEntityOptions* = dynamicSizeEntities()
   defaultSystemOptions* = dynamicSizeSystem()
+
+# Base Polymorph types.
+type
+  # Base type for all ids.
+  IdBaseType* = int32
+  ## Used to look up systems in allSystemsNode
+  SystemIndex* = distinct int
+
+  EntityId* = distinct IdBaseType
+  EntityInstance* = distinct IdBaseType
+
+  EntityRef* = tuple[entityId: EntityId, instance: EntityInstance]
+  Entities* = seq[EntityRef]
+
+  # This ideally needs to be redefined as the set size is.
+  # stored value as the minimum set size and type cast to it everywhere from
+  # user provided ComponentTypeIds.
+  ComponentTypeIDBase* = uint16
+  ComponentTypeId* = distinct ComponentTypeIDBase
+
+  Component* {.inheritable.} = ref object of RootObj
+    ## This root object allows runtime templates of components to be constructed.
+    ## `registerComponents` automatically generates a type descending from here for each component
+    ## type.
+    ## `typeId` has to match the valid componentTypeId for the type, and is automatically
+    ## initialised by called the generated ref init proc for the type (by default tmplTypeName()).
+    # Exposed fType id :( Required for currying parameters to ref inits and other set ups.
+    fTypeId*: ComponentTypeId
+
+  ## 'Generic' index into a component storage array.
+  ## This is 'sub-classed' into distinct types per component type by registerComponents.
+  ## These distinct versions of ComponentIndex allow direct access to component storage by
+  ## transforming the type at compile time to an index into the storage array that contains the
+  ## component.
+  ## For run-time operations on component ids, use `caseComponent` and pass the ComponentTypeId
+  ComponentIndex* = distinct int32
+  ## Instance count, incremented when the slot is used.
+  ## This is used to protect against referencing a deleted component with the same slot index.
+  ComponentGeneration* = distinct int32
+  ## Allows reference to particular instances of a component.
+  ## Component references are how indexes/keys to different components are stored, passed about, and fetched.
+  ## Not to be confused with the reference type `Component`.
+  ComponentRef* = tuple[typeId: ComponentTypeId, index: ComponentIndex, generation: ComponentGeneration]
+
+  ## Store a list of components, can be used as a template for constructing an entity.
+  ## `add` is overridden for this type to allow you to add user types or instance types
+  ## and their value is deepCopied into a ref container ready for `construct`.
+  ComponentList* = seq[Component]
+  ## A template for multiple entities
+  ConstructionTemplate* = seq[ComponentList]
+
+const
+  InvalidComponent* = 0.ComponentTypeId
+  InvalidComponentIndex* = 0.ComponentIndex
+  InvalidComponentInstance* = 0.ComponentGeneration
+  InvalidComponentGeneration* = 0.ComponentGeneration
+  InvalidComponentRef*: ComponentRef = (InvalidComponent, InvalidComponentIndex, InvalidComponentInstance)
+  InvalidSystemIndex* = SystemIndex(-1)
+  
+  ## An EntityId of zero indicates uninitialised data
+  NO_ENTITY* = 0.EntityId
+  ## Reference of an invalid entity
+  NO_ENTITY_REF*: EntityRef = (entityId: NO_ENTITY, instance: 0.EntityInstance)
+  # Max number of entities at once
+  # Note this is the maximum concurrent entity count, and
+  # defines the amount of memory allocated at start up.
+  FIRST_ENTITY_ID* = (NO_ENTITY.int + 1).EntityId
+  FIRST_COMPONENT_ID* = (InvalidComponentIndex.int + 1).ComponentIndex
+
+proc `==`*(s1, s2: SystemIndex): bool {.inline.} = s1.int == s2.int
+
+proc `==`*(c1, c2: ComponentTypeId): bool = c1.int == c2.int
+
+## Entities start at 1 so a zero EntityId is invalid or not found
+template valid*(entityId: EntityId): bool = entityId != NO_ENTITY
+proc `==`*(e1, e2: EntityId): bool {.inline.} = e1.IdBaseType == e2.IdBaseType
+proc `==`*(e1, e2: EntityRef): bool {.inline.} =
+  e1.entityId.IdBaseType == e2.entityId.IdBaseType and e1.instance.IdBaseType == e2.instance.IdBaseType
+
+type
+  ## Constructor called on first create.
+  ConstructorProc* = proc (entity: EntityRef, component: Component, master: EntityRef): seq[Component]
+  ## Constructor called after all entities in a template have been constructed.
+  PostConstructorProc* = proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
+  ## Constructor called when `clone` is invoked.
+  CloneConstructorProc* = proc (entity: EntityRef, component: ComponentRef): seq[Component]
+
 

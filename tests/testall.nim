@@ -1,4 +1,4 @@
-import polymorph, basic, forwardDecl/forwardDeclTest as fdcl, onevents
+import polymorph, basic, forwardDecl/forwardDeclTest as fdcl, onevents, constructandclone
 
 const
   compOpts = ECSCompOptions()
@@ -7,6 +7,7 @@ const
 
 runBasic(entOpts, compOpts, sysOpts)
 runForwardDecl()
+runConstructAndClone()
 runOnEvents()
 
 flushGenLog()
