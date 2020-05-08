@@ -315,7 +315,8 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         check sysRemoveAndDeleteSelf.deletedCount == expDeletes
         check sysRemoveAndDeleteSelf.removedCount == expRemoves
         ents.deleteAll
-
+  
+  flushGenLog()
   runBasicTests()
 
 when isMainModule:

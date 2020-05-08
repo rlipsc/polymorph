@@ -113,8 +113,8 @@ proc runConstructAndClone*() =
       check cloned.fetchComponent(B).val == 123.456
       check cloned.fetchComponent(C).val == "Hello"
       check cloned.fetchComponent(ReplacedTo).val == 123
-
-
+  
+  flushGenLog()
 
 when isMainModule:
   runConstructAndClone()
