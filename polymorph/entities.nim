@@ -1,4 +1,4 @@
-import macros, sharedtypes, private/utils
+import macros, sharedtypes, private/[utils, ecsstateinfo]
 
 proc genComponentSet: NimNode =
   ## Generate an enum that covers all of the components seen so far.
@@ -8,7 +8,7 @@ proc genComponentSet: NimNode =
   for tId in ecsComponentsToBeSealed:
     items.add(
       nnkEnumFieldDef.newTree(
-        ident "ce" & tNames[tId.int],
+        ident "ce" & typeInfo.typeName tId,
         newIntLitNode(tId.int)
       )
     )

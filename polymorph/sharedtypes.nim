@@ -71,8 +71,6 @@ type
   ECSSysIndexFormat* = enum sifTable, sifArray, sifAllocatedSeq
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysOptions* = object
-    ## Gets set automatically. Had to expose as setName can't see this field (compile time proc scope difference?)
-    fName*: string 
     ## Maximum entities this system can hold.
     maxEntities*: int
     ## Underlying storage format for the system groups.
@@ -91,11 +89,6 @@ type
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of Exception
   DuplicateComponent* = object of Exception
-
-proc setName*(sysOpts: var ECSSysOptions, name: string) =
-  sysOpts.fName = name
-
-proc name*(sysOpts: ECSSysOptions): string = sysOpts.fName
 
 const
   defaultMaxEntities* = 10_000
