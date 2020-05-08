@@ -1,4 +1,4 @@
-import macros, strutils, typetraits, ../sharedtypes, tables
+import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
 
 #[
   This module covers shared internal utilities.
@@ -14,10 +14,7 @@ var
   ecsComponentsToBeSealed* {.compileTime.}: seq[ComponentTypeId]
   # Current range of systems that have yet to be processed by `makeEcs`.
   ecsSystemsToBeSealed* {.compileTime.}: seq[SystemIndex]
-  # Indexed by component
-  ecsCompOptions* {.compileTime.} = newSeq[ECSCompOptions](1)
-  # Indexed by system
-  ecsSysOptions* {.compileTime.} = newSeq[ECSSysOptions]()
+
   ecsSysDefined* {.compileTime.}: Table[SystemIndex, bool]
   ecsSysBodiesAdded* {.compileTime.}: Table[SystemIndex, bool]
   componentDefinitions* {.compileTime.}: seq[NimNode]
@@ -46,8 +43,8 @@ var
   logInitialised* {.compileTime.}: Table[string, bool]
 
 proc findSystemIndex*(name: string): tuple[found: bool, index: int] {.compileTime.} =
-  for idx, item in ecsSysOptions:
-    if name.toLowerAscii == item.name.toLowerAscii:
+  for idx, item in systemInfo:
+    if name.toLowerAscii == item.systemName.toLowerAscii:
       return (true, idx)
 
 const
@@ -55,88 +52,13 @@ const
   storageName* = "componentStorage"
   invalidComponentStr* = "<Invalid Component>"
 
-type
-  TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
-
-var
-  # Names of all components by ComponentTypeId.
-  tNames* {.compileTime.} = @[invalidComponentStr]
-  # componentStrLits always starts with InvalidComponent at index zero.
-  componentStrLits* {.compileTime.} = nnkBracket.newTree(newStrLitNode(invalidComponentStr))
-  # List of prefixes for ref initialisers.
-  refInitPrefixes* {.compileTime.} = newSeq[string]()
-  # One prefix per invocation of `registerComponents`.
-  # Prefixes for instance initialisers
-  instanceInitPrefixes* {.compileTime.} = newSeq[string]()
-  # List of idents for the component types, this is used to generate a type class.
-  # Reset after each call to `registerComponents`
-  compTypeNodes* {.compileTime.} = newSeq[NimNode]()
-  # List of Instance type nodes
-  # Reset after each call to `registerComponents`
-  instanceTypeNode* {.compileTime.} = newSeq[NimNode]()
-
-  # User defined initialisation code. This is called immediately after the instance is created.
-  componentInitialisationCode* {.compileTime.} = newSeq[NimNode]()
-  # User defined initialisation code for when a user calls called immediately after the instance is created,
-  # but before it has been updated with any values.
-  componentInterceptValueInitCode* {.compileTime.} = newSeq[NimNode]()
-  # User defined finalisation code. This is called immediately before a component is deleted.
-  componentFinalisationCode* {.compileTime.} = newSeq[NimNode]()
-  # Stores user defined add code.
-  # Code added here will be executed once after the add operation has completed,
-  # and before any system update code for this component.
-  componentAddCode* {.compileTime.} = newSeq[NimNode]()
-
-  # Stores user defined code to be inserted when a component is removed from an entity.
-
-  componentRemoveCode* {.compileTime.} = newSeq[NimNode]()
-  addCallbackProcs* {.compileTime.} = newSeq[NimNode]()
-  addForwardDecls* {.compileTime.} = newSeq[NimNode]()
-  removeCallbackProcs* {.compileTime.} = newSeq[NimNode]()
-  removeForwardDecls* {.compileTime.} = newSeq[NimNode]()
-
-  # Stores which systems own components.
-  # Indexed by ComponentTypeId.
-  componentSystemOwner* {.compiletime.} = newSeq[SystemIndex](1)
-  # Stores which components are owned for a system.
-  # Indexed by SystemIndex.
-  systemOwnedComponents* {.compiletime.} = newSeq[seq[ComponentTypeId]]()
-
-  # Indexed by component id.
-  # Stores the component's type name and field nodes.
-  componentFieldDefinitions* {.compileTime.} = newSeq[TypeFields](1)
-
-proc isOwned*(typeId: ComponentTypeId): bool = componentSystemOwner[typeId.int] != InvalidSystemIndex
-
-proc hasUserIntercept*(typeId: ComponentTypeId): bool =
-  typeId.int < componentInterceptValueInitCode.len and
-  componentInterceptValueInitCode[typeId.int] != nil
+type TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
 
 # Systems
 var
-  # List of NimNodes of the System variables built by `defineSystem`.
-  allSystemsNode* {.compileTime.} = newStmtList()
-  # Definitions for system procs. Added in commitSystems.
-  systemProcs* {.compileTime.} = newSeq[NimNode]()
-  # Component requirements for each system.
-  sysRequirements* {.compileTime.} = newSeq[seq[ComponentTypeId]]()
-  # Idents for the system requirements.
-  sysTypes* {.compileTime.} = newSeq[seq[NimNode]]()
   # Idents of run procedures.
   runAllDoProcsNode* {.compileTime.} = newStmtList()
-  # Record of system names for use constructing setup at runtime.
-  systemNames* {.compileTime.} = newSeq[string]()
-  # Stores user defined add code.
-  # Note this is indexed by ComponentTypeId, not SystemIndex.
-  systemAddCode* {.compileTime.} = newSeq[NimNode]()
-  # Stores user defined code to be inserted when a component is removed from a system.
-  systemRemoveCode* {.compileTime.} = newSeq[NimNode]()
-  # Code specifically for a particular component and system.
-  # Indexed by system index.
-  systemAddToCode* {.compileTime.} = newSeq[seq[tuple[typeId: ComponentTypeId, code: NimNode]]]()
-  # Code specifically for a particular component and system.
-  # Indexed by system index.
-  systemRemoveFromCode* {.compileTime.} = newSeq[seq[tuple[typeId: ComponentTypeId, code: NimNode]]]()
+
 
 # Type names derived from user types
 
@@ -204,6 +126,8 @@ proc removeCallbackName*(name: string): string = "removeCallback" & name
 
 ## The name of the type class that covers all component types.
 proc typeClassName*: string = "ComponentTypeClass"
+## The name of the type class that covers all the ref types.
+proc refTypeClassName*: string = "ComponentRefTypeClass"
 ## The name of the type class that covers all the distinct int types.
 proc instanceTypeClassName*: string = "ComponentIndexTypeClass"
 
@@ -235,7 +159,7 @@ proc addToEntityList*(entity: NimNode, passed: seq[ComponentTypeId], entOpts: EC
 
   for typeId in passed:
     let
-      typeStr = tNames[typeId.int]
+      typeStr = typeInfo.typeName typeId
       fieldName = typeStr.toLower
       fieldIdent = ident fieldName
     result.add addComponentRef(entity, newDotExpr(fieldIdent, ident "toRef"), entOpts)
@@ -287,22 +211,22 @@ proc componentRefsLen*(entityIdIdent: NimNode, options: ECSEntityOptions): NimNo
 
 iterator systemTypesStr*(systemIndex: SystemIndex): string =
   # Utility function to yield the name of the types used in the system specified by systemIndex.
-  for id in sysRequirements[systemIndex.int]:
-    yield tNames[id.int]
+  for id in systemInfo[systemIndex.int].requirements:
+    yield typeInfo.typeName id
 
 iterator systemTypesStrPair*(systemIndex: SystemIndex): tuple[typeName: string, id: ComponentTypeId] =
   ## Utility function to yield the name and type id of the types used in the system specified by systemIndex.
-  for id in sysRequirements[systemIndex.int]:
-    yield (typeName: tNames[id.int], id: id)
+  for id in systemInfo[systemIndex.int].requirements:
+    yield (typeName: typeInfo.typeName id, id: id)
 
 template compSystems*: untyped =
   ## Creates a lookup of all known component type ids to a list of systems that use them.
   # sysRequirements is indexed by system to give component, but we want to index component to get systems.
-  var r = newSeq[seq[SystemIndex]](tNames.len)
-  for i in 0 ..< tNames.len: # 0 is invalid component but we need to include in the result
+  var r = newSeq[seq[SystemIndex]](typeInfo.len)
+  for i in 0 ..< typeInfo.len: # 0 is invalid component but we need to include in the result
     # Create a list of system indexes for each component type
-    for sysIdx in 0 ..< sysRequirements.len:
-      if i.ComponentTypeId in sysRequirements[sysIdx]:
+    for sysIdx in 0 ..< systemInfo.len:
+      if i.ComponentTypeId in systemInfo[sysIdx].requirements:
         r[i].add sysIdx.SystemIndex
   r
 
@@ -357,7 +281,7 @@ proc indexTryGet*(sysNode, entIdNode, rowNode: NimNode, options: ECSSysOptions):
 proc updateIndex*(entity: NimNode, sys: SystemIndex, row: NimNode, sysOpts: ECSSysOptions): NimNode =
   ## Update the system index with the entity.
   let
-    systemNode = allSystemsNode[sys.int]
+    systemNode = systemInfo[sys.int].instantiation
     entId = quote do: `entity`.entityId
   result = systemNode.indexWrite(entId, row, sysOpts)
 
@@ -375,8 +299,8 @@ proc addSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptions
 proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode): NimNode =
   ## Assumes you have a generated variable that matches each field in the system tuple already defined.
   let
-    sysOpts = ecsSysOptions[sys.int]
-    system = allSystemsNode[sys.int]
+    sysOpts = systemInfo[sys.int].options
+    system = systemInfo[sys.int].instantiation
 
   # Generate system tuple assignment.
   var
@@ -388,10 +312,11 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
       tupleFieldStr = fields.typeName.toLowerAscii()
       tupleFieldIdent = ident tupleFieldStr
       compSource = ident tupleFieldStr & instPostfix
+      compInfo = typeInfo[fields.id.int]
     
-    if componentSystemOwner[fields.id.int] == sys:
+    if compInfo.systemOwner == sys:
       let compIdx = componentsPassed.find(fields.id)
-      assert compIdx >= 0, "Cannot find field for " & tNames[fields.id.int] & " within " & componentValues.repr
+      assert compIdx >= 0, "Cannot find field for " & compInfo.typeName & " within " & componentValues.repr
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
 
       # Update alive and instance lists for the owned component.
@@ -399,7 +324,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
       let
         aliveIdent = ident aliveStateInstanceName(fields.typeName)
         instanceIdent = ident instanceIdsName(fields.typeName)
-        compOpts = ecsCompOptions[fields.id.int]
+        compOpts = typeInfo[fields.id.int].options
 
       if compOpts.componentStorageFormat == cisSeq:
         updateOwnedAlive.add(quote do:
@@ -436,11 +361,11 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
 
 proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex): NimNode =
   let
-    typeStr = tNames[typeId.int]
+    typeStr = typeInfo.typeName typeId
     aliveIdent = ident aliveStateInstanceName(typeStr)
     instanceIdent = ident instanceIdsName(typeStr)
-    compOpts = ecsCompOptions[typeId.int]
-    systemNode = allSystemsNode[system.int]
+    compOpts = typeInfo[typeId.int].options
+    systemNode = systemInfo[system.int].instantiation
   
   # TODO: Generation.
 
@@ -463,7 +388,7 @@ iterator commaSeparate*[T: ComponentTypeId or SystemIndex](list: seq[T] or set[T
   var comma: bool
   for v in list:
     let str =
-      when T is ComponentTypeId: tNames[v.int]
+      when T is ComponentTypeId: typeInfo.typeName v
       else: systemNames[v.int]
     if comma: yield ", " & str
     else:
@@ -482,7 +407,7 @@ iterator typeDefs*(body: NimNode): NimNode =
         if def.kind == nnkTypeDef:
           yield def
 
-type FieldList = seq[tuple[fieldNode, typeNode: NimNode]]
+type FieldList* = seq[tuple[fieldNode, typeNode: NimNode]]
 
 proc toIdent(nn: NimNode): NimNode =
   # Replace symbols with idents

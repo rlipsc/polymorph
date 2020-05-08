@@ -145,4 +145,4 @@ for i in 0 ..< entTests:
 echo "Mean run time for ", maxEnts, " entities over ", entTests, " runs: ", rs.mean
 echo "Run time variance: ", rs.variance
 echo "Finish."
-
+flushGenLog()

@@ -1,5 +1,5 @@
 import macros, strutils, strformat, components, typetraits, sequtils, times, sharedtypes,
-  private/utils, tables
+  private/[ecsstateinfo, utils], tables
 
 template newEntityTemplate*: ComponentList = @[]
 proc initComponents*: ComponentList = @[]
@@ -17,19 +17,20 @@ proc indexInit(sysNode: NimNode, options: ECSSysOptions): NimNode =
     quote do:
       `sysNode`.index = newSeq[tuple[exists: bool, row: Natural]](`initSize`)
 
-proc makeSystemType(options: ECSSysOptions, componentTypes: NimNode, extraFields: seq[NimNode]): NimNode =
+proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentTypes: NimNode, extraFields: seq[NimNode]): NimNode =
   ## Generates the type declaration for this system.
   let
-    name = options.name
+    info = systemInfo[sysIndex.int]
+    name = info.systemName
     sysTypeName = systemTypeName(name)
     sysIdent = ident sysTypeName
     tupleTypeIdent = ident(tupleName(name))
   result = newStmtList()
 
-  # TODO: Check if already imported.
   if options.indexFormat == sifTable:
     result.add(quote do:
-      import tables
+      when not declared(tables):
+        import tables
     )
 
   # Generate the type for this system
@@ -52,9 +53,7 @@ proc makeSystemType(options: ECSSysOptions, componentTypes: NimNode, extraFields
   doAssert fields.kind != nnkEmpty, "Internal error: Cannot retrieve fields from system type `" & name & "`"
 
   # Create requirements array
-  let
-    requirementsIdx = sysRequirements.high    # Updated by createSysTuple.
-    reqCount = sysRequirements[requirementsIdx].len
+  let reqCount = systemInfo[sysIndex.int].requirements.len
   fields.add genField("requirements", false, genArray(reqCount, ident "ComponentTypeId"))
 
   # Append groups field to system's type, depending on options.
@@ -115,11 +114,10 @@ proc makeSystemType(options: ECSSysOptions, componentTypes: NimNode, extraFields
     `count`
   )
 
-proc instantiateSystem(options: ECSSysOptions, sysName: string, fieldSetup: seq[tuple[fieldName, value: NimNode]]): NimNode =
+proc instantiateSystem(options: ECSSysOptions, sysIndex: SystemIndex, sysName: string, fieldSetup: seq[tuple[fieldName, value: NimNode]]): NimNode =
   ## Generates an init proc that instantiates the system and initialises variables and instantiates the system variable.
+  template reqs: auto = systemInfo[sysIndex.int].requirements
   let
-    requirementsIdx = sysRequirements.high    # Updated by createSysTuple.
-    reqs = sysRequirements[requirementsIdx]
     typeName = ($sysName).capitalizeAscii
     sysType = ident systemTypeName(typeName)
     initParam = ident "value"
@@ -130,7 +128,7 @@ proc instantiateSystem(options: ECSSysOptions, sysName: string, fieldSetup: seq[
 
   result = newStmtList()
   var fieldInits = newStmtList()
-  # Prepend the system variable to each field's initialisation.
+
   for setupState in fieldSetup:
     # `value.myVar = myValue`.
     fieldInits.add newAssignment(newDotExpr(initParam, setupState.fieldName), setupState.value)
@@ -258,7 +256,9 @@ proc matchesTypeProvided(node: NimNode): bool =
 
 proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, extraFields: NimNode, sysOptions: ECSSysOptions): NimNode =
   ## Create a tuple to hold the required combination of types for this system.
-  doAssert sysName notin systemNames, "System \"" & sysName & "\" has already been defined"
+  result = newStmtList()
+
+  doAssert sysName notin systemInfo, "System \"" & sysName & "\" has already been defined"
   doAssert componentTypes.len > 0, "Systems require at least one type to operate on but none have been provided (missing a defineSystem?)"
   if sysOptions.indexFormat in [sifArray, sifAllocatedSeq] and sysOptions.maxEntities == 0:
     error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using a fixed size type"
@@ -266,6 +266,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
   var
     typeIdents: seq[NimNode]
     passedComponentIds: seq[ComponentTypeId]
+
   for item in componentTypes:
     let id = typeStringToId($item)
     typeIdents.add item
@@ -275,62 +276,63 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
   var ownedComponentIds: seq[ComponentTypeId]
   for comp in ownedComponents:
     let typeId = typeStringToId($comp)
+    
     doAssert typeId.int != -1, "This type's id can't be found in registered components: " & $comp
     if typeId notin passedComponentIds:
-      error "Asking to own component " & tNames[typeId.int] & " that is not part of system \"" & sysName & "\". System components are: " & passedComponentIds.commaSeparate
+      error "Asking to own component " & typeInfo.typeName(typeId) & " that is not part of system \"" & sysName & "\". System components are: " & passedComponentIds.commaSeparate
+    
     ownedComponentIds.add typeId
 
   for id in passedComponentIds:
-    let curOwner = componentSystemOwner[id.int]
+    let curOwner = typeInfo.systemOwner id
+    
     if curOwner != InvalidSystemIndex and id in ownedComponentIds:
-      error "Component " & tNames[id.int] & " is already owned by system \"" & systemNames[componentSystemOwner[id.int].int] & "\"" 
+      error "Component " & typeInfo.typeName(id) & " is already owned by system \"" & systemInfo[curOwner.int].systemName & "\"" 
   
-  sysTypes.add typeIdents
-
   # Update compile-time states.
-  var opts = sysOptions
-  opts.setName sysName
-  systemNames.add(sysName)
-  ecsSysOptions.add(opts)
   when defined debugSystemOptions:
-    echo "=== System generation options for " & sysName & " ===\n", opts.repr
-  let sysIndex = ecsSysOptions.high
-  if systemOwnedComponents.high < sysIndex:
-    systemOwnedComponents.setLen sysIndex + 1
-    systemOwnedComponents[sysIndex] = ownedComponentIds
+    echo "=== System generation options for " & sysName & " ===\n", sysOptions.repr
 
-  # Update compile-time record of requirements by system.
-  sysRequirements.add(@[])
-  let requirementsIdx = sysRequirements.high
+  # Conditions have now been met to add the system.
 
   let typeName = ($sysName).capitalizeAscii
   # Create the node for the variable for this system.
-  allSystemsNode.add ident(systemVarName(typeName))
+  let inst = ident(systemVarName(typeName))
 
+  # Define system index.
+  let sysIndex = systemInfo.len.SystemIndex
+  systemInfo.add SystemInfo(
+    id: sysIndex,
+    systemName: sysName,
+    instantiation: inst,
+    ownedComponents: ownedComponentIds,
+    options: sysOptions
+  )
+
+  # Build tuple type of components for this system.
   var elements = nnkTupleTy.newTree()
   # Add entity field.
   elements.add(nnkIdentDefs.newTree(ident("entity"), ident("EntityRef"), newEmptyNode()))
-  # Add rest of fields.
+  # Add components.
   for id in passedComponentIds:
-    let tyName = tNames[id.int]
+    let tyName = typeInfo.typeName id
     if id in ownedComponentIds:
-      # This component's storage is the system itself.
-      componentSystemOwner[id.int] = sysIndex.SystemIndex
+      # Owned component storage is the system itself.
+      typeInfo[id.int].systemOwner = sysIndex
       elements.add(nnkIdentDefs.newTree(
         ident((tyName).toLowerAscii), ident(tyName), newEmptyNode())
       )
     else:
+      # If not owned the component instance type is used.
       elements.add(nnkIdentDefs.newTree(
         ident(tyName.toLowerAscii), ident(tyName.instanceTypeName()), newEmptyNode())
       )
-    sysRequirements[requirementsIdx].add(id)
+    systemInfo[sysIndex.int].requirements.add(id)
   
   # Build system tuple type and access variable.
   let typeIdent = ident(tupleName(typeName))
 
-  result = newStmtList()
-
-  # Add type that will define the `groups` field.
+  # This type defines the elements of the `groups` field.
   result.add(quote do:
     type `typeIdent`* = `elements`)
 
@@ -373,11 +375,11 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
         extraFieldDefs.add(identDef)
       else: error "Unhandled kind for extra field in system \"" & sysName & "\", expected `field: type` or `field = value`, got:\n" & tyDef.treeRepr
   # Generate the system type according to provided options.
-  result.add makeSystemType(opts, componentTypes, extraFieldDefs)
-  result.add instantiateSystem(opts, sysName, fieldSetup)
+  result.add makeSystemType(sysOptions, sysIndex, componentTypes, extraFieldDefs)
+  result.add instantiateSystem(sysOptions, sysIndex, sysName, fieldSetup)
 
-  ecsSystemsToBeSealed.add SystemIndex(sysIndex)
-  ecsSysDefined.add(SystemIndex(sysIndex), true)
+  ecsSystemsToBeSealed.add sysIndex
+  ecsSysDefined.add(sysIndex, true)
 
   genLog "# SysTuple: ", result.repr
 
@@ -423,7 +425,6 @@ template updateTimings*(sys: untyped): untyped =
 
 proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOptions, extraFields: NimNode, systemBody: NimNode, ownedFields: NimNode): NimNode =
   ## Create the processing loop to 'tick' the system.
-
   let
     typeName = name.capitalizeAscii
     typeIdent = ident(tupleName(typeName))
@@ -438,9 +439,12 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     # This system has already been defined.
     let
       existingSysIdx = sysIdxSearch.index
-      types = sysTypes[existingSysIdx]
-    if componentTypes.len > 0 and types.len > 0 and types.repr != componentTypes.repr:
-      error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: " & types.repr
+      types = systemInfo[existingSysIdx].requirements
+    if componentTypes.len > 0 and types.len > 0:
+      for i, givenType in componentTypes:
+        # Types must be given in the same order.
+        if typeStringToId($givenType) != types[i]:
+          error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: " & types.repr
 
     if ecsSysBodiesAdded.hasKey(sysIdxSearch.index.SystemIndex):
       error "System \"" & name & "\" already has a body defined"
@@ -462,7 +466,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     streamWrapper = newStmtList()
   assert sysIdxSearch.found, "Cannot find system options for \"" & name & "\""
   let sysIndex = sysIdxSearch[1]
-  let options = ecsSysOptions[sysIndex]
+  let options = systemInfo[sysIndex].options
 
   if systemBody == nil:
     error "makeSystem needs a `body`"
@@ -781,7 +785,8 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
   # Store the body of the do proc.
   # The procs themselves are only accessible after commitSystem is called.
-  systemProcs.add systemProc
+  systemInfo[sysIndex].definition = systemProc
+
   ecsSysBodiesAdded[sysIndex.SystemIndex] = true
 
   genLog "# Make system " & name & ": \n", systemProc.repr
@@ -806,38 +811,12 @@ macro makeSystemBody*(name: static[string], systemBody: untyped): untyped =
   ## Make a system based on types previously defined with `defineSystem`.
   ## Used to build the body for a forward declared system.
   var found: bool
-  for sysName in systemNames:
-    if sysName.toLowerAscii == name.toLowerAscii:
+  for info in systemInfo:
+    if info.systemName.toLowerAscii == name.toLowerAscii:
       found = true
       break
   if not found: error "`makeSystemBody` requires a `defineSystem` for \"" & name & "\""
   generateSystem(name, newEmptyNode(), defaultSystemOptions, newEmptyNode(), systemBody, newEmptyNode())
-
-proc matchSystemInner(ids: openArray[ComponentTypeId], actions: NimNode): NimNode =
-  ## Perform some actions for all systems that have *at least* the supplied ids.
-  ## This is a static operation, there's no look up at runtime.
-  # TODO: Use elsewhere such as add/remove?
-  var res = newStmtList()
-  for sysIdx in ecsSystemsToBeSealed:
-    let
-      curSysIdx = sysIdx.int
-      curSys = allSystemsNode[curSysIdx]
-    var found = true
-
-    for paramType in ids:
-      if paramType notin sysRequirements[curSysIdx]:
-        found = false
-        break
-
-    if found:
-      # Equivalent to: template sys: untyped = `curSys`
-      let n = nnkStmtList.newTree(
-        nnkTemplateDef.newTree(
-          ident "sys", newEmptyNode(), newEmptyNode(), nnkFormalParams.newTree(ident "untyped"), newEmptyNode(), newEmptyNode(), curSys
-        ))
-      res.add n
-      res.add(actions)
-  res
 
 macro forSystemsUsing*(typeIds: static[openarray[ComponentTypeId]], actions: untyped): untyped =
   ## Statically perform `actions` only for systems defined for these types.
@@ -851,11 +830,12 @@ macro forSystemsUsing*(typeIds: static[openarray[ComponentTypeId]], actions: unt
       if sys notin processed:
         processed.add sys
         let
-          curSys = allSystemsNode[sys.int]
-          curTupType = ident systemNames[sys.int].tupleName
+          sysName = systemInfo[sys.int].systemName
+          curSysVar = systemInfo[sys.int].instantiation
+          curTupType = ident sysName.tupleName
         result.add(quote do:
           block:
-            template sys: untyped = `curSys`
+            template sys: untyped = `curSysVar`
             template sysType: untyped = `curTupType`
             actions
         )

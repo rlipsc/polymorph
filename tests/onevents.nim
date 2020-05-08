@@ -135,12 +135,16 @@ proc runOnEvents* =
   proc checkGroups(prefix = "") =
     forAllSystems:
       test prefix & ": Check group trimming for system \"" & sys.name & "\"" :
-        var ok = true
+        var
+          ok = true
+          deadEnts: int
         for i, ite in sys.groups:
           if not ite.entity.alive:
             checkpoint "Group idx " & $i & " is dead in system \"" & sys.name & "\" EntityId " & $ite.entity.entityId.int
+            deadEnts += 1
             ok = false
           check ite.entity.alive
+        if deadEnts > 0: checkpoint "Dead/Total for system \"" & sys.name & "\": " & $deadEnts & "/" & $sys.groups.len
         check ok
 
   let entCount = 1
@@ -177,11 +181,14 @@ proc runOnEvents* =
       expected = expectedE2
       log "AddComponents:"
       discard e2.addComponents(testVal, test2Val)
+
     checkGroups("e2 addComponents")
+      
     suite "e2 deleting...":
       # Expected should match addComponents.
       log "Deleting:"
       e2.delete
+
     checkGroups("e2 deleting")
 
     suite "e3 addComponent 1...":
@@ -212,14 +219,17 @@ proc runOnEvents* =
       # We expect that because Test2 is owned, removing Test1
       # invalidates Test2's storage so it is also removed.
       check e3.componentCount == 0
+      checkGroups("e3 remove Test1")
 
     suite "e1 delete...":
       expected = expectedE1
       log "Delete:"
       e1.delete
+      checkGroups("e1 deleting")
     suite "e3 delete...":
       expected = @[TestType(kind: ttTest2, test2: test2Val)]
       e3.delete
+      checkGroups("e3 deleting")
     log "---"
 
   test "Deleting other ents...":
@@ -242,9 +252,9 @@ proc runOnEvents* =
     check systemAdds.balanced
   test "Add to specific system":
     check systemAddTos.balanced
-  test "Intercept create unowned:":
+  test "Intercept create unowned":
     check comp1Intercepts == entCount * 4
-  test "Intercept create owned:":
+  test "Intercept create owned":
     check comp2Intercepts == entCount * 2
   
   when displayLog:

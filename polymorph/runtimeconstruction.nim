@@ -1,5 +1,5 @@
 
-import macros, private/utils, sharedtypes, tables
+import macros, private/[ecsstateinfo, utils], sharedtypes, tables
 from strutils import toLowerAscii
 
   
@@ -28,34 +28,36 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
     ofBranch.add newLit typeId.int
 
     for sys in linkedSystems:
+      template sysInfo: untyped = systemInfo[sys.int]
       let
-        requiredComps = sysRequirements[sys.int]
-        systemStr = systemNames[sys.int]
+        requiredCompsLen = sysInfo.requirements.len
+        systemStr = sysInfo.systemName
         sysTupleType = ident tupleName(systemStr)
         sysTupleVar = ident tupleName(systemStr).toLowerAscii
       var
-        matchList = newSeqOfCap[NimNode](requiredComps.len)
+        matchList = newSeqOfCap[NimNode](requiredCompsLen)
         sysFields = newStmtList()
         stateUpdates = newStmtList()
         assertions = newStmtList()
       
-      if requiredComps.len > 0:
+      if requiredCompsLen > 0:
+        # Generate code to check the system is satisfied,
+        # and code to do the assignment of the tuple elements.
 
-        # Generate code to check the system is satisfied
-        # and code to add to this system.
-        for comp in requiredComps:
+        for comp in sysInfo.requirements:
+          template compInfo: untyped = typeInfo[comp.int]
           let
-            typeStr = tNames[comp.int]
+            typeStr = compInfo.typeName
             typeField = ident typeStr.toLowerAscii
             instType = ident typeStr.instanceTypeName
             refType = ident typeStr.refTypeName
-            ownedByThisSystem = componentSystemOwner[comp.int] == sys
+            ownedByThisSystem = compInfo.systemOwner == sys
             compId = comp.int
 
           if comp != typeId:
             if ownedByThisSystem:
               # It's a run time error to not specify all the owned components.
-              let caseTypeIdStr = tNames[typeId.int]
+              let caseTypeIdStr = typeStr
               assertions.add quote do:
                 assert `types`.hasKey(`comp`),
                   "Cannot construct: Specified owned component \"" & `caseTypeIdStr` &
@@ -74,6 +76,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
               stateUpdates.add updateOwnedComponentState(comp, sys)
+              # Assignment source is the parameter ref type.
               sysFields.add(quote do:
                 `sysTupleVar`.`typeField` = `refType`(`source`[0]).value)
             else:
@@ -84,6 +87,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
               stateUpdates.add updateOwnedComponentState(comp, sys)
+              # Assignment source is copied from the owned component.
               sysFields.add(quote do:
                 `sysTupleVar`.`typeField` = `instType`(`source`).access)
             else:
@@ -92,9 +96,9 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
                 `sysTupleVar`.`typeField` = `instType`(`source`))
 
       let
-        systemNode = allSystemsNode[sys.int]
+        systemNode = sysInfo.instantiation
         row = quote do: `systemNode`.high
-        sysOpts = ecsSysOptions[sys.int]
+        sysOpts = systemInfo[sys.int].options
         updateIndex = entity.updateIndex(sys, row, sysOpts)
         addToSystem = addSystemTuple(systemNode, sysTupleVar, sysOpts)
 
@@ -132,7 +136,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
     types = ident "types"
     compIndexInfo = ident "curCompInfo"
   let
-    maxSys = allSystemsNode.len
+    maxSys = systemInfo.len
     reference = ident "reference"
     res = ident "result"
     addToEnt = addComponentRef(res, reference, entOpts)
@@ -141,7 +145,6 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
     component = ident "component"
     compIdx = ident "compIdx"
     entity = ident "entity"
-    entities = ident "entities"
     typeId = ident "typeId"
     callback = ident "callback"
     constructCase = buildConstructionCaseStmt(res, entOpts, true)
@@ -151,7 +154,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
     # Assumes components are added in ascending order.
     lowCompId = ecsComponentsToBeSealed[0].int
     highCompId = ecsComponentsToBeSealed[^1].int
-    
+
   result = quote do:
     var
       # Note: As zero is an invalid component, a component count of eg 5 indicates valid indices of 0..5, not 0..4.
@@ -344,4 +347,6 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       # Update systems.
       for `compIndexInfo` in `types`.pairs:
         `cloneCase`
+
+  genLog "# Run-time construction tools:\n", result.repr
 

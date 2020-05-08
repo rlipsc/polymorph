@@ -1,23 +1,32 @@
-import macros, typetraits, strformat, sharedtypes, private/utils, strutils
+import macros, typetraits, strformat, sharedtypes, private/[utils, ecsstateinfo], strutils
 export macros
 
 macro componentNames*: untyped =
   ## Creates a runtime accessible array of typenames of all known components.
   ## This should map directly to componentTypeId.
-  let comps = nnkStmtList.newTree(componentStrLits)
+  var comps = nnkBracket.newTree
+  for i in 0 ..< typeInfo.len:
+    comps.add newLit typeInfo[i].typeName
   result = quote do:
     @`comps`
 
-proc addComponentTypeId(typeNameStr: string): ComponentTypeId {.compileTime.} = 
-  assert typeNameStr notin tNames, "Type name " & typeNameStr & " is already registered as a component"
-  tNames.add(typeNameStr)
-  componentSystemOwner.add InvalidSystemIndex
-  # add to runtime list to get component name from ComponentTypeId
-  componentStrLits.add(newStrLitNode(typeNameStr))
-  compTypeNodes.add(newIdentNode(typeNameStr))
-  let res = tNames.high.ComponentTypeId
-  genLog "# Added component type: \"", typeNameStr, "\" = ", $res.int
-  res
+proc addComponentTypeId(typeNameStr: string, definition: FieldList): ComponentTypeId {.compileTime.} = 
+  assert typeNameStr notin typeInfo, "Type name " & typeNameStr & " is already registered as a component"
+  
+  typeInfo.add ComponentInfo(
+    typeName: typeNameStr,
+    instanceType: instanceTypeName typeNameStr,
+    refType: refTypeName typeNameStr
+    )
+  
+  let idx = typeInfo.high
+  
+  typeInfo[idx].initComponentInfoEvents()
+  typeInfo[idx].id = idx.ComponentTypeId
+  
+  result = typeInfo[idx].id
+
+  genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
 
 proc typeStringToId*(n: string): ComponentTypeId {.compiletime.} =
   ## Returns an index for a type string, if found.
@@ -25,11 +34,11 @@ proc typeStringToId*(n: string): ComponentTypeId {.compiletime.} =
   # Might want to store type trees themselves and match on that.
   assert(n != "Component", "Not enough type info to create id: Receiving type `Component`, expected sub-class of Component or a registered component type")
   var r = -1
-  for tId in 0 ..< tNames.len:
-    if tNames[tId.int].toLowerAscii == n.toLowerAscii:
+  for tId in 0 ..< typeInfo.len:
+    if typeInfo[tId.int].typeName.toLowerAscii == n.toLowerAscii:
       r = tId.int
       break
-  assert r.int != -1, "Cannot find type \"" & n & "\" in known component types: " & $tNames
+  assert r.int != -1, "Cannot find type \"" & n & "\" in known component types: " & typeInfo.allTypeNames
   r.ComponentTypeId
 
 ## Uses the typeId as an index into runtime component names
@@ -39,6 +48,15 @@ proc toString*(id: ComponentTypeId): string = componentNames()[id.int]
 ## This does not check to see if the component is alive in the system, only that it is semantically valid.
 ## Used for example to check that fetchComponent has found it's value.
 proc valid*(compRef: ComponentRef): bool = compRef.typeId != InvalidComponent and compRef.generation.int != InvalidComponentGeneration.int
+
+proc contains*(compRefs: ComponentList, typeId: ComponentTypeId): bool {.inline.} =
+  ## Linear search through `compRefs` for `typeId`.
+  for item in compRefs:
+    if item.fTypeId == typeId: return true
+
+proc findTypeId*(compRefs: ComponentList, typeId: ComponentTypeId): int =
+  for i in 0 ..< compRefs.len:
+    if compRefs[i].fTypeId == typeId: return i
 
 ## Read only access to the type id inside a Component descendant
 proc typeId*[T: Component](c: T): ComponentTypeId = c.fTypeId
@@ -61,9 +79,6 @@ proc makeRefCompInit(prefix: string, tyName: string, typeId: int): NimNode =
     res = newIdentNode "result"
     typeIdFieldName = "fTypeId"
 
-  if refInitPrefixes.len <= typeId:
-    refInitPrefixes.setLen(typeId + 1)
-    refInitPrefixes[typeId] = prefix
   result = quote do:
     macro `initName`*(args: varargs[untyped]): untyped =
       `initComment`
@@ -106,9 +121,6 @@ proc makeInstanceCompInit(prefix, tyName: string, typeId: int): NimNode =
   ##   let comp = newMyComponent(x = 1, y = 2)
   ## Translates to something like this:
   ##   var comp = MyComponent(typeId: MyComponent.typeId, x: 1, y: 2)
-  if instanceInitPrefixes.len < typeId:
-    instanceInitPrefixes.setLen(typeId + 1)
-    instanceInitPrefixes[typeId] = prefix
   let
     initInstanceStr = instanceInitName(prefix, tyName)
     initInstance = newIdentNode(initInstanceStr)
@@ -166,30 +178,20 @@ proc nameNode(typeNode: NimNode): NimNode =
   typeNode.expectKind nnkTypeDef
   typeNode[0].baseName
 
-proc createRefComponent(typeNode: NimNode): NimNode =
+proc createRefComponent(typeName: string): NimNode =
   # Creates a type inherited from `Component` that contains the fields for this type.
   # This is used for runtime templates, allowing heterogeneous list of components.
   # eg:
   #  ComponentTypeRef* = ref object of Component
   #    value*: ComponentType
-  result = typeNode.copy()
-  let container = nnkRecList.newTree(
-    nnkIdentDefs.newTree(postfix(ident "value", "*"), ident $typeNode.nameNode, newEmptyNode()),
-    )
-  result[0] = postFix(newIdentNode(refTypeName($typeNode.nameNode)), "*")
-  result[2] = nnkRefTy.newTree(
-    nnkObjectTy.newTree(
-      newEmptyNode(), nnkOfInherit.newTree(ident "Component"), container 
-    )
-  )
+  let
+    refName = ident refTypeName(typeName)
+    typeIdent = ident typeName
+    value = ident "value"
+  quote do:
+    type `refName`* = ref object of Component
+      `value`*: `typeIdent`
 
-proc createRef(prefix: string, typeDef: NimNode, typeId: ComponentTypeId): NimNode =
-  # Creates the ref type for this type and it's initialiser
-  result = newStmtList()
-  # Create init proc using prefix and type name
-  let typeName = $typeDef.nameNode()
-  result.add makeRefCompInit(prefix, typeName, typeId.int)
-  
 proc doRegisterComponents(options: ECSCompOptions, body: NimNode): NimNode =
   ## Registers types in a block to tNames.
   ## For each type provided in `body`, this macro generates:
@@ -207,14 +209,14 @@ proc doRegisterComponents(options: ECSCompOptions, body: NimNode): NimNode =
   var
     typeDeclarations = newStmtList()
     typeUtils = newStmtList()
-  let previousComponentsDeclared = tNames.len
+  let previousComponentsDeclared = typeInfo.len
 
   for tyDef in body.typeDefs:
     let
       typeNameIdent = tyDef.nameNode()
       typeNameStr = $typeNameIdent
-      # store component type and generate id
-      typeId = addComponentTypeId(typeNameStr)
+      # store typeInfo for component type and generate id
+      typeId = addComponentTypeId(typeNameStr, tyDef.getFields(typeNameStr).fields)
       instTypeNode = newIdentNode instanceTypeName(typeNameStr)
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       typeIdAccessName = newIdentNode("typeId")
@@ -224,16 +226,9 @@ proc doRegisterComponents(options: ECSCompOptions, body: NimNode): NimNode =
     ecsComponentsToBeSealed.add typeId
     
     # record the options for later transforms such as commitSystems
-    ecsCompOptions.add(options)
+    typeInfo[typeId.int].options = options
 
-    # Typefields is used in field templates.
-    componentFieldDefinitions.add tyDef.getFields(typeNameStr)
-    
-    if componentDefinitions.high < typeId.int:
-      componentDefinitions.setLen typeId.int + 1
-    componentDefinitions[typeId.int] = tyDef
-
-    typeUtils.add nnkTypeSection.newTree tyDef.createRefComponent
+    typeUtils.add typeNameStr.createRefComponent
 
     typeDeclarations.add(quote do:
       type `instTypeNode`* = distinct `IdBaseType`
@@ -247,7 +242,7 @@ proc doRegisterComponents(options: ECSCompOptions, body: NimNode): NimNode =
         typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`] | typedesc[`instTypeNode`]): ComponentTypeId = `typeId`.ComponentTypeId
       )
 
-  if tNames.len == previousComponentsDeclared:
+  if typeInfo.len == previousComponentsDeclared:
     error "Cannot process registerComponents: No typedefs can be found to create components from"
 
   # Generate the storage array type for these components
@@ -269,30 +264,22 @@ proc generateTypeStorage*(): NimNode =
 
   for typeId in ecsComponentsToBeSealed:
     let
-      options = ecsCompOptions[typeId.int]
-      typeNameStr = tNames[typeId.int]
+      options = typeInfo[typeId.int].options
+      typeNameStr = typeInfo.typeName typeId
       typeNameIdent = ident typeNameStr
       refTypeNameIdent = newIdentNode(refTypeName(typeNameStr))
-      tyDef = componentDefinitions[typeId.int]
       tyParam = newIdentNode("ty")
 
       maxComponentCount = options.maxComponents + 2
       refInitPrefix = if options.refInitPrefix != "": options.refInitPrefix
         else: defaultRefInitPrefix
 
-    template typeFields: untyped = componentFieldDefinitions[typeId.int]
-    
-    doAssert typeFields.typeName == typeNameStr, "Internal error: Extracting type yielded " & typeFields.typeName & " but expected "  & typeNameStr
-
     let instTypeNode = newIdentNode instanceTypeName(typeNameStr)
     
-    # Add this type's instance type for use in generating a type class for all instances
-    instanceTypeNode.add instTypeNode
-
     # Add initialiser proc that sets `typeId` and passes on params to an object constructor.
     # eg; initA*(param = x): A = A(fTypeId: A.typeId, param: x)
-    typeUtils.add refInitPrefix.createRef(tyDef, typeId)
-
+    typeUtils.add makeRefCompInit(refInitPrefix, typeNameStr, typeId.int)
+    
     typeUtils.add(quote do:
       ## Compile-time translation between a user's type/container type to it's instance type.
       ## Useful for converting a ComponentIndex into direct storage access.
@@ -317,12 +304,12 @@ proc generateTypeStorage*(): NimNode =
 
     let
       useThreadVar = options.useThreadVar
-      ownerSystem = componentSystemOwner[typeId.int]
+      ownerSystem = typeInfo.systemOwner typeId
       supportStorageSize =
         if ownerSystem == InvalidSystemIndex:
           maxComponentCount + 1
         else:
-          let sysOpts = ecsSysOptions[ownerSystem.int]
+          let sysOpts = systemInfo[ownerSystem.int].options
           if sysOpts.storageFormat == ssArray:
             sysOpts.maxEntities + 1
           else:
@@ -365,10 +352,11 @@ proc genTypeAccess*(): NimNode =
 
   for typeId in ecsComponentsToBeSealed:
     let
-      options = ecsCompOptions[typeId.int]
+      options = typeInfo[typeId.int].options
       initPrefix = if options.initPrefix != "": options.initPrefix else: defaultInitPrefix
       maxComponentCount = options.maxComponents + 2
-      typeNameStr = tNames[typeId.int]
+      compInfo = typeInfo.info typeId
+      typeNameStr = compInfo.typeName
       typeNameIdent = ident typeNameStr
       storageFieldName = storageFieldName(typeNameStr)
       lcTypeIdent = newIdentNode storageFieldName
@@ -378,15 +366,15 @@ proc genTypeAccess*(): NimNode =
       instParam = ident "instance"
       instanceIds = newIdentNode instanceIdsName(typeNameStr)   # Type's instance id array
       instanceTypeIdent = ident instanceTypeName(typeNameStr)
-      refTypeNameIdent = newIdentNode refTypeName(typeNameStr)  # Ref container type
+      refTypeNameIdent = newIdentNode compInfo.refType          # Ref container type
       aliveIdent = newIdentNode aliveStateInstanceName(typeNameStr)
       nextIdxIdent = newIdentNode nextInstanceName(typeNameStr)
       tyParam = ident "ty"
-      instTypeName = instanceTypeName(typeNameStr)
+      instTypeName = compInfo.instanceType
       instTypeNode = newIdentNode instTypeName                  # Type's instance type
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       res = ident "result"
-    template typeFields: untyped = componentFieldDefinitions[typeId.int]
+    template typeFields: untyped = typeInfo[typeId.int].fields
 
     # Add a proc to return a new component index.
     # This is the 'new component' procedure, and uses the `initPrefix` parameters.
@@ -413,10 +401,9 @@ proc genTypeAccess*(): NimNode =
       deletedComp = newLit "<Deleted " & instTypeName # Completed below.
       invalidStr = newLit "<Invalid " & instTypeName & ">"
       userUpdateCode =
-        if typeId.int < componentInterceptValueInitCode.len and
-          componentInterceptValueInitCode[typeId.int] != nil:
-            # It's now the user's responsibility to call update.
-            componentInterceptValueInitCode[typeId.int]
+        if compInfo.onInterceptValueInitCode.len > 0:
+          # It's now the user's responsibility to call update.
+          compInfo.onInterceptValueInitCode
         else:
           newEmptyNode()
       
@@ -425,19 +412,19 @@ proc genTypeAccess*(): NimNode =
       inst = ident "instance"
       fieldParam = ident "field"
     
-    if componentSystemOwner[typeId.int] != InvalidSystemIndex:
+    if compInfo.systemOwner != InvalidSystemIndex:
       let
-        ownerSystemIdx = componentSystemOwner[typeId.int]
-        ownerSystem = allSystemsNode[ownerSystemIdx.int]
+        ownerSystem = systemInfo[compInfo.systemOwner.int].instantiation
         sysTupleFieldStr = typeNameStr.toLowerAscii
         sysTupleField = ident sysTupleFieldStr
         standAloneUpdate =
           if userUpdateCode.kind != nnkEmpty:
             quote do:
-              template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
-                `ownerSystem`.groups[`inst`.int].`sysTupleField` = `commitParam`
-              template curValue: `typeNameIdent` = `valueParam`
-              `userUpdateCode`
+              block:
+                template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
+                  `ownerSystem`.groups[`inst`.int].`sysTupleField` = `commitParam`
+                template curValue: `typeNameIdent` = `valueParam`
+                `userUpdateCode`
           else:
             quote do:
               `ownerSystem`.groups[`inst`.int].`sysTupleField` = `valueParam`
@@ -469,7 +456,7 @@ proc genTypeAccess*(): NimNode =
       of amFieldTemplates:
         # Generate read/write access template from the type's typeDef.
 
-        for field in typeFields.fields:
+        for field in typeFields:
           let
             fieldName = field.fieldNode
             fieldType = field.typeNode
@@ -506,10 +493,11 @@ proc genTypeAccess*(): NimNode =
         standAloneUpdate =
           if userUpdateCode.kind != nnkEmpty:
             quote do:
-              template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
-                `lcTypeIdent`[`instParam`.int] = `commitParam`
-              template curValue: `typeNameIdent` = `valueParam`
-              `userUpdateCode`
+              block:
+                template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
+                  `lcTypeIdent`[`instParam`.int] = `commitParam`
+                template curValue: `typeNameIdent` = `valueParam`
+                `userUpdateCode`
           else:
             quote do:
               `lcTypeIdent`[`instParam`.int] = `valueParam`
@@ -556,9 +544,7 @@ proc genTypeAccess*(): NimNode =
         {.pop.}
       of amFieldTemplates:
         # Generate read/write access template from the type's typeDef.
-        doAssert typeFields.typeName == typeNameStr, "Internal error: Extracting type yielded " & typeFields.typeName & " but expected "  & typeNameStr
-
-        for field in typeFields.fields:
+        for field in typeFields:
           let
             fieldName = field.fieldNode
             fieldType = field.typeNode
@@ -573,8 +559,8 @@ proc genTypeAccess*(): NimNode =
         template ownedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = false
         template access*(instance: `instanceTypeIdent`): `typeNameIdent` = `lcTypeIdent`[instance.int]
         template alive*(inst: `instTypeNode`): bool =
-          ## Check if this component ref's index is still valid.
-          `aliveIdent`[inst.int] == true
+          ## Check if this component ref's index is still in use.
+          inst.int > 0 and inst.int < `aliveIdent`.len and `aliveIdent`[inst.int] == true
         template valid*(inst: `instanceTypeIdent`): bool = inst.int != InvalidComponentIndex.int and inst.alive
         template generation*(inst: `instTypeNode`): untyped =
           ## Access the generation of this component.
@@ -653,19 +639,17 @@ proc genTypeAccess*(): NimNode =
           else:
             newEmptyNode()
         userInitCode =
-          if typeId.int < componentInitialisationCode.len and
-            componentInitialisationCode[typeId.int] != nil:
-              let code = componentInitialisationCode[typeId.int]
+          if compInfo.onInitCode != nil:
+              let code = compInfo.onInitCode
               quote do:
                 block:
-                  template curComponent: `instanceTypeIdent` = `res`
+                  template curComponent: `instanceTypeIdent` {.used.} = `res`
                   `code`
           else:
             newEmptyNode()
         userFinalCode =
-          if typeId.int < componentFinalisationCode.len and
-            componentFinalisationCode[typeId.int] != nil:
-              componentFinalisationCode[typeId.int]
+          if compInfo.onFinalisationCode != nil:
+            compInfo.onFinalisationCode
           else:
             newEmptyNode()
         
@@ -742,7 +726,6 @@ proc genTypeAccess*(): NimNode =
         ## Updating storage.
         ## `update` operates as a simple assignment into the storage array and therefore operates on the type's `==` proc.
         template update*(`instParam`: `instanceTypeIdent`, `valueParam`: `typeNameIdent`): untyped =
-          #template curComponent: `instanceTypeIdent` = `instParam`
           `standAloneUpdate`
 
         template componentCount*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instanceTypeIdent`]): untyped =
@@ -778,10 +761,21 @@ proc genTypeAccess*(): NimNode =
   result.add typeAccess
   result.add firstCompIdInits
 
-  # Add a generated type class that covers all the types we've registered here.
+  # Add a generated type classes that cover all the types we've registered here.
+  var
+    compTypeNodes: seq[NimNode]
+    refTypeNodes: seq[NimNode]
+    instanceTypeNode: seq[NimNode]
+  
+  for i in 1 ..< typeInfo.len:
+    template info: untyped = typeInfo[i]
+    if info.id in ecsComponentsToBeSealed:
+      compTypeNodes.add ident info.typeName
+      refTypeNodes.add ident info.refType
+      instanceTypeNode.add ident info.instanceType
+  
   result.add genTypeClass(typeClassName(), true, compTypeNodes)
-
-  # Type class for all the instances.
+  result.add genTypeClass(refTypeClassName(), true, refTypeNodes)
   result.add genTypeClass(instanceTypeClassName(), true, instanceTypeNode)
 
   # Add an `add` for `ComponentList` that handles `typeId`
@@ -807,7 +801,7 @@ macro registerComponents*(maxComponents: static[int], body: untyped): untyped =
 
 proc genForAllComponents(typeId: ComponentTypeId, actions: NimNode): NimNode =
   let
-    n = tNames[typeId.int]
+    n = typeInfo.typeName typeId
     instType = newIdentNode instanceTypeName(n)
     accessArray = newIdentNode storageFieldName(n)
   result = newStmtList(quote do:
@@ -831,7 +825,7 @@ macro forAllComponentTypes*(actions: untyped): untyped =
   ## Perform `actions` for every component type currently defined.
   ## Type iteration does not include InvalidComponent.
   result = newStmtList()
-  for typeId in 1..tNames.high:
+  for typeId in 1..typeInfo.high:
     result.add genForAllComponents(typeId.ComponentTypeId, actions)
 
 macro clearAll*(): untyped =
@@ -844,4 +838,4 @@ proc toInt*(c: ComponentTypeId): int = c.int
 
 macro componentsDefined*: untyped =
   ## Returns the count of components defined so far in the compile process.
-  newLit tNames.len
+  newLit typeInfo.len

@@ -1,5 +1,5 @@
 import
-  macros, sharedtypes, private/utils, components, entities, #systems,
+  macros, sharedtypes, private/[utils, ecsstateinfo], components, entities, #systems,
   statechanges, typetraits, runtimeconstruction
 import tables, strutils
 export
@@ -43,10 +43,6 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
     typeClass = ident typeClassName()
 
   result = newStmtList()
-
-  # Reset list of component types for next `registerComponent`.
-  compTypeNodes.setLen 0
-  instanceTypeNode.setLen 0
 
   result.add(quote do:
     # State definition
@@ -208,7 +204,7 @@ proc recyclerGet(ecStateNode: NimNode, options: ECSEntityOptions): NimNode =
 proc makeFindComponent(entityId: NimNode, componentTypeId: ComponentTypeId, options: ECSEntityOptions): NimNode =
   ## Generate code fragment for fetching a ComponentTypeId depending on entity options.
   let
-    returnType = ident instanceTypeName(tNames[componentTypeId.int])
+    returnType = ident instanceTypeName(typeInfo[componentTypeId.int].typeName)
     res = genSym(nskVar, "res")
   case options.componentStorageFormat
   of csTable:
@@ -240,7 +236,7 @@ proc makeFetchComponent(entOpts: ECSEntityOptions): NimNode =
   
   for typeId in ecsComponentsToBeSealed:
     var
-      tyName = tNames[typeId.int]
+      tyName = typeInfo[typeId.int].typeName
       typeNode = ident tyName
       instanceNode = ident instanceTypeName(tyName)
       tid = typeStringToId(tyName)
@@ -361,9 +357,8 @@ template getComponentUpdatePerformance: seq[ComponentUpdatePerfTuple] =
   for tId in ecsComponentsToBeSealed:
     # Each component gets a direct access addComponent
     let
-      typeIdx = tId.int
-      tyNameStr = tNames[typeIdx]
-      relevantSystems = systemsByCompId[typeIdx]
+      tyNameStr = typeInfo[tId.int].typeName
+      relevantSystems = systemsByCompId[tId.int]
     r.add((tyNameStr, relevantSystems.len))
 
   r.sort do (x, y: ComponentUpdatePerfTuple) -> int:
@@ -469,58 +464,20 @@ proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
         if componentTypeId in system.requirements:
           actions
 
-proc makeConstructionTools(entOpts: ECSEntityOptions): NimNode =
-  ## Create construct machinery.
-  let
-    res = ident "result"
-    entIdent = ident "entity"
-    entityIdIdent = ident "entityId"
-    tcIdent = ident typeClassName()
-    componentsLen = componentRefsLen(entityIdIdent, entOpts)
-    arrayType = genArray(tNames.len, quote do: seq[ComponentTypeId])
-    ownedComponentsVar = ident "ownedComponents"
-    ownedComps = nnkBracket.newTree()
-
-  for i in 0 ..< tNames.len:
-    let
-      compOwner = componentSystemOwner[i]
-      owned = compOwner != InvalidSystemIndex
-      noneOwned = quote do: newSeq[ComponentTypeId]()
-    if not owned: ownedComps.add(noneOwned)
-    else:
-      if sysRequirements.len > 0:
-        var comps = nnkPrefix.newTree()
-        comps.add ident "@"
-        var compItems = nnkBracket.newTree()
-        for ownedSysComp in sysRequirements[compOwner.int]:
-          compItems.add newDotExpr(newLit(ownedSysComp.int), ident "ComponentTypeId")
-        comps.add compItems
-        ownedComps.add comps
-      else:
-        ownedComps.add noneOwned
-
-  # Build static array of system components.
-  let ownedComponents = quote do:
-    const `ownedComponentsVar`: `arrayType` = `ownedComps`
-
-  result = newStmtList()
-
-  result.add makeRuntimeConstruction(entOpts)
-
-  genLog "# Construction tools:\n", result.repr
-
 proc makeRuntimeDebugOutput: NimNode =
   let
     res = ident("result")
     entity = ident("entity")
     strProcName = nnkAccQuoted.newTree(ident("$"))
-    totalCount = allSystemsNode.len
+    totalCount = systemInfo.len
     tsc = ident("totalSystemCount")
     strOp = nnkAccQuoted.newTree(ident "$")
+
+  # Build static array of system components.
   var ownedComponents = nnkBracket.newTree()
-  for c, owner in componentSystemOwner:
-    if owner != InvalidSystemIndex:
-      ownedComponents.add newDotExpr(newLit c, ident "ComponentTypeId")
+  for info in typeInfo:
+    if info.systemOwner != InvalidSystemIndex:
+      ownedComponents.add newDotExpr(newLit info.id.int, ident "ComponentTypeId")
   
   result = quote do:
     proc listComponents*(entity: EntityRef, showData = true): string =
@@ -582,18 +539,20 @@ proc makeListSystem: NimNode =
     innards = newStmtList()
     entIdent = ident "entity"
   innards.add(quote do: `res` = "")
-  for sysIdx, reqs in sysRequirements:
+  for sysInfo in systemInfo:
     
-    if sysIdx.SystemIndex notin ecsSystemsToBeSealed: continue
+    if sysInfo.id notin ecsSystemsToBeSealed: continue
     
     let
-      options = ecsSysOptions[sysIdx]
-      sys = allSystemsNode[sysIdx]
-      name = systemNames[sysIdx]
+      sysIdx = sysInfo.id.int
+      options = systemInfo[sysIdx].options
+      sys = sysInfo.instantiation
+      name = sysInfo.systemName
       sysVar = name.systemVarName()
       entId = entIdent.newDotExpr(ident "entityId")
       hasKey = sys.indexHasKey(entId, options)
       sysNameBracketed = newLit " (" & sysVar & ")"
+      reqs = sysInfo.requirements
     innards.add(quote do:
       var inSys = true
       for req in `reqs`:
@@ -638,36 +597,35 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
   var caseStmt = nnkCaseStmt.newTree()
   caseStmt.add quote do: `id`.int
 
-  for i in componentsToInclude:
+  for component in componentsToInclude:
     let
-      compIdx = i.int
-      n = tNames[compIdx]
-
+      info = typeInfo.info(component)
+      compIdx = info.id.int
     var
       ofNode = nnkOfBranch.newTree()
       compVal = newIntLitNode(compIdx)
     ofNode.add compVal
     let
-      tyStr = tNames[compIdx]
+      tyStr = typeInfo[component.int].typeName
       ty = newIdentNode tyStr
       tyRef = newIdentNode refTypeName(tyStr)
       tyInstance = newIdentNode instanceTypeName(tyStr)
       tyInit = newIdentNode createInstanceName(tyStr)
-      tyRefInit = newIdentNode refInitName(refInitPrefixes[compIdx], tyStr)
+      tyRefInit = newIdentNode refInitName(info.refInitPrefix, tyStr)
       tyDel = newIdentNode deleteInstanceName()
       # reference the alive variable for this type.
       aliveStateIdent = newIdentNode aliveStateInstanceName(tyStr)
       # reference the storage object
       storageFieldIdent = newIdentNode storageFieldName(tyStr)
       tyInstanceIds = newIdentNode instanceIdsName(tyStr)
-      sysIdx = newDotExpr(newLit componentSystemOwner[compIdx].int, ident "SystemIndex")
+      sysIdx = newDotExpr(newLit info.systemOwner.int, ident "SystemIndex")
     var
       accessOwningSystem = newStmtList()
       isOwnedComponent: NimNode
     
-    if componentSystemOwner[compIdx] != InvalidSystemIndex:
+    if info.systemOwner != InvalidSystemIndex:
       isOwnedComponent = newLit true
-      let sysOwner = allSystemsNode[componentSystemOwner[compIdx].int]
+      let sysOwner = systemInfo[info.systemOwner.int].instantiation
       accessOwningSystem.add(quote do:
         template owningSystem: untyped {.used.} = `sysOwner`
       )
@@ -677,15 +635,8 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
     # Following templates are available for use within the case statement.
     # These aren't compiled in unless the invoker uses them.
     ofNode.add(quote do:
-      # If enabled and this is the last of statement, inset linear scan end pragma.
-      # This forces the case to scan rather than blow the cache with hash tables.
-      #`linearScanEnd`
-      # Note that these are loose access windows, this is a lookup by type id
-      # so if you want to check if a particular instance is alive, you need to provide
-      # the index like so: componentAlive()[InstanceIndex]
-      # The used pragma avoids displaying "not used" warnings for these templates.
-      template componentId: untyped {.used.} = `i`.ComponentTypeId
-      template componentName: untyped {.used.} = `n`
+      template componentId: untyped {.used.} = `compIdx`.ComponentTypeId
+      template componentName: untyped {.used.} = `tyStr`
       template componentType: untyped {.used.} = `ty`
       template componentRefType: untyped {.used.} = `tyRef`
       template componentInit: untyped {.used.} = `tyInit`
@@ -753,7 +704,7 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
   ##    ... and so on for each system index
   ## `actions` is therefore executed using the correct `system` context
   ## for the runtime system. IE, if `index` = 7 then `system` will be 
-  ## the instantiated variable for the seventh system defined in allSystemsNodes.
+  ## the instantiated variable for the seventh system.
   ## This allows you to write generic code that dynamically applies to any system
   ## chosen at runtime.
   let
@@ -769,8 +720,8 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
     var ofNode = nnkOfBranch.newTree()
     ofNode.add newIntLitNode(sysIdx)
     var
-      curSys = allSystemsNode[sysIdx]
-      curSysTuple = ident(systemNames[sysIdx].tupleName)
+      curSys = systemInfo[sysIdx].instantiation
+      curSysTuple = ident(systemInfo[sysIdx].systemName.tupleName)
     ofNode.add(quote do:
       template sys: untyped {.used.} = `curSys`
       template SystemTupleType: typedesc {.used.} = `curSysTuple`
@@ -785,8 +736,8 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
   for i in 0 ..< systemsToInclude.len:
     let
       curSysIdx = systemsToInclude[i]
-      curSys = allSystemsNode[curSysIdx.int]
-      curSysTuple = ident(systemNames[curSysIdx.int].tupleName)
+      curSys = systemInfo[curSysIdx.int].instantiation
+      curSysTuple = ident(systemInfo[curSysIdx.int].systemName.tupleName)
     allSysBody.add(quote do:
       block:
         template sys: untyped {.used.} = `curSys`
@@ -852,14 +803,6 @@ proc sealRuntimeTools(entOpts: ECSEntityOptions): NimNode =
   result.add makeListSystem()
   result.add makeRuntimeDebugOutput()
 
-iterator nonNilItems(items: seq[NimNode]): NimNode =
-  for item in items:
-    if item != nil and item.kind != nnkEmpty: yield item
-
-proc addNonNilItems(node: var NimNode, toAdd: seq[NimNode]) =
-  for item in toAdd.nonNilItems:
-    node.add item
-
 macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   ## Seal all components, create access functions that allow adding/removing/deleting components,
   ## and instantiate entity storage.
@@ -867,22 +810,26 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result = newStmtList()
   result.add doStartLog()
   addPerformanceLog()
-  result.addNonNilItems(addForwardDecls)
-  result.addNonNilItems(removeForwardDecls)
+  for info in typeInfo:
+    if info.onAddCallbackForwardDecl.len > 0:
+      result.add info.onAddCallbackForwardDecl
+    if info.onRemoveCallbackForwardDecl.len > 0:
+      result.add info.onRemoveCallbackForwardDecl
+
   result.add sealEntities(entOpts)
   result.add sealRuntimeTools(entOpts)
   result.add sealComps(entOpts)
   when defined(debugSystemPerformance):
     echo "Sealing complete."
-  result.add makeConstructionTools(entOpts)
+  result.add makeRuntimeConstruction(entOpts)
   when defined(debugSystemPerformance):
     echo "Construction tools complete."
 
-  result.addNonNilItems(addCallbackProcs)
-  result.addNonNilItems(removeCallbackProcs)
-
-  var n = newStmtList()
-  n.addNonNilItems(addCallbackProcs)
+  for info in typeInfo:
+    if info.onAddCallback.len > 0:
+      result.add info.onAddCallback
+    if info.onRemoveCallback.len > 0:
+      result.add info.onRemoveCallback
 
   # Reset state for next ECS.
   ecsComponentsToBeSealed.setLen 0
@@ -921,8 +868,10 @@ proc genRunProc(name: string): NimNode =
 macro commitSystems*(procName: static[string]): untyped =
   ## Output system do proc definitions at the call site.
   result = newStmtList()
-  for item in systemProcs:
-    result.add item
+  for info in systemInfo:
+    if info.definition != nil:
+      result.add info.definition
+
   if procName != "":
     # Generate wrapper proc.
     result.add genRunProc(procName)
@@ -932,19 +881,16 @@ macro commitSystems*(procName: static[string]): untyped =
   runAllDoProcsNode = newStmtList()
 
   # Check for defined but not committed systems.
-  var uncommited: seq[string]
+  var uncommitted: seq[string]
   for system in ecsSysDefined.keys:
     if system notin ecsSysBodiesAdded:
-      uncommited.add systemNames[system.int]
+      uncommitted.add systemInfo[system.int].systemName
   
-  if uncommited.len > 0:
-    var outputStr = uncommited[0]
-    for i in 1 ..< uncommited.len:
-      outputStr &= ", " & uncommited[i]
+  if uncommitted.len > 0:
+    var outputStr = uncommitted[0]
+    for i in 1 ..< uncommitted.len:
+      outputStr &= ", " & uncommitted[i]
     echo "Warning: Systems are defined that do not have bodies: ", outputStr
-
-  # Reset buffered proc bodies for this batch.
-  systemProcs.setLen 0
 
   genLog "# Commit systems:\n" & procName, result.repr
 
