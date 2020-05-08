@@ -52,7 +52,7 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
       of esSeq: genSeq(entityStorageItem)
       of esArray: genArray(maxEntities + 1, entityStorageItem)
       of esPtrArray: nnkPtrTy.newTree(genArray(maxEntities + 1, entityStorageItem))
-    
+
     # Code to initialise entity state.
     entCompInit =
       case options.entityStorageFormat
@@ -98,8 +98,9 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
         entityCounter: int
         # List of spare ids to use, updated when an entity is deleted or added.
         entityRecycler: `recycler`
-        # newEntityId starting at FIRST_ENTITY_ID of 1 avoids 'empty' entityID bugs
+        # newEntityId starting at FIRST_ENTITY_ID of 1 avoids 'empty' entityID bugs.
         nextEntityId: EntityId
+
     proc `initEntityStorageType`(`initParamName`: var `entityStorageIdent`) =
       ## Initialiser for entity state.
       `entCompInit`

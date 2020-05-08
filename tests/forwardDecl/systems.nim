@@ -1,21 +1,18 @@
 import polymorph, sysdefines, types
 
 # We've already defined this system in `forwardDeclSysDefines` so it's type info is fixed.
-makeSystemBody("incB"):
+makeSystem("incValue", [Value, IncValue]):
   all:
-    item.b.value += 1
+    item.value.amount += 1
 
-# Mixing with inline declared.
-# `makeSystem` adds to systems and so must be invoked before `makeEcs`.
-# If we were declaring all our systems with `defineSystem`,
-# we could put the `makeEcs(maxEnts)` in that module.
-makeSystem("incC", [IncComp, C]):
+# Define a system inline without defineSystem.
+makeSystem("incAmount", [AddValue, IncValue]):
   all:
-    item.c.value += 1
+    item.addValue.amount += 1
 
-makeSystemBody("addBC"):
+makeSystem("addValue", [Value, AddValue]):
   all:
-    item.b.value += item.c.value
+    item.value.amount += item.addValue.amount
 
 makeEcs()
 
