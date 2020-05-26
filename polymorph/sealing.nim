@@ -770,7 +770,6 @@ proc sealComps(entOpts: ECSEntityOptions): NimNode =
 
   result = newStmtList()
   result.add makeRemoveComponentDirect(entOpts)
-  result.add makeAddComponentDirect(entOpts)
 
 template addPerformanceLog =
   ## Append system operations per component to the log.

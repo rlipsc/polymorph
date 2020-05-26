@@ -837,103 +837,26 @@ proc makeAddComponents*(entOpts: ECSEntityOptions): NimNode =
       ## Fetches are only performed if required components are not in the parameters.
       doAddComponents(`entOpts`, `entity`, `componentList`)
 
-proc makeAddComponentDirect*(entOpts: ECSEntityOptions): NimNode =
-  ## This macro adds `addComponent(entity, type)` for every component type.
-  ## Generated code updates single components with the systems we know use that type
-  ## at compile time.
-  ## Unlike `addComponents` and `newEntityWith`, these procs only deal with one component at a time,
-  ## but return the `ComponentRef` that's been added.
-  result = newStmtList()
-  let systemsByCompId = compSystems()
-  var systemsEncountered: bool
+    proc addComponent*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
+      entity.addComponents(component)[0]
 
-  assert ecsComponentsToBeSealed.len > 0, "Cannot generate addComponent when no components have been defined"
-
-  for tId in ecsComponentsToBeSealed:
-    # Each component gets a direct access addComponent
-    let
-      typeId = tId.int
-      tyNameStr = typeInfo[typeId].typeName
-      tyInstanceStr = instanceTypeName(tyNameStr)
-      relevantSystems = systemsByCompId[typeId]
-      tyIdent = ident tyNameStr
-      tyInstanceIdent = ident tyInstanceStr
-      entIdent = ident "entity"
-      valIdent = ident "value"
-      componentSysCount = relevantSystems.len
-      # For generating useful comments for addComponent.
-      sysNamePrefix = 
-        if componentSysCount > 1:
-          " This updates systems: "
-        else:
-          " This updates system: "
-    var sysList: string
-
-    if componentSysCount > 0:
-      systemsEncountered = true
-
-    for relevantSysIdx, systemIndex in relevantSystems:
-      # Add update elements just for systems that use this component.
-      let
-        sysIdx = systemIndex.int
-        sysName = systemInfo[sysIdx].systemName
-      template ownedComps: untyped = systemInfo[sysIdx].ownedComponents
-
-      if ownedComps.len == 0 or
-        (ownedComps.len == 1 and typeInfo[tid.int].systemOwner == systemIndex):
-        # Record which systems are affected to update addComponent's doc comment.
-        if sysList.len == 0:
-          sysList &= sysNamePrefix & sysName
-        else:
-          if relevantSysIdx == relevantSystems.high:
-            sysList &= ", and " & sysName
-          else:
-            sysList &= ", " & sysName
+    # TODO: addOrUpdate that allows granular updating fields rather than whole component item.
+    proc addOrUpdate*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
+      ## This procedure allows you to forget about assertion failures due to duplicate adds.
+      let fetched = entity.fetchComponent T.type
+      if fetched.valid:
+        # Replace original. No further work is required as the types or indexes have not been updated.
+        fetched.update component
+        fetched
       else:
-        break
-
-    # Add some utilities for `addComponents`.
-    let
-      addComment = newCommentStmtNode(" Create storage for component and update, optionally returning " & tyInstanceStr & "." & sysList & ".")
-      tupleField = ident tyNameStr.toLowerAscii()
-      ownerSystem = typeInfo[tId.int].systemOwner
-      sysOwnedCompCount =
-        if ownerSystem != InvalidSystemIndex:
-          systemInfo[ownerSystem.int].ownedComponents.len
-        else: 0 
-
-    if sysOwnedCompCount <= 1:
-      result.add(quote do:
-        proc addComponent*(`entIdent`: EntityRef, `valIdent`: `tyIdent`): `tyInstanceIdent` {.discardable.} =
-          `addComment`
-          `entIdent`.addComponents(`valIdent`).`tupleField`
-        
-        # TODO: addOrUpdate that allows granular updating fields rather than whole component item.
-        proc addOrUpdate*(`entIdent`: EntityRef, `valIdent`: `tyIdent`): `tyInstanceIdent` {.discardable.} =
-          ## This procedure allows you to forget about assertion failures due to duplicate adds.
-          let fetched = `entIdent`.fetchComponent `tyIdent`
-          if fetched.valid:
-            # Replace original. No further work is required as the types or indexes have not been updated.
-            fetched.update(`valIdent`)
-            fetched
-          else:
-            # Add as normal.
-            `entIdent`.addComponent `valIdent`
-        
-        proc addIfMissing*(`entIdent`: EntityRef, `valIdent`: `tyIdent`) =
-          ## This procedure allows you to add a component only if it isn't already present.
-          ## If the component is already present, no changes are made.
-          if not `entIdent`.hasComponent(`tyIdent`):
-            `entIdent`.addComponent `valIdent`
-        )
-
-  if not systemsEncountered:
-    echo "Warning: No systems defined"
-
-  when defined(debugSystemPerformance):
-    echo "Add components direct completed."
-
-  genLog "# Adding with single components:\n", result.repr
+        # Add as normal.
+        entity.addComponent component
+    
+    proc addIfMissing*[T: ComponentTypeclass](entity: EntityRef, component: T) =
+      ## This procedure allows you to add a component only if it isn't already present.
+      ## If the component is already present, no changes are made.
+      if not entity.hasComponent T.type:
+        entity.addComponent component
 
 proc removeComponentRef(entityId, index: NimNode, componentTypeId: int, options: ECSEntityOptions): NimNode = 
   # Removes a component from entity storage.
