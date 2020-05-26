@@ -711,6 +711,8 @@ macro flushGenLog*(fileName: static[string]): untyped =
       finally:
         f.close
       echo "Added to log at ", `fn`, ": ", total, " characters written "
+    
+    logData.setLen 0
 
 proc flushGenLog*() =
   flushGenLog(defaultGenLogFilename)
