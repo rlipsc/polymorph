@@ -442,15 +442,9 @@ proc genTypeAccess*(): NimNode =
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`
-            else:
-              {.fatal: "Cannot find field `" & `fieldParam`.repr & "` in instance type " & `typeNameStr`.}
-              discard
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam` = `valueParam`
-            else:
-              {.fatal: "Cannot find field `" & `fieldParam`.repr & "` in instance type " & `typeNameStr`.}
-              discard
         )
         {.pop.}
       of amFieldTemplates:
@@ -532,15 +526,9 @@ proc genTypeAccess*(): NimNode =
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
               `lcTypeIdent`[`inst`.int].`fieldParam`
-            else:
-              {.fatal: "Cannot find field `" & `fieldParam`.repr & "` in instance type " & `typeNameStr`.}
-              discard
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
               `lcTypeIdent`[`inst`.int].`fieldParam` = `valueParam`
-            else:
-              {.fatal: "Cannot find field `" & `fieldParam`.repr & "` in instance type " & `typeNameStr`.}
-              discard
         )
         {.pop.}
       of amFieldTemplates:
