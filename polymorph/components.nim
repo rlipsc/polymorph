@@ -544,13 +544,13 @@ proc genTypeAccess*(): NimNode =
           )
 
       typeAccess.add(quote do:
-        ## Conve2rts the instance to a component storage directly.
+        ## Converts the instance to a component storage directly.
         template ownedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = false
         template access*(instance: `instanceTypeIdent`): `typeNameIdent` = `lcTypeIdent`[instance.int]
         template alive*(inst: `instTypeNode`): bool =
           ## Check if this component ref's index is still in use.
           inst.int > 0 and inst.int < `aliveIdent`.len and `aliveIdent`[inst.int] == true
-        template valid*(inst: `instanceTypeIdent`): bool = inst.int != InvalidComponentIndex.int and inst.alive
+        template valid*(inst: `instanceTypeIdent`): bool = inst.int != InvalidComponentIndex.int
         template generation*(inst: `instTypeNode`): untyped =
           ## Access the generation of this component.
           `generationTypeNode`(`instanceIds`[inst.int]).ComponentGeneration

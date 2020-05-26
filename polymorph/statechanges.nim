@@ -626,7 +626,7 @@ proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNo
 
       if typeId in compInfo.lookFor or typeId in compInfo.passed:
         if typeId notin compInfo.passed:
-          checkSystem.add(quote do: `typeField`.alive)
+          checkSystem.add(quote do: `typeField`.valid)
         
         updateTupleFields.add(quote do:
           `sysTupleVar`.`typeField` = `instanceField`
