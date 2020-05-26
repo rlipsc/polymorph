@@ -867,9 +867,9 @@ proc genRunProc(name: string): NimNode =
 macro commitSystems*(procName: static[string]): untyped =
   ## Output system do proc definitions at the call site.
   result = newStmtList()
-  for info in systemInfo:
-    if info.definition != nil:
-      result.add info.definition
+  for sys in ecsSysUncommitted:
+    if systemInfo[sys.int].definition != nil:
+      result.add systemInfo[sys.int].definition
 
   if procName != "":
     # Generate wrapper proc.
@@ -878,17 +878,20 @@ macro commitSystems*(procName: static[string]): untyped =
   # Note that `allSystemsNode`, `sysNames` etc are NOT reset.
   # Reset call tree for this batch.
   runAllDoProcsNode = newStmtList()
+  
+  # Reset uncommitted list.
+  ecsSysUncommitted.setLen 0
 
   # Check for defined but not committed systems.
-  var uncommitted: seq[string]
+  var noBodies: seq[string]
   for system in ecsSysDefined.keys:
     if system notin ecsSysBodiesAdded:
-      uncommitted.add systemInfo[system.int].systemName
+      noBodies.add systemInfo[system.int].systemName
   
-  if uncommitted.len > 0:
-    var outputStr = uncommitted[0]
-    for i in 1 ..< uncommitted.len:
-      outputStr &= ", " & uncommitted[i]
+  if noBodies.len > 0:
+    var outputStr = noBodies[0]
+    for i in 1 ..< noBodies.len:
+      outputStr &= ", " & noBodies[i]
     echo "Warning: Systems are defined that do not have bodies: ", outputStr
 
   genLog "# Commit systems:\n" & procName, result.repr

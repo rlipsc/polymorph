@@ -14,6 +14,8 @@ var
   ecsComponentsToBeSealed* {.compileTime.}: seq[ComponentTypeId]
   # Current range of systems that have yet to be processed by `makeEcs`.
   ecsSystemsToBeSealed* {.compileTime.}: seq[SystemIndex]
+  # Current range of systems that need their procs committed.
+  ecsSysUncommitted* {.compileTime.}: seq[SystemIndex]
 
   ecsSysDefined* {.compileTime.}: Table[SystemIndex, bool]
   ecsSysBodiesAdded* {.compileTime.}: Table[SystemIndex, bool]
