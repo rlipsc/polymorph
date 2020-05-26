@@ -485,6 +485,7 @@ proc genTypeAccess*(): NimNode =
         ## `update` operates as a simple assignment into the storage array and therefore operates on the type's `==` proc.
         template update*(`instParam`: `instanceTypeIdent`, `valueParam`: `typeNameIdent`): untyped =
           `standAloneUpdate`
+        template count*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): int = `ownerSystem`.count
       )
 
     else:
@@ -566,6 +567,16 @@ proc genTypeAccess*(): NimNode =
           ## Access the generation of this component.
           `generationTypeNode`(`instanceIds`[inst.int]).ComponentGeneration
       )
+
+      case options.componentStorageFormat
+      of cisArray:
+        typeAccess.add(quote do:
+          template count*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): int = `nextIdxIdent`.int
+        )
+      of cisSeq:
+        typeAccess.add(quote do:
+          template count*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): int = `lcTypeIdent`.len
+        )
 
       let
         # delIdx is the index of the component in it's storage.
