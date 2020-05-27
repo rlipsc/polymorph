@@ -194,7 +194,7 @@ type
 
   ## Store a list of components, can be used as a template for constructing an entity.
   ## `add` is overridden for this type to allow you to add user types or instance types
-  ## and their value is deepCopied into a ref container ready for `construct`.
+  ## and their value is assigned to a ref container ready for `construct`.
   ComponentList* = seq[Component]
   ## A template for multiple entities
   ConstructionTemplate* = seq[ComponentList]

@@ -286,11 +286,11 @@ proc generateTypeStorage*(): NimNode =
       template instanceType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`]): untyped = `instTypeNode`
       ## Compile-time translation between a user's type to it's container `ref` type.
       template containerType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instTypeNode`]): untyped = `refTypeNameIdent`
-      ## Create a `ref` container from a user object. The parameter is deepCopied.
+      ## Create a `ref` container from a user object.
       template makeContainer*(`tyParam`: `typeNameIdent`): `refTypeNameIdent` =
         var container = `refTypeNameIdent`(fTypeId: `typeId`.ComponentTypeId, value: `tyParam`)
         container
-      ## Create a `ref` container from an instance. The parameter is deepCopied.
+      ## Create a `ref` container from an instance.
       template makeContainer*(`tyParam`: `instTypeNode`): `refTypeNameIdent` =
         `tyParam`.access.makeContainer()
       )
