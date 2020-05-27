@@ -57,7 +57,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
           if comp != typeId:
             if ownedByThisSystem:
               # It's a run time error to not specify all the owned components.
-              let caseTypeIdStr = typeStr
+              let caseTypeIdStr = typeInfo[typeId.int].typeName
               assertions.add quote do:
                 assert `types`.hasKey(`comp`),
                   "Cannot construct: Specified owned component \"" & `caseTypeIdStr` &
