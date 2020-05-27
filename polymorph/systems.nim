@@ -450,7 +450,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     if ecsSysBodiesAdded.hasKey(sysIdxSearch.index.SystemIndex):
       error "System \"" & name & "\" already has a body defined"
 
-    echo "Adding body to pre-defined system ", name, " with types ", types.repr
+    echo "Adding body to pre-defined system ", name, " with types ", types.commaSeparate
   else:
     # This is an inline makeSystem.
     echo "Defining system and body ", name, " with types ", componentTypes.repr
