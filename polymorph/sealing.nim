@@ -681,15 +681,13 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       ##   actions
       ## * the same action block is compiled for every choice, but you can use the
       ##   local `component` template to fetch any outer scope entities you wish
-      ##   on the branch qualified type type.
+      ##   on the branch qualified type.
       ##
-      ## The following will display the statically compiled name and ComponentTypeId
-      ## for every component.
+      ## For example, the following will display the name of a run-time component type id.
       ##
       ## ```
       ## myCompId.caseComponent:
       ##   echo "Component Name: ", componentName
-      ##   echo "Component: ", component.repr
       ## ```
       ##
       ## Within `actions`, the following templates provide typed access to the runtime index.
@@ -709,18 +707,7 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
   #genLog "# Component case:\n", result.repr
 
 proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
-  ## Creates a case statement that matches `id` with it's component
-  ## This generates a runtime case statement that will perform `actions`
-  ## for all systems like so:
-  ##  case index
-  ##    of 0: actions
-  ##    of 1: actions
-  ##    ... and so on for each system index
-  ## `actions` is therefore executed using the correct `system` context
-  ## for the runtime system. IE, if `index` = 7 then `system` will be 
-  ## the instantiated variable for the seventh system.
-  ## This allows you to write generic code that dynamically applies to any system
-  ## chosen at runtime.
+  ## Generate caseSystem and forAllSystems for current systems.
   let
     actions = ident "actions"
     index = ident "index"
@@ -761,6 +748,18 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
 
   result = quote do:
     template caseSystem*(`index`: SystemIndex, `actions`: untyped): untyped =
+      ## Creates a case statement that matches a `SystemIndex` with it's instantiation.
+      ## This generates a runtime case statement that will perform `actions`
+      ## for all systems like so:
+      ##  case index
+      ##    of 0: actions
+      ##    of 1: actions
+      ##    ... and so on for each system index
+      ## `actions` is therefore executed using the correct `system` context
+      ## for the runtime system. IE, if `index` = 7 then `system` will be 
+      ## the instantiated variable for the seventh system.
+      ## This allows you to write generic code that dynamically applies to any system
+      ## chosen at runtime.
       `body`
 
     template forAllSystems*(`actions`: untyped): untyped =
@@ -768,7 +767,7 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
       ## Injects the `sys` template for easier operation.
       `allSysBody`
 
-  genLog "# System matchers:\n", result.repr
+  genLog "# Match system:\n", result.repr
 
 proc makeCompRefAlive: NimNode =
   quote do:
