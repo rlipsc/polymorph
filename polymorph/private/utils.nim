@@ -361,27 +361,24 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
 # State list updates
 
 
-proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex): NimNode =
+proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
   let
     typeStr = typeInfo.typeName typeId
     aliveIdent = ident aliveStateInstanceName(typeStr)
     instanceIdent = ident instanceIdsName(typeStr)
     compOpts = typeInfo[typeId.int].options
-    systemNode = systemInfo[system.int].instantiation
-  
-  # TODO: Generation.
 
   case compOpts.componentStorageFormat
   of cisSeq:
     quote do:
-      `aliveIdent`.setLen `systemNode`.count + 1
-      `aliveIdent`[`systemNode`.count] = true
-      `instanceIdent`.setLen `systemNode`.count + 1
-      `instanceIdent`[`systemNode`.count] += 1.IdBaseType
+      `aliveIdent`.setLen `row` + 1
+      `aliveIdent`[`row`] = true
+      `instanceIdent`.setLen `row` + 1
+      `instanceIdent`[`row`] += 1.IdBaseType
   else:
     quote do:
-      `aliveIdent`[`systemNode`.count] = true
-      `instanceIdent`[`systemNode`.count] += 1.IdBaseType
+      `aliveIdent`[`row`] = true
+      `instanceIdent`[`row`] += 1.IdBaseType
 
 # Type utils
 

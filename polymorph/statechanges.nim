@@ -674,16 +674,12 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
       sysTupleVar = ident(sysTupleStr.toLower)
       tupleSetup = newStmtList()
       sysOpts = sysInfo.options
-    var
-      updateGroup = newStmtList()
-      stateUpdates = newStmtList()
-
-    updateGroup.add addSystemTuple(systemNode, sysTupleVar, sysOpts)
 
     # Components are assigned to variables with the same name.
     var
       assignCompRefs = nnkLetSection.newTree()
       userSysAddCode = newStmtList()
+      stateUpdates = newStmtList()
     let
       sysHighVar = genSym(nskLet, "sysHigh")
       getSysHigh = quote do: `systemNode`.high
@@ -747,7 +743,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
 
         # Updating state lists is usually done in the component's
         # creation procs for non-owned components.
-        stateUpdates.add updateOwnedComponentState(typeId, sys)      
+        stateUpdates.add updateOwnedComponentState(typeId, sys, sysHighVar)
 
         tupleSetup.add `updateCode`
 
@@ -769,10 +765,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
 
       userSysAddCode.addUserSysCode(entity, sys, typeId, typeField)
 
-    let
-      row = quote do: `systemNode`.high
-      #entId = quote do: `entity`.entityId
-      updateIndex = entity.updateIndex(sys, row, sysOpts) #systemNode.indexWrite(entId, row, sysOpts)
+    let updateIndex = entity.updateIndex(sys, sysHighVar, sysOpts)
 
     result.add(quote do:
       var `sysTupleVar`: `sysTupleType`
@@ -782,7 +775,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
       template curEntity: EntityRef {.used.} = `entity`
     )
     result.add tupleSetup
-    result.add updateGroup
+    result.add addSystemTuple(systemNode, sysTupleVar, sysOpts)
     result.add assignCompRefs
     result.add updateIndex
     result.add stateUpdates

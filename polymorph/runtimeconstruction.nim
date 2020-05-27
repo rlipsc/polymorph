@@ -34,6 +34,8 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
         systemStr = sysInfo.systemName
         sysTupleType = ident tupleName(systemStr)
         sysTupleVar = ident tupleName(systemStr).toLowerAscii
+        systemNode = sysInfo.instantiation
+        newRow = ident "newRow"
       var
         matchList = newSeqOfCap[NimNode](requiredCompsLen)
         sysFields = newStmtList()
@@ -75,7 +77,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
           if extractOwned:
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
-              stateUpdates.add updateOwnedComponentState(comp, sys)
+              stateUpdates.add updateOwnedComponentState(comp, sys, newRow)
               # Assignment source is the parameter ref type.
               sysFields.add(quote do:
                 `sysTupleVar`.`typeField` = `refType`(`source`[0]).value)
@@ -86,7 +88,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
           else:
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
-              stateUpdates.add updateOwnedComponentState(comp, sys)
+              stateUpdates.add updateOwnedComponentState(comp, sys, newRow)
               # Assignment source is copied from the owned component.
               sysFields.add(quote do:
                 `sysTupleVar`.`typeField` = `instType`(`source`).access)
@@ -96,10 +98,8 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
                 `sysTupleVar`.`typeField` = `instType`(`source`))
 
       let
-        systemNode = sysInfo.instantiation
-        row = quote do: `systemNode`.high
         sysOpts = systemInfo[sys.int].options
-        updateIndex = entity.updateIndex(sys, row, sysOpts)
+        updateIndex = entity.updateIndex(sys, newRow, sysOpts)
         addToSystem = addSystemTuple(systemNode, sysTupleVar, sysOpts)
 
         matchCode = quote do:
@@ -110,6 +110,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
             `sysTupleVar`.entity = `entity`
             `sysFields`
             `addToSystem`
+            let `newRow` = `systemNode`.high
             `updateIndex`
             `stateUpdates`
       
