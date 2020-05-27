@@ -421,7 +421,7 @@ proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
           try:
             `res` &= componentInstanceType()(componentRef.index.int).access.repr
           except:
-            `res` &= "<Error accessing>\n"
+            `res` &= "<ERROR ACCESSING (index: " & $componentRef.index.int & ", count: " & $componentInstanceType().count & ")>\n"
 
     proc `strOp`*(componentRef: ComponentRef, showData: bool = true): string = componentRef.toString(showData)
 
@@ -488,15 +488,29 @@ proc makeRuntimeDebugOutput: NimNode =
         let entityId = entity.entityId
         for compRef in entityId.components:
           let compDesc = `strOp`(compRef, showData)
+          var
+            owned: bool
+            genMax: int
+            genStr: string
+          try:
+            caseComponent compRef.typeId:
+              genMax = componentGenerations().len
+              let gen = componentGenerations()[compRef.index.int]
+              genStr = $gen
+              owned = componentInstanceType().ownedComponent
+          except: genStr = " ERROR ACCESSING generations (index: " & $compRef.index.int & ", count: " & $genMax & ")"
+
           `res` &= compDesc
-          if compRef.typeId in `ownedComponents`:
+
+          # $typeId returns the string of the storage type for this component.
+          if owned:
             if not compRef.alive:
-              # $typeId returns the string of the storage type for this component.
-              `res` &= " <DEAD OWNED COMPONENT Type: " & $compRef.typeId & " idx " & $int(compRef.index) & ">\n"
+              `res` &= " <DEAD OWNED COMPONENT Type: " & $compRef.typeId & ", generation: " & genStr & ">\n"
+
           else:
             if not compRef.valid:
-              # $typeId returns the string of the storage type for this component.
-              `res` &= " <INVALID COMPONENT Type: " & $compRef.typeId & " idx " & $int(compRef.index) & ">\n"
+              `res` &= " <INVALID COMPONENT Type: " & $compRef.typeId & ", generation: " & genStr & ">\n"
+
           if showData:
             # Helps separate large components
             `res` &= "----\n"
