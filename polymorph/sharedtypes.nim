@@ -87,8 +87,8 @@ type
     echoRunning*: bool
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
-  EntityOverflow* = object of Exception
-  DuplicateComponent* = object of Exception
+  EntityOverflow* = object of OverflowError
+  DuplicateComponent* = object of ValueError
 
 const
   defaultMaxEntities* = 10_000
