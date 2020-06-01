@@ -605,16 +605,16 @@ proc genTypeAccess*(): NimNode =
         of cisSeq:
           quote do:
             # We don't need nextIdxIdent as this is naturally managed by seq.len
-            if `freeIdxIdent`.high == `lcTypeIdent`.high:
-              # Shrink seqs and update next index var.
-              # We need to reserve index zero for invalid component.
-              # The free list is full, everything is free so we can reset the list.
-              `freeIdxIdent`.setLen(0)
             if `delIdx` == `lcTypeIdent`.high:
               let newLen = max(1, `lcTypeIdent`.len - 1)
               `lcTypeIdent`.setLen(newLen)
               `instanceIds`.setLen(newLen)
               `aliveIdent`.setLen(newLen)
+            elif `freeIdxIdent`.high == `lcTypeIdent`.high:
+              # Shrink seqs and update next index var.
+              # We need to reserve index zero for invalid component.
+              # The free list is full, everything is free so we can reset the list.
+              `freeIdxIdent`.setLen(0)
             else:
               # Add to free indexes.
               `freeIdxIdent`.add `delIdx`.`instanceTypeIdent`
