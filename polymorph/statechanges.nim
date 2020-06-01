@@ -226,7 +226,6 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     systemsByCompId = compSystems()
   var
     componentDecl = nnkVarSection.newTree()
-    paramUpdates = newStmtList()
     addToEntity = newStmtList()
     compIds: seq[ComponentTypeId]
     statements = newStmtList()
@@ -241,8 +240,6 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
       fieldName = tyName.toLowerAscii & instPostfix
       fieldIdent = ident fieldName
       instTypeIdent = ident instanceTypeName(tyName)
-      # proc to instantiate this component type.
-      newProc = ident createInstanceName(tyName)
       info = typeInfo[typeId.int]
 
     if typeId in compIds: error "newEntityWith has been passed more than one component of type " & tyName
@@ -259,12 +256,9 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
         `sysNode`.count.`instTypeIdent`
       )
     else:
-      componentDecl.add genFieldAssignment(fieldName, false, newCall(newProc))
-
-      # Update storage with parameter value
-      paramUpdates.add(quote do:
-        `fieldIdent`.update(`component`)
-      )
+      # Create and update storage with parameter value
+      componentDecl.add genFieldAssignment(fieldName, false, quote do:
+        newInstance(`component`))
 
     let compRef = quote do: `fieldIdent`.toRef
     addToEntity.add addComponentRef(entity, compRef, entOpts)
@@ -348,7 +342,6 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     let res = `entity`
     template curEntity: EntityRef {.used.} = `entity`
     `addToEntity`
-    `paramUpdates`
     `userSysAddCode`
     `userCompAddCode`
     res
