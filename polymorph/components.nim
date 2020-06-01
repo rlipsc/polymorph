@@ -707,20 +707,13 @@ proc genTypeAccess*(): NimNode =
         ## Create a new component instance from the supplied value. Does not update systems.
         proc newInstance*(`valueParam`: `typeNameIdent`): `instanceTypeIdent` {.inline.} =
           `res` = `rawCreate`
-          `userInitCode`
           `newCompUpdate`
+          `userInitCode`
         ## Creates a new component from a generated `ref` component descendant. Does not update systems.
         template newInstance*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instanceTypeIdent`], val: Component): untyped =
           newInstance(`refTypeNameIdent`(val).value)
         ## Marks a component as deleted. Does not update systems.
         template delInstance*(`tyParam`: `typeNameIdent` | `instanceTypeIdent`): untyped = `tyParam`.`deleteIdent`()
-
-        # TODO: Add possibility to merge updates, so that only fields you mention change, the rest remain untouched.
-        # This is as opposed to the current update which replaces the whole contents of the variable with the new one.
-        # Potential name: `edit`.
-        # myComp.edit:
-        #   field1 = value1
-        #   field2 = value2
 
         ## Updating storage.
         ## `update` operates as a simple assignment into the storage array and therefore operates on the type's `==` proc.
