@@ -339,12 +339,11 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
       "] need their owner systems completed with component(s): [" & missingComps.commaSeparate & "]"
 
   statements.add(quote do:
-    let res = `entity`
     template curEntity: EntityRef {.used.} = `entity`
     `addToEntity`
     `userSysAddCode`
     `userCompAddCode`
-    res
+    `entity`
   )
 
   result = quote do:
