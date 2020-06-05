@@ -563,7 +563,15 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         streamBody = code
     else: error(&"makeSystem: Unknown verb \"{verb}\", expected {verbChoices}")
 
-  if initBody.len == 0 and startBody.len == 0 and allBody.len == 0 and streamBody.len == 0 and finishBody.len == 0: error("Systems must do something within " & verbChoices)
+  if initBody.len == 0 and
+    systemInfo[sysIndex].onAdded.len == 0 and
+    systemInfo[sysIndex].onRemoved.len == 0 and
+    startBody.len == 0 and
+    startBody.len == 0 and
+    allBody.len == 0 and
+    streamBody.len == 0 and
+    finishBody.len == 0:
+      error("Systems must do something within " & verbChoices)
 
   proc timeWrapper(core: NimNode): NimNode =
     ## Wraps `core` with timing code if `timings` is true, otherwise passes through `core` unchanged.
