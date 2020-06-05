@@ -324,14 +324,27 @@ proc makeNewEntityWith*(entOpts: ECSEntityOptions): NimNode =
       #`newEntCode`
       doNewEntityWith(`entOpts`, `componentList`)
 
-type ComponentParamInfo* = object
+## This structure is used at compile-time to convert a list of components to a
+## map of tasks for code generation to use.
+type ComponentParamInfo* = ref object
+  ## The components given by the arguments.
   passed*:          seq[ComponentTypeId]
+  ## The actual code/variable/data given for the component matching `passed`.
   values*:          seq[NimNode]
-  ## Non-owned components belonging to owner systems that haven't been passed 
+  ## Non-owned components belonging to owner systems that haven't been passed.
+  ## These must be fetched at run-time, and must exist for the owner system row
+  ## to be created.
   requiredFetches*: seq[ComponentTypeId]
+  ## These components form the union of non-owned components that share
+  ## a system with one or more of the components in `passed`.
+  ## These are fetched at run-time and trigger system updates when they exist.
+  ## For example given system `sysA` uses components [A, B, C], if you
+  ## `addComponent A()` on its own, `B` and `C` will be in `lookFor` to see
+  ## if the entity satisfies `sysA` at run-time, and a row can be added.
   lookFor*:         seq[ComponentTypeId]
   ## Index into `passed`.
   generateIdx*:     seq[int]
+  ## Owned components, their owning systems, and index into `passed`.
   owned*:           seq[tuple[id: ComponentTypeId, sys: SystemIndex, passedIdx: int]]
   ## Non-owning system that may or may not be satisfied.
   unownedSystems*:  seq[SystemIndex]
@@ -343,7 +356,8 @@ proc processComponentParameters(componentList: NimNode): ComponentParamInfo =
 
   # Generate a list of SystemIndexes used by each ComponentTypeId.
   let systemsByCompId = compSystems()
-  
+  result = ComponentParamInfo()
+
   for compNode in componentList:
     let tyName = compNode.findType
     doAssert tyName != "", "Cannot determine type name of argument:\n" & compNode.treeRepr & "\ngetType:\n" & compNode.getType.repr
