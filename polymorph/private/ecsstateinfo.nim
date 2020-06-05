@@ -36,7 +36,8 @@ type
     id*: SystemIndex
     systemName*: string
     # Adding to system events
-    onAddToCode*, onRemoveFromCode*: Table[ComponentTypeId, NimNode] # systemAddToCode, systemRemoveFromCode
+    onAddToCode*, onRemoveFromCode*: Table[ComponentTypeId, NimNode]
+    onAdded*, onRemoved*: NimNode
 
     requirements*: seq[ComponentTypeId]
     ownedComponents*: seq[ComponentTypeId]

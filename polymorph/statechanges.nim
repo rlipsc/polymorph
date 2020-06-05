@@ -861,7 +861,7 @@ proc userRemoveCode(systemIndex: int, system, rowIdent, entIdIdent, entity: NimN
             `sysRem`
         )
 
-proc removeSysReference(systemIndex: int, system, sysRowExists, rowIdent, entIdIdent, entity: NimNode, sysOpts: ECSSysOptions): NimNode =
+proc removeSysReference(systemIndex: int, sys, sysRowExists, rowIdent, entIdIdent, entity: NimNode, sysOpts: ECSSysOptions): NimNode =
   # Remove an entity's tuple from a system.
   # * Does not update the entity's storage
 
@@ -870,37 +870,51 @@ proc removeSysReference(systemIndex: int, system, sysRowExists, rowIdent, entIdI
     updatedRowEntIdent = ident "updatedRowEnt"
     updatedEntId = newDotExpr(updatedRowEntIdent, ident "entityId")
     # updates index with entity id to group row.
-    setIndex = system.indexWrite(updatedEntId, rowIdent, sysOpts)
+    setIndex = sys.indexWrite(updatedEntId, rowIdent, sysOpts)
+  
+  # TODO: If this system contains an owned component, don't swap the row on deletion.
 
   let
     trimGroup = 
       case sysOpts.storageFormat
       of ssSeq:
         quote do:
-          let `topIdxIdent` = `system`.high
+          let `topIdxIdent` = `sys`.high
           if `rowIdent` < `topIdxIdent`:
-            `system`.groups[`rowIdent`] = `system`.groups[`topIdxIdent`]
+            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
             # Get entity that's been moved.
-            let `updatedRowEntIdent` = `system`.groups[`rowIdent`][0]
+            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`][0]
             # Update the index for the moved row
             `setIndex`
 
-          `system`.groups.setLen(`system`.groups.len - 1)
+          `sys`.groups.setLen(`sys`.groups.len - 1)
       of ssArray:
         quote do:
-          let `topIdxIdent` = `system`.high
+          let `topIdxIdent` = `sys`.high
           if `rowIdent` < `topIdxIdent`:
-            `system`.groups[`rowIdent`] = `system`.groups[`topIdxIdent`]
+            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
             # Get entity that's been moved.
-            let `updatedRowEntIdent` = `system`.groups[`rowIdent`][0]
+            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`][0]
             # Update the index for the moved row
             `setIndex`
 
-          `system`.nextFreeIdx -= 1
-  
-  let delIndex = system.indexDel(entIdIdent, sysOpts)
+          `sys`.nextFreeIdx -= 1
+
+  # Get code defined in the system's `removed:` section.
+  var userRemovedEvent = newStmtList()
+  if systemInfo[systemIndex].onRemoved.len > 0:
+    let userRemovedEventCode = systemInfo[systemIndex.int].onRemoved
+    userRemovedEvent.add(quote do:
+      block:
+        template item: untyped {.used.} = `sys`.groups[`rowIdent`]
+        template sys: untyped {.used.} = `sys`
+        `userRemovedEventCode`
+    )
+
+  let delIndex = sys.indexDel(entIdIdent, sysOpts)
   let r = quote do:
     if `sysRowExists`:
+      `userRemovedEvent`
       `delIndex`
       `trimGroup`
   r

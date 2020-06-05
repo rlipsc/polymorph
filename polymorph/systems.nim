@@ -306,7 +306,9 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
     systemName: sysName,
     instantiation: inst,
     ownedComponents: ownedComponentIds,
-    options: sysOptions
+    options: sysOptions,
+    onAdded: newStmtList(),
+    onRemoved: newStmtList()
   )
 
   # Build tuple type of components for this system.
@@ -478,14 +480,16 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     streamAmount = newEmptyNode()
     multipass: bool
   const
-    initStr = "init"
-    startStr = "start"
-    allStr = "all"
-    finishStr = "finish"
-    streamStr = "stream"
+    initStr =     "init"
+    startStr =    "start"
+    allStr =      "all"
+    streamStr =   "stream"
+    finishStr =   "finish"
+    addedStr =    "added"
+    removedStr =  "removed"
     # commands
     multipassStr = "multipass"
-    verbChoices = initStr & ", " & startStr & ", " & allStr & ", " & streamStr & ", or " & finishStr
+    verbChoices = initStr & ", " & startStr & ", " & allStr & ", " & streamStr & ", " & addedStr & ", " & removedStr & ", or " & finishStr
 
   for item in systemBody:
     # Here we expect `body: <statements>`
@@ -510,6 +514,10 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     of finishStr:
       item[1].expectKind nnkStmtList
       finishBody.add(quote do: `code`)
+    of addedStr:
+      systemInfo[sysIndex].onAdded.add code
+    of removedStr:
+      systemInfo[sysIndex].onRemoved.add code
     of streamStr:
       case code.kind
       of nnkIntLit:
