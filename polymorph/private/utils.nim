@@ -186,26 +186,12 @@ proc componentRefsLen*(entityIdIdent: NimNode, options: ECSEntityOptions): NimNo
   # This returns the number of items in the entity's componentRefs list, however that may be stored.
   case options.componentStorageFormat:
   of [csSeq, csTable]:
-    # Equivalent to entityData(entIdent.entityId).componentRefs.len
-    # The above leads to `quote` inserting `entIdent` as a NimNode so we must build manually.
-    newStmtList(
-      newDotExpr(
-        newDotExpr(
-          newCall(newIdentNode("entityData"), entityIdIdent),
-          newIdentNode("componentRefs")
-        ),
-        newIdentNode("len")
-      )
-    )
+    quote:
+      entityData(`entityIdIdent`).componentRefs.len
   of csArray:
     # The array book-keeps it's highest value.
-    # Equivalent to entityData(entIdent.entityId).nextCompIdx
-    newStmtList(
-      newDotExpr(
-        newCall(newIdentNode("entityData"), entityIdIdent),
-        newIdentNode("nextCompIdx")
-      )
-    )
+    quote:
+      entityData(`entityIdIdent`).nextCompIdx
 
 
 # System utils
