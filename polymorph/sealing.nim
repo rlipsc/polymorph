@@ -880,6 +880,8 @@ proc genRunProc(name: string): NimNode =
 macro commitSystems*(procName: static[string]): untyped =
   ## Output system do proc definitions at the call site.
   result = newStmtList()
+  when defined(debugSystemPerformance):
+    echo "Committing systems..."
   for sys in ecsSysUncommitted:
     if systemInfo[sys.int].definition != nil:
       result.add systemInfo[sys.int].definition
@@ -908,5 +910,7 @@ macro commitSystems*(procName: static[string]): untyped =
     echo "Warning: Systems are defined that do not have bodies: ", outputStr
 
   genLog "# Commit systems:\n" & procName, result.repr
+  when defined(debugSystemPerformance):
+    echo "Systems committed."
 
   result.add doWriteLog()
