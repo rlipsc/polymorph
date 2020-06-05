@@ -175,42 +175,6 @@ macro onSystemRemoveFrom*(typeToUse: typedesc, systemName: static[string], actio
     systemInfo[sysIndex].onRemoveFromCode[typeIndex] = newStmtList(newBlockStmt(actions))
   result = newStmtList()
 
-proc addUserSysCode(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
-  let sysNode = systemInfo[sys.int].instantiation
-  var
-    addTemplates: bool
-    addedCode = newStmtList()
-
-  if systemInfo[sys.int].onAddToCode.len > 0:
-    # Check if matches a specific system and component type.
-    let userAddToSys = systemInfo[sys.int].onAddToCode.getOrDefault(typeId)
-    if userAddToSys != nil:
-      addedCode.add(quote do:
-        block:
-          template curEntity: EntityRef {.used.} = `ent`
-          template curComponent: untyped {.used.} = `fieldIdent`
-          template curSystem: untyped {.used.} = `sysNode`
-          `userAddToSys`
-      )
-
-  let userAddSys = typeInfo[typeId.int].onAddAnySystemCode
-  
-  if userAddSys.len > 0:
-    # Check for this type's initialiser.
-    let sysNode = systemInfo[sys.int].instantiation
-    if currentNode.len == 0: addTemplates = true
-    addedCode.add(quote do:
-      block:
-        template curEntity: EntityRef {.used.} = `ent`
-        template curComponent: untyped {.used.} = `fieldIdent`
-        ## Access to current updating system variable.
-        template curSystem: untyped {.used.} = `sysNode`
-        `userAddSys`
-    )
-
-  if addedCode.len > 0:
-    currentNode.add addedCode
-
 proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode {.compileTime.} =
   # Note: Currently does not generate a container and writes out the innards
   # within a block statement in the caller scope.
@@ -327,12 +291,7 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
           if not discarded:
             # Add component to system.
             statements.add genSystemUpdate(entity, sys, compIds, componentList)
-            # Add user code.
-            let
-              fieldName = typeInfo[compId.int].typeName.toLower & instPostfix
-              fieldIdent = ident fieldName
 
-            userSysAddCode.addUserSysCode(entity, sys, compId, fieldIdent)
 
   if missingComps.len > 0:
     error "Owned component(s) [" & ownedComps.commaSeparate &
@@ -457,7 +416,7 @@ proc genComponents*(entity: NimNode, compInfo: ComponentParamInfo): NimNode =
     let
       typeId = compInfo.passed[idx]
       info = typeInfo[typeId.int]
-      typeStr = info.typeName
+      typeStr = info.typeName & instPostfix
       instVarStr = typeStr.toLower
       instVar = ident instVarStr
       paramVal = compInfo.values[idx]
@@ -516,7 +475,7 @@ proc buildFetch(entity: NimNode, compInfo: ComponentParamInfo, entOpts: ECSEntit
       for typeId in compInfo.lookFor:
         let
           typeStr = typeInfo[typeId.int].typeName
-          fieldName = typeStr.toLowerAscii
+          fieldName = typeStr.toLowerAscii & instPostfix
           fieldIdent = ident fieldName
           instTypeIdent = ident typeStr.instanceTypeName
 
@@ -555,7 +514,7 @@ proc buildFetch(entity: NimNode, compInfo: ComponentParamInfo, entOpts: ECSEntit
         let
           typeStr = typeInfo[comp.int].typeName
           instTypeIdent = ident(typeStr.instanceTypeName)
-          fieldName = typeStr.toLowerAscii & "Inst"
+          fieldName = typeStr.toLowerAscii & instPostfix
           fieldIdent = ident fieldName
         fetch.add(quote do:
           let `fieldIdent` = `instTypeIdent`(entityData(`entity`.entityId).componentRefs.getOrDefault(`comp`.ComponentTypeId).index)
@@ -572,7 +531,7 @@ proc checkRequired(compInfo: ComponentParamInfo): NimNode =
     for typeId in compInfo.requiredFetches:
       let
         typeStr = typeInfo[typeId.int].typeName
-        typeField = ident typeStr.toLower
+        typeField = ident typeStr.toLower & instPostfix
       checkSystem.add(quote do: `typeField`.alive)
     let
       matchesSystem = genInfixes(checkSystem, "and")
@@ -589,64 +548,39 @@ proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNo
   for sys in compInfo.unownedSystems:
     template sysInfo: untyped = systemInfo[sys.int]
     let
-      systemNode = sysInfo.instantiation
       sysTupleStr = sysInfo.systemName.tupleName
-      sysTupleType = ident sysTupleStr
       sysTupleVar = ident(sysTupleStr.toLower)
-      sysOpts = sysInfo.options
     
     var
       checkSystem: seq[NimNode]
       updateTupleFields = newStmtList()
-      userSysAddCode = newStmtList()
 
     updateTupleFields.add(quote do:
       `sysTupleVar`.entity = `entity`)
 
-    let doAddSystem = addSystemTuple(systemNode, sysTupleVar, sysOpts)
-    
-    # Build code to fetch components 
+    # Generate the code that adds this component instance to this system.
+    # This includes user events and special handling for owned components.
+    let updateSystem = genSystemUpdate(entity, sys, compInfo.passed, compInfo.values)
+
+    # Build the checks to see if this system matches.
     for typeId in sysInfo.requirements:
       let
         typeStr = typeInfo[typeId.int].typeName
-        typeField, instanceField = ident typeStr.toLower
-
-      # We shouldn't be processing owned components here,
-      # but it's okay to have references to them.
-      assert typeInfo[typeId.int].systemOwner != sys, "Internal error: Expected conditional system but \"" & 
-        typeStr & "\" is owned by system \"" & sysInfo.systemName & "\""
+        typeField = ident typeStr.toLower & instPostfix
 
       if typeId in compInfo.lookFor or typeId in compInfo.passed:
         if typeId notin compInfo.passed:
           checkSystem.add(quote do: `typeField`.valid)
-        
-        updateTupleFields.add(quote do:
-          `sysTupleVar`.`typeField` = `instanceField`
-        )
-      
-      userSysAddCode.addUserSysCode(entity, sys, typeId, typeField)
-    
-    let
-      row = quote do: `systemNode`.high
-      entId = quote do: `entity`.entityId
-      updateIndex = systemNode.indexWrite(entId, row, sysOpts)
-
-    let addToSys = quote do:
-      var `sysTupleVar`: `sysTupleType`
-      `updateTupleFields`
-      `doAddSystem`
-      `updateIndex`
-      `userSysAddCode`
 
     if checkSystem.len > 0:
       let matchesSystem = genInfixes(checkSystem, "and")
       result.add(quote do:
         if `matchesSystem`:
-          `addToSys`
+          `updateSystem`
       )
     else:
       result.add(quote do:
-        `addToSys`
+        `updateSystem`
       )
 
 proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
@@ -679,13 +613,17 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
     # Retrieve the last inserted system row for the component index.
     assignCompRefs.add newIdentDefs(sysHighVar, newEmptyNode(), getSysHigh)
 
+    # TODO: Migrate to genSystemUpdate
+
     for typeId in sysInfo.requirements:
       # Populate system tuple.
       let
         compInfo = typeInfo[typeId.int]
         typeStr = compInfo.typeName
-        typeField = ident typeStr.toLower
+        lcTypeStr = typeStr.toLower
+        typeField = ident lcTypeStr
         instType = ident typeStr.instanceTypeName
+        instField = ident lcTypeStr & instPostfix
         ownedByThisSystem = compInfo.systemOwner == sys
 
       if ownedByThisSystem:
@@ -702,7 +640,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
               let userCode = compInfo.onAddToEntCode
               quote do:
                 block:
-                  template curComponent: untyped {.used.} = `typeField`
+                  template curComponent: untyped {.used.} = `instField`
                   template curEntity: untyped {.used.} = `entity`
                   `userCode`
             else: newStmtList()
@@ -713,7 +651,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
               quote do:
                 block:
                   template curEntity: untyped {.used.} = `entity`
-                  template curComponent: untyped {.used.} = `typeField`
+                  template curComponent: untyped {.used.} = `instField`
                   `code`
             else:
               newStmtList()
@@ -746,16 +684,16 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
         
         # Owned components reference the group index of their owning system.
         # Equivalent to: typeField = InstanceType(sys.high)
-        assignCompRefs.add newIdentDefs(typeField, newEmptyNode(), newDotExpr(sysHighVar, instType))
+        assignCompRefs.add newIdentDefs(instField, newEmptyNode(), newDotExpr(sysHighVar, instType))
 
       else:
         # Assign found reference.
-        let instanceField = ident typeStr.toLower
+        let instanceField = ident typeStr.toLower & instPostfix
         tupleSetup.add(quote do:
           `sysTupleVar`.`typeField` = `instanceField`
         )
 
-      userSysAddCode.addUserSysCode(entity, sys, typeId, typeField)
+      userSysAddCode.addUserSysCode(entity, sys, typeId, instField)
 
     let updateIndex = entity.updateIndex(sys, sysHighVar, sysOpts)
 
@@ -798,8 +736,9 @@ proc doAddComponents(entOpts: ECSEntityOptions, entity: NimNode, componentList: 
   for typeId in componentInfo.passed:
     let
       typeStr = typeInfo[typeId.int].typeName
-      typeIdent = ident typeStr.toLower
-    returnType.add nnkExprColonExpr.newTree(typeIdent, typeIdent)
+      fieldIdent = ident typeStr.toLower
+      typeIdent = ident typeStr.toLower & instPostfix
+    returnType.add nnkExprColonExpr.newTree(fieldIdent, typeIdent)
   inner.add returnType
 
   result = quote do:

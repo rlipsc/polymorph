@@ -163,7 +163,7 @@ proc addToEntityList*(entity: NimNode, passed: seq[ComponentTypeId], entOpts: EC
     let
       typeStr = typeInfo.typeName typeId
       fieldName = typeStr.toLower
-      fieldIdent = ident fieldName
+      fieldIdent = ident fieldName & instPostfix
     result.add addComponentRef(entity, newDotExpr(fieldIdent, ident "toRef"), entOpts)
 
 proc entSetIncl*(entOpts: ECSEntityOptions, entityId: NimNode, setVal: NimNode): NimNode =
@@ -284,65 +284,42 @@ proc addSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptions
         `systemNode`.groups[`systemNode`.nextFreeIdx] = `value`
         `systemNode`.nextFreeIdx += 1
 
-proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode): NimNode =
-  ## Assumes you have a generated variable that matches each field in the system tuple already defined.
-  let
-    sysOpts = systemInfo[sys.int].options
-    system = systemInfo[sys.int].instantiation
-
-  # Generate system tuple assignment.
+proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
+  ## Adds any user code for `onSystemAddTo` and `onSystemAdd`.
+  let sysNode = systemInfo[sys.int].instantiation
   var
-    sysTuple = nnkPar.newTree()
-    updateOwnedAlive = newStmtList()
-  sysTuple.add nnkExprColonExpr.newTree(ident "entity", entity)
-  for fields in sys.systemTypesStrPair:
-    let
-      tupleFieldStr = fields.typeName.toLowerAscii()
-      tupleFieldIdent = ident tupleFieldStr
-      compSource = ident tupleFieldStr & instPostfix
-      compInfo = typeInfo[fields.id.int]
-    
-    if compInfo.systemOwner == sys:
-      let compIdx = componentsPassed.find(fields.id)
-      assert compIdx >= 0, "Cannot find field for " & compInfo.typeName & " within " & componentValues.repr
-      sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
+    addTemplates: bool
+    addedCode = newStmtList()
 
-      # Update alive and instance lists for the owned component.
-      # This is normally done in the component's creation.
-      let
-        aliveIdent = ident aliveStateInstanceName(fields.typeName)
-        instanceIdent = ident instanceIdsName(fields.typeName)
-        compOpts = typeInfo[fields.id.int].options
+  if systemInfo[sys.int].onAddToCode.len > 0:
+    # Check if matches a specific system and component type.
+    let userAddToSys = systemInfo[sys.int].onAddToCode.getOrDefault(typeId)
+    if userAddToSys != nil:
+      addedCode.add(quote do:
+        block:
+          template curEntity: EntityRef {.used.} = `ent`
+          template curComponent: untyped {.used.} = `fieldIdent`
+          template curSystem: untyped {.used.} = `sysNode`
+          `userAddToSys`
+      )
 
-      if compOpts.componentStorageFormat == cisSeq:
-        updateOwnedAlive.add(quote do:
-          `aliveIdent`.setLen(`system`.count + 1)
-          `aliveIdent`[`system`.count] = true
-          `instanceIdent`.setLen(`system`.count + 1)
-          `instanceIdent`[`instanceIdent`.high] += 1
-        )
-    else:
-      sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, compSource)
-
-  # add the tuple of component indexes for this entity in this system.
-  let updateGroup = case sysOpts.storageFormat
-    of ssSeq:
-      quote do: `system`.groups.add(`sysTuple`)
-    of ssArray:
-      quote do:
-        `system`.groups[`system`.nextFreeIdx] = `sysTuple`
-        `system`.nextFreeIdx += 1
+  let userAddSys = typeInfo[typeId.int].onAddAnySystemCode
   
-  let
-    entIdIdent = quote do: `entity`.entityId
-    row = quote do: `system`.high
-    updateIndex = system.indexWrite(entIdIdent, row, sysOpts)
+  if userAddSys.len > 0:
+    # Check for this type's initialiser.
+    let sysNode = systemInfo[sys.int].instantiation
+    if currentNode.len == 0: addTemplates = true
+    addedCode.add(quote do:
+      block:
+        template curEntity: EntityRef {.used.} = `ent`
+        template curComponent: untyped {.used.} = `fieldIdent`
+        ## Access to current updating system variable.
+        template curSystem: untyped {.used.} = `sysNode`
+        `userAddSys`
+    )
 
-  quote do:
-    `updateOwnedAlive`
-    `updateGroup`
-    `updateIndex`
-
+  if addedCode.len > 0:
+    currentNode.add addedCode
 
 # State list updates
 
@@ -365,6 +342,76 @@ proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, ro
     quote do:
       `aliveIdent`[`row`] = true
       `instanceIdent`[`row`] += 1.IdBaseType
+
+
+proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): NimNode =
+  ## Assumes you have a generated variable that matches each field in the system tuple already defined.
+  let
+    sysOpts = systemInfo[sys.int].options
+    sysVar = systemInfo[sys.int].instantiation
+
+  # Generate system tuple assignment.
+  var
+    sysTuple = nnkPar.newTree()
+    updateOwnedAlive = newStmtList()
+    userSysAddCode = newStmtList()
+
+  sysTuple.add nnkExprColonExpr.newTree(ident "entity", entity)
+  for fields in sys.systemTypesStrPair:
+    let
+      tupleFieldStr = fields.typeName.toLowerAscii()
+      tupleFieldIdent = ident tupleFieldStr
+      compSource = ident tupleFieldStr & postfix
+      compInfo = typeInfo[fields.id.int]
+    
+    if compInfo.systemOwner == sys:
+      let compIdx = componentsPassed.find(fields.id)
+      assert compIdx >= 0, "Error: Cannot find owned field for " & compInfo.typeName & " within " & componentValues.repr
+
+      # Owned components are directly assigned to the tuple from the parameter list.
+      sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
+
+      # Update alive and instance lists for the owned component.
+      let
+        aliveIdent = ident aliveStateInstanceName(fields.typeName)
+        instanceIdent = ident instanceIdsName(fields.typeName)
+        compOpts = typeInfo[fields.id.int].options
+
+      let sysHigh = quote: `sysVar`.count
+      updateOwnedAlive.add fields.id.updateOwnedComponentState(sys, sysHigh)
+
+    else:
+      sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, compSource)
+
+    # Add user events.
+    userSysAddCode.addUserSysCode(entity, sys, fields.id, compSource)
+
+  # Add the tuple of components to the system groups list.
+  let updateGroup = sysVar.addSystemTuple(sysTuple, sysOpts)
+
+  let
+    entIdIdent = quote do: `entity`.entityId
+    row = quote do: `sysVar`.high
+    updateIndex = sysVar.indexWrite(entIdIdent, row, sysOpts)
+
+  # Invoke code defined in the system's `added:` section.
+  var userAddedEvent = newStmtList()
+  if systemInfo[sys.int].onAdded.len > 0:
+    let userAddedEventCode = systemInfo[sys.int].onAdded
+    userAddedEvent.add(quote do:
+      block:
+        template item: untyped {.used.} = `sysVar`.groups[`row`]
+        template sys: untyped {.used.} = `sysVar`
+        `userAddedEventCode`
+    )
+
+  quote do:
+    `updateOwnedAlive`
+    `updateGroup`
+    `updateIndex`
+    `userSysAddCode`
+    `userAddedEvent`
+
 
 # Type utils
 
