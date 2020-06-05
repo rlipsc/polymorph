@@ -4,8 +4,8 @@ from strutils import toLowerAscii
 
   
 proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extractOwned: bool): NimNode =
-  # Build a case statement to handle updating linked systems for
-  # each component in the input list.
+  ## Build a case statement to handle updating systems linked to each component
+  ## found in the input list.
   let
     compIndexInfo = ident "curCompInfo"
     visited = ident "visited"
@@ -25,6 +25,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, extra
       linkedSystems = systemsByCompId[typeId.int]
       addToSystems = newStmtList()
     var ofBranch = nnkOfBranch.newTree()
+
     ofBranch.add newLit typeId.int
 
     for sys in linkedSystems:
