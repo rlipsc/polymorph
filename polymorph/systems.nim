@@ -527,6 +527,12 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         item[2].expectKind nnkStmtList
         streamBody = item[2]
 
+      # `stream multipass <count>:` forces a minimum of `count` rows to be processed,
+      # even if it means repeating rows, as long as there is one or more rows in the
+      # system.
+      # You can also use `stream multipass:`, which will use the system's `streamRate`
+      # field.
+      #
       of nnkCommand:
         # Extra command/parameter eg `stream multipass variable:`.
         # Currently only one command that accepts a parameter for stream.
@@ -543,6 +549,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
       of nnkIdent:
         if item[1].strVal.toLowerAscii == multipassStr:
           # Trap `stream multipass:`.
+          #
           # Since we're not providing a value or other ident, the system.streamRate will be used.
           multipass = true
         else:
