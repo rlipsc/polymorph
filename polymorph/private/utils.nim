@@ -371,12 +371,6 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
       # Owned components are directly assigned to the tuple from the parameter list.
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
 
-      # Update alive and instance lists for the owned component.
-      let
-        aliveIdent = ident aliveStateInstanceName(fields.typeName)
-        instanceIdent = ident instanceIdsName(fields.typeName)
-        compOpts = typeInfo[fields.id.int].options
-
       let sysHigh = quote: `sysVar`.count
       updateOwnedAlive.add fields.id.updateOwnedComponentState(sys, sysHigh)
 
