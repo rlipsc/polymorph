@@ -446,8 +446,8 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     if componentTypes.len > 0 and types.len > 0:
       for i, givenType in componentTypes:
         # Types must be given in the same order.
-        if typeStringToId($givenType) != types[i]:
-          error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: " & types.repr
+        if i >= types.len or typeStringToId($givenType) != types[i]:
+          error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: [" & types.commaSeparate & "]"
 
     if ecsSysBodiesAdded.hasKey(sysIdxSearch.index.SystemIndex):
       error "System \"" & name & "\" already has a body defined"
