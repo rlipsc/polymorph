@@ -853,7 +853,11 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   # cleared, we can assume there will be no clashing upon further
   # events when registerComponents is invoked again.
   echo "ECS Built."
+  when defined(debugSystemPerformance):
+    echo "Adding output of generated code log..."
   result.add doWriteLog()
+  when defined(debugSystemPerformance):
+    echo "Logged generated code."
 
 template makeEcs*(maxEnts: static[int] = defaultMaxEntities): untyped =
   const entOpts = ECSEntityOptions(maxEntities: maxEnts)
