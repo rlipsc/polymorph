@@ -374,6 +374,7 @@ proc genTypeAccess*(): NimNode =
       instTypeNode = newIdentNode instTypeName                  # Type's instance type
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       res = ident "result"
+      invalidField = newLit "Invalid field passed to " &  instTypeName
     template typeFields: untyped = typeInfo[typeId.int].fields
 
     # Add a proc to return a new component index.
@@ -413,6 +414,8 @@ proc genTypeAccess*(): NimNode =
       fieldParam = ident "field"
     
     if compInfo.systemOwner != InvalidSystemIndex:
+      # This component is owned by a system, so access templates need to
+      # directly reference the owner system.
       let
         ownerSystem = systemInfo[compInfo.systemOwner.int].instantiation
         sysTupleFieldStr = typeNameStr.toLowerAscii
@@ -441,10 +444,18 @@ proc genTypeAccess*(): NimNode =
         typeAccess.add(quote do:
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
+              static:
+                readsFrom.add `typeId`.ComponentTypeId
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`
+            else:
+              {.error: `invalidField`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
+              static:
+                writesTo.add `typeId`.ComponentTypeId
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam` = `valueParam`
+            else:
+              {.error: `invalidField`.}
         )
         {.pop.}
       of amFieldTemplates:
@@ -483,6 +494,7 @@ proc genTypeAccess*(): NimNode =
       )
 
     else:
+      # Non-owned component.
 
       let
         standAloneUpdate =
@@ -525,10 +537,18 @@ proc genTypeAccess*(): NimNode =
         typeAccess.add(quote do:
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
+              static:
+                readsFrom.add `typeId`.ComponentTypeId
               `lcTypeIdent`[`inst`.int].`fieldParam`
+            else:
+              {.error: `invalidField`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
+              static:
+                writesTo.add `typeId`.ComponentTypeId
               `lcTypeIdent`[`inst`.int].`fieldParam` = `valueParam`
+            else:
+              {.error: `invalidField`.}
         )
         {.pop.}
       of amFieldTemplates:
@@ -639,11 +659,11 @@ proc genTypeAccess*(): NimNode =
             newEmptyNode()
         userInitCode =
           if compInfo.onInitCode != nil:
-              let code = compInfo.onInitCode
-              quote do:
-                block:
-                  template curComponent: `instanceTypeIdent` {.used.} = `res`
-                  `code`
+            let code = compInfo.onInitCode
+            quote do:
+              block:
+                template curComponent: `instanceTypeIdent` {.used.} = `res`
+                `code`
           else:
             newEmptyNode()
         userFinalCode =

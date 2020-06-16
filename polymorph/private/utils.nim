@@ -40,6 +40,9 @@ var
   sysRemoveAffectedThisSystem* {.compileTime.}: bool
   systemCalledDelete* {.compileTime.}: bool
   systemCalledDeleteEntity* {.compileTime.}: bool
+  # State tracking.
+  readsFrom* {.compiletime.}: seq[ComponentTypeId]
+  writesTo* {.compiletime.}: seq[ComponentTypeId]
 
   # Perform one log clear per unique path.
   logInitialised* {.compileTime.}: Table[string, bool]
