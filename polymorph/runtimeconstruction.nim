@@ -107,8 +107,20 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
                 `types`.hasKey(`comp`)
 
           let source =
-            if comp == typeId: quote do: `compIndexInfo`[1]
-            else: quote do: `types`[`compId`]
+            if not cloning:
+              # types: Table[int, tuple[component: Component, compIdx: ComponentIndex]]
+              if comp == typeId:
+                quote do:
+                  `compIndexInfo`[1]
+              else:
+                quote do:
+                  `types`[`compId`]
+            else:
+              # types: Table[int, ComponentIndex]
+              if comp == typeId:
+                quote do: `compIndexInfo`[1]
+              else:
+                quote do: `types`[`compId`]
 
           # Add user events.
           userSysAddCode.addUserSysCode(entity, sys, comp, source)
