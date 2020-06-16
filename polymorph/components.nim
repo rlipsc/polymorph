@@ -374,7 +374,8 @@ proc genTypeAccess*(): NimNode =
       instTypeNode = newIdentNode instTypeName                  # Type's instance type
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       res = ident "result"
-      invalidField = newLit "Invalid field passed to " &  instTypeName
+      invalidField = newLit typeNameStr & " doesn't have a field `"
+      invalidFieldPostfix = "`"
     template typeFields: untyped = typeInfo[typeId.int].fields
 
     # Add a proc to return a new component index.
@@ -401,7 +402,7 @@ proc genTypeAccess*(): NimNode =
       strOp = nnkAccQuoted.newTree(ident "$")
       deletedComp = newLit "<Deleted " & instTypeName # Completed below.
       invalidStr = newLit "<Invalid " & instTypeName & ">"
-      userUpdateCode =
+      userInterceptInitCode =
         if compInfo.onInterceptValueInitCode.len > 0:
           # It's now the user's responsibility to call update.
           compInfo.onInterceptValueInitCode
@@ -421,13 +422,13 @@ proc genTypeAccess*(): NimNode =
         sysTupleFieldStr = typeNameStr.toLowerAscii
         sysTupleField = ident sysTupleFieldStr
         standAloneUpdate =
-          if userUpdateCode.kind != nnkEmpty:
+          if userInterceptInitCode.kind != nnkEmpty:
             quote do:
               block:
                 template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
                   `ownerSystem`.groups[`inst`.int].`sysTupleField` = `commitParam`
                 template curValue: `typeNameIdent` = `valueParam`
-                `userUpdateCode`
+                `userInterceptInitCode`
           else:
             quote do:
               `ownerSystem`.groups[`inst`.int].`sysTupleField` = `valueParam`
@@ -448,14 +449,14 @@ proc genTypeAccess*(): NimNode =
                 readsFrom.add `typeId`.ComponentTypeId
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`
             else:
-              {.error: `invalidField`.}
+              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
               static:
                 writesTo.add `typeId`.ComponentTypeId
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam` = `valueParam`
             else:
-              {.error: `invalidField`.}
+              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
         )
         {.pop.}
       of amFieldTemplates:
@@ -498,13 +499,13 @@ proc genTypeAccess*(): NimNode =
 
       let
         standAloneUpdate =
-          if userUpdateCode.kind != nnkEmpty:
+          if userInterceptInitCode.kind != nnkEmpty:
             quote do:
               block:
                 template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
                   `lcTypeIdent`[`instParam`.int] = `commitParam`
                 template curValue: `typeNameIdent` = `valueParam`
-                `userUpdateCode`
+                `userInterceptInitCode`
           else:
             quote do:
               `lcTypeIdent`[`instParam`.int] = `valueParam`
@@ -541,14 +542,14 @@ proc genTypeAccess*(): NimNode =
                 readsFrom.add `typeId`.ComponentTypeId
               `lcTypeIdent`[`inst`.int].`fieldParam`
             else:
-              {.error: `invalidField`.}
+              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
               static:
                 writesTo.add `typeId`.ComponentTypeId
               `lcTypeIdent`[`inst`.int].`fieldParam` = `valueParam`
             else:
-              {.error: `invalidField`.}
+              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
         )
         {.pop.}
       of amFieldTemplates:
@@ -690,12 +691,12 @@ proc genTypeAccess*(): NimNode =
           r
 
         newCompUpdate =
-          if userUpdateCode.kind != nnkEmpty:
+          if userInterceptInitCode.kind != nnkEmpty:
             quote do:
               template commit(`commitParam`: `typeNameIdent`): untyped {.used.} =         
                 `lcTypeIdent`[`res`.int] = `commitParam`
               template curValue: `typeNameIdent` = `valueParam`
-              `userUpdateCode`
+              `userInterceptInitCode`
           else:
             quote do:
               `lcTypeIdent`[`res`.int] = `valueParam`
