@@ -1,5 +1,6 @@
 import polymorph
 
+if not defined(debug): quit("Basic tests must be run in debug mode.")
 template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions) {.dirty.} =
   import unittest
 
