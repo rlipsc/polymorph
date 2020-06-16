@@ -4,7 +4,7 @@ from strutils import toLowerAscii
 
   
 proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloning: bool): NimNode =
-  ## Build a case statement to handle updating systems linked to each component
+  ## Build a case statement to handle updating systems linked to any component
   ## found in the input list.
   let
     compIndexInfo = ident "curCompInfo"
@@ -60,7 +60,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
       )
     #if userCompAddCode.len > 0:
     ofStmts.add(quote do:
-      template curEntity: EntityRef = `entity`
+      template curEntity: EntityRef {.used.} = `entity`
       )
     ofStmts.add userCompAddCode
 
@@ -156,7 +156,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
         curEntTmpl =
           if userSysAddCode.len > 0:
             quote do:
-              template curEntity: EntityRef = `entity`
+              template curEntity: EntityRef {.used.} = `entity`
           else:
             newEmptyNode()
         matchCode = quote do:
@@ -364,8 +364,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       assert `entity`.alive, "Cloning a dead entity"
 
       `res` = newEntity()
-      # Build an index to component list, which helps speed things
-      # up when checking systems.
+      # Build an index of component type to its instantiated instance.
       var
         `types`: Table[int, ComponentIndex]
         `visited`: array[`maxSys`, bool]
