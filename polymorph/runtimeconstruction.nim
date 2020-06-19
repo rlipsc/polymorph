@@ -34,15 +34,17 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
 
     ofBranch.add newLit typeId.int
 
+    let
+      source = 
+        if cloning:
+          quote do: `compIndexInfo`[1]
+        else:
+          quote do: `compIndexInfo`[1][1]
+
     # User callback.
     if ofCompInfo.onAddCallback.len > 0:
       # Check for this type's initialiser.
       let
-        source = 
-          if cloning:
-            quote do: `compIndexInfo`[1]
-          else:
-            quote do: `compIndexInfo`[1][1]
         cbProcName = ident addCallbackName(ofCompInfo.typeName)
       userCompAddCode.add(quote do:
         `cbProcName`(`entity`, `ofInstType`(`source`))
@@ -51,18 +53,17 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
     # Component add user code.
     let userAddToEnt = ofCompInfo.onAddToEntCode
     if userAddToEnt.len > 0:
-      let source = quote do: `compIndexInfo`[0]
       userCompAddCode.add(quote do:
         block:
           ## Current component being added to entity. 
           template curComponent: untyped {.used.} = `ofInstType`(`source`)
           `userAddToEnt`
       )
+
     #if userCompAddCode.len > 0:
     ofStmts.add(quote do:
       template curEntity: EntityRef {.used.} = `entity`
       )
-    ofStmts.add userCompAddCode
 
     for sys in linkedSystems:
       template sysInfo: untyped = systemInfo[sys.int]
@@ -107,20 +108,10 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
                 `types`.hasKey(`comp`)
 
           let source =
-            if not cloning:
-              # types: Table[int, tuple[component: Component, compIdx: ComponentIndex]]
-              if comp == typeId:
-                quote do:
-                  `compIndexInfo`[1]
-              else:
-                quote do:
-                  `types`[`compId`]
+            if comp == typeId:
+              quote do: `compIndexInfo`[1]
             else:
-              # types: Table[int, ComponentIndex]
-              if comp == typeId:
-                quote do: `compIndexInfo`[1]
-              else:
-                quote do: `types`[`compId`]
+              quote do: `types`[`compId`]
 
           # Add user events.
           userSysAddCode.addUserSysCode(entity, sys, comp, source)
@@ -184,6 +175,8 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
     if hasSystems or hasUserEvents:
       if hasSystems:
         ofStmts.add addToSystems
+      if hasUserEvents:
+        ofStmts.add userCompAddCode
       ofBranch.add ofStmts
       compCase.add ofBranch
 
