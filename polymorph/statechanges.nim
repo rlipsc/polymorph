@@ -25,7 +25,7 @@ proc findType(compNode: NimNode): string =
       compNode[0].strVal
   of nnkSym:
     let tyImpl = compNode.getTypeInst()
-    $tyImpl
+    tyImpl.repr
   of nnkCall:
     let caller = compNode[0].getImpl()
     caller.expectKind nnkProcDef
