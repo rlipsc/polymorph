@@ -843,6 +843,10 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
     if info.onRemoveCallback.len > 0:
       result.add info.onRemoveCallback
 
+  # Make a note of which components have been sealed.
+  for compId in ecsComponentsToBeSealed:
+    ecsSealedComponents.add compId, true
+
   # Reset state for next ECS.
   ecsComponentsToBeSealed.setLen 0
   ecsSystemsToBeSealed.setLen 0

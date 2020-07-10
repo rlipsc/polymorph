@@ -269,6 +269,8 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
 
   for item in componentTypes:
     let id = typeStringToId($item)
+    doAssert id notin ecsSealedComponents,
+      "Component " & typeInfo[id.int].typeName & " has already been sealed with makeEcs and cannot be extended to system " & sysName
     typeIdents.add item
     passedComponentIds.add id
 

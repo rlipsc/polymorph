@@ -12,6 +12,9 @@ import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
 var
   # Current range of component id's that have yet to be sealed.
   ecsComponentsToBeSealed* {.compileTime.}: seq[ComponentTypeId]
+  # Currently sealed components: it's an error to try to create systems with these
+  # as their component state operations have already been generated.
+  ecsSealedComponents* {.compileTime.}: Table[ComponentTypeId, bool]
   # Current range of systems that have yet to be processed by `makeEcs`.
   ecsSystemsToBeSealed* {.compileTime.}: seq[SystemIndex]
   # Current range of systems that need their procs committed.
