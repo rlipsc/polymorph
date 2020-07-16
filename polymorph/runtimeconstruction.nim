@@ -207,7 +207,8 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
     callback = ident "callback"
     constructCase = buildConstructionCaseStmt(res, entOpts, false)
     cloneCase = buildConstructionCaseStmt(res, entOpts, true)
-    entCompCount = componentRefsLen(entity, entOpts)
+    entId = quote do: `entity`.entityId
+    entCompCount = componentRefsLen(entId, entOpts)
 
     # Assumes components are added in ascending order.
     lowCompId = ecsComponentsToBeSealed[0].int
@@ -311,10 +312,11 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       ## reference.
       ## No other structure is assumed, and the meaning of 'master' is defined by the user.
       ## Components are constructed in order, calling manual construction code per type,
-      ## then a second parse calls post construction calls with reference to the completed component list.
-      ## This second parse tests for and triggers post construction hooks, which are fed the fully
-      ## constructed entity and it's existing component, along with the rest of the constructed entities
-      ## in this template. This allows fetching components to read initialised values.
+      ## then a second pass calls post construction procs with reference to the completed component
+      ## lists.
+      ## Post construction procs are fed the fully constructed entity and it's existing component,
+      ## along with the rest of the constructed entities in this template.
+      ## This allows fetching components to read/modify initialised values.
 
       if `construction`.len > 0:
         result.setLen(`construction`.len)
@@ -329,22 +331,26 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
         # You can add/remove components within callbacks here.
         var `iterVar`: int
         while `iterVar` < `res`.len:
-          let ent = `res`[`iterVar`]
-          for compRef in entityData(ent.entityId).componentRefs:
-            let tId = compRef.typeId
-            let pc = postConstruct[tId.int]
+          let `entity` = `res`[`iterVar`]
+          var compIdx: int
+          while compIdx < `entCompCount`:
+            let
+              compRef = entityData(`entity`.entityId).componentRefs[compIdx]
+              tId = compRef.typeId
+              pc = postConstruct[tId.int]
             if pc != nil:
               # Callback passes this entity and the fully constructed result array.
-              pc(ent, compRef, `res`)
+              pc(`entity`, compRef, `res`)
+            compIdx += 1
+              
           `iterVar` += 1
 
     proc toTemplate*(`entity`: EntityRef): seq[Component] =
       ## Creates a list of components ready to be used for construction.
       assert `entity`.alive
-      let `entity` = `entity`.entityId
       let length = `entCompCount`
       `res` = newSeq[Component](length)
-      for i, compRef in `entity`.componentPairs:
+      for i, compRef in `entity`.entityId.componentPairs:
         caseComponent(compRef.typeId):
           `res`[i] = componentInstanceType()(compRef.index).makeContainer()
 
