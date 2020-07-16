@@ -423,7 +423,7 @@ iterator commaSeparate*[T: ComponentTypeId or SystemIndex](list: seq[T] or set[T
   for v in list:
     let str =
       when T is ComponentTypeId: typeInfo.typeName v
-      else: systemNames[v.int]
+      else: systemInfo[v.int].systemName
     if comma: yield ", " & str
     else:
       comma = true
