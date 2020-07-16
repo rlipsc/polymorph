@@ -1,4 +1,6 @@
 import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
+import debugging
+export debugging
 
 #[
   This module covers shared internal utilities.

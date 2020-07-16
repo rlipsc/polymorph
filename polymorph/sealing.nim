@@ -831,11 +831,10 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result.add sealEntities(entOpts)
   result.add sealRuntimeTools(entOpts)
   result.add sealComps(entOpts)
-  when defined(debugSystemPerformance):
-    echo "Sealing complete."
+  debugPerformance "Sealing complete."
+
   result.add makeRuntimeConstruction(entOpts)
-  when defined(debugSystemPerformance):
-    echo "Construction tools complete."
+  debugPerformance "Construction tools complete."
 
   for info in typeInfo:
     if info.onAddCallback.len > 0:
@@ -857,11 +856,9 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   # cleared, we can assume there will be no clashing upon further
   # events when registerComponents is invoked again.
   echo "ECS Built."
-  when defined(debugSystemPerformance):
-    echo "Adding output of generated code log..."
+  debugPerformance "Adding output of generated code log..."
   result.add doWriteLog()
-  when defined(debugSystemPerformance):
-    echo "Logged generated code."
+  debugPerformance "Logged generated code."
 
 template makeEcs*(maxEnts: static[int] = defaultMaxEntities): untyped =
   const entOpts = ECSEntityOptions(maxEntities: maxEnts)
@@ -888,8 +885,7 @@ proc genRunProc(name: string): NimNode =
 macro commitSystems*(procName: static[string]): untyped =
   ## Output system do proc definitions at the call site.
   result = newStmtList()
-  when defined(debugSystemPerformance):
-    echo "Committing systems..."
+  debugPerformance "Committing systems..."
   for sys in ecsSysUncommitted:
     if systemInfo[sys.int].definition != nil:
       result.add systemInfo[sys.int].definition
@@ -918,7 +914,6 @@ macro commitSystems*(procName: static[string]): untyped =
     echo "Warning: Systems are defined that do not have bodies: ", outputStr
 
   genLog "# Commit systems:\n" & procName, result.repr
-  when defined(debugSystemPerformance):
-    echo "Systems committed."
+  debugPerformance "Systems committed."
 
   result.add doWriteLog()

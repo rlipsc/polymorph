@@ -92,7 +92,7 @@ macro onInterceptUpdate*(typeToUse: typedesc, actions: untyped): untyped =
   ## The data being added can be accessed in `curComponent`, and is of
   ## the native type, not the instance type.
   ## Each invocation will append to the code that will be inserted.
-  ## Note: When this is hooked, the user must call update if they don't
+  ## Note: When this is hooked, the user must call `commit` if they don't
   ## want the update parameters to be ignored.
   let typeIndex = typeStringToId($typeToUse).int
   doAssert typeIndex != 0, "Cannot find type " & $typeToUse & " in registered components "
@@ -759,9 +759,7 @@ proc doAddComponents(entOpts: ECSEntityOptions, entity: NimNode, componentList: 
     block:
       `inner`
 
-  when defined(debugSystemPerformance):
-    echo "AddComponents for ", componentInfo.passed.commaSeparate,
-      " complete."
+  debugPerformance "AddComponents for " & componentInfo.passed.commaSeparate & " complete."
 
   genLog "\n# macro addComponents(" & componentInfo.passed.commaSeparate & "):\n", result.repr
 

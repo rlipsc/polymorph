@@ -656,7 +656,18 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
             `idx` = `idx` + 1
       static:
         if defined(debugSystemPerformance):
-          const prefix = "Info: System " & `name`
+          const prefix = "System " & `name`
+          if readsFrom.len > 0:
+            debugPerformance prefix & ": Reads from: " & readsFrom.commaSeparate
+          if writesTo.len > 0:
+            debugPerformance prefix & ": Writes to: " & readsFrom.commaSeparate
+          if systemCalledDelete:
+            debugPerformance prefix & " uses an arbitrary delete, length must be checked each iteration"
+          elif sysRemoveAffectedThisSystem:
+            debugPerformance "Info: System " & `name` & " calls a remove that affects this system, length must be checked each iteration"
+          elif systemCalledDeleteEntity:
+            debugPerformance "Info: System " & `name` & " calls deleteEntity, length must be checked each iteration"
+          #[const prefix = "Info: System " & `name`
           if readsFrom.len > 0:
             echo prefix, ": Reads from: ", readsFrom.commaSeparate
           if writesTo.len > 0:
@@ -666,7 +677,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
           elif sysRemoveAffectedThisSystem:
             echo "Info: System " & `name` & " calls a remove that affects this system, length must be checked each iteration"
           elif systemCalledDeleteEntity:
-            echo "Info: System " & `name` & " calls deleteEntity, length must be checked each iteration"
+            echo "Info: System " & `name` & " calls deleteEntity, length must be checked each iteration"]#
         inSystem = false
         inSystemAll = false
         sysRemoveAffectedThisSystem = false
