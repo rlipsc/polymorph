@@ -44,6 +44,7 @@ proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentType
         disabled*: bool           ## Doesn't run doProc if true, no work is done.
         paused*: bool             ## Pauses this system's entity processing, but still runs init & finish. 
         initialised*: bool        ## Automatically set to true after an `init` body is called.
+        deleteList*: seq[EntityRef] ## Anything added to this list is deleted after the `finish` block. This avoids affecting the main loop when iterating.
   )
 
   var
@@ -57,6 +58,7 @@ proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentType
   fields.add genField("requirements", false, genArray(reqCount, ident "ComponentTypeId"))
 
   # Append groups field to system's type, depending on options.
+
   case options.storageFormat
   of ssSeq:
     fields.add genField("groups", true, genSeq(tupleTypeIdent))
@@ -626,6 +628,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
       var `sysLen` = `sys`.count()
       if `sysLen` > 0:
         var `idx`: int
+
         while `idx` < `sysLen`:
           ## The entity this row started execution with.
           let `rowEnt` {.used.} = `sys`.groups[`idx`].entity
@@ -810,6 +813,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         `systemComment`
         `echoRun`
         if `runCheck`:
+          `sys`.deleteList.setLen 0
           `echoInit`
           `initWrapper`
           `startBody`
@@ -819,6 +823,8 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
             `streamWrapper`
           `echoFinish`
           `finishBody`
+          for ent in `sys`.deleteList:
+            ent.delete
         `echoCompleted`
       template `doSystem`*: untyped =
         `doSystem`(`sysId`)
