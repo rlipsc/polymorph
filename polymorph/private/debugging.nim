@@ -1,4 +1,4 @@
-import os, strformat
+import os
 
 proc debugMsg*(prefix, msg: string) =
   ## Report the string `s` along with the line number and proc it was invoked outside of Polymorph.
