@@ -1228,7 +1228,7 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
   var
     includeEntityTmpl: bool
     processedSystems: set[int16]
-    userCodeExists: bool
+    userCodeExists, userVisitedRequired: bool
 
   for compId in ecsComponentsToBeSealed:
     let
@@ -1288,6 +1288,7 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
         )
 
         if userSysRemove.len > 0:
+          userVisitedRequired = true
           userBody.add(
             quote do:
               if not `visitedIdent`[`sysIdx`]:
@@ -1361,11 +1362,13 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
       else: newEmptyNode()
     userCode =
       if userCodeExists:
-        quote do:
-          block:
-            `visitedArray`
-            for `compRefIdent` in `entIdIdent`.components:
-              `caseStmtUserCode`
+        var userOnRemove = newStmtList()
+        if userVisitedRequired: userOnRemove.add(visitedArray)
+        userOnRemove.add(quote do:
+          for `compRefIdent` in `entIdIdent`.components:
+            `caseStmtUserCode`
+        )
+        newBlockStmt(userOnRemove)
       else: newStmtList()
 
   result = quote do:
