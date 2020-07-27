@@ -448,11 +448,19 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     let
       existingSysIdx = sysIdxSearch.index
       types = systemInfo[existingSysIdx].requirements
-    if componentTypes.len > 0 and types.len > 0:
+    
+    if componentTypes.len > 0:
+      # Check the components given to makeSystem match defineSystem.
+      template errMsg =
+        error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: [" & types.commaSeparate & "]"
+      
+      if componentTypes.len != types.len:
+        errMsg()
+
       for i, givenType in componentTypes:
         # Types must be given in the same order.
-        if i >= types.len or typeStringToId($givenType) != types[i]:
-          error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: [" & types.commaSeparate & "]"
+        if typeStringToId($givenType) != types[i]:
+          errMsg()
 
     if ecsSysBodiesAdded.hasKey(sysIdxSearch.index.SystemIndex):
       error "System \"" & name & "\" already has a body defined"
