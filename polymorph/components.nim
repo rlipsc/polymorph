@@ -376,6 +376,17 @@ proc genTypeAccess*(): NimNode =
       res = ident "result"
       invalidField = newLit typeNameStr & " doesn't have a field `"
       invalidFieldPostfix = "`"
+      perfRead =
+        when defined(debugSystemPerformance): quote do:
+          static:
+            readsFrom.add `typeId`.ComponentTypeId
+        else: newStmtList()
+      perfWrite =
+        when defined(debugSystemPerformance): quote do:
+          static:
+            writesTo.add `typeId`.ComponentTypeId
+        else: newStmtList()
+
     template typeFields: untyped = typeInfo[typeId.int].fields
 
     # Add a proc to return a new component index.
@@ -442,18 +453,17 @@ proc genTypeAccess*(): NimNode =
         let
           dotOp = nnkAccQuoted.newTree(newIdentNode ".")
           dotEqOp = nnkAccQuoted.newTree(newIdentNode ".=")
+
         typeAccess.add(quote do:
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
-              static:
-                readsFrom.add `typeId`.ComponentTypeId
+              `perfRead`
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`
             else:
               {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
-              static:
-                writesTo.add `typeId`.ComponentTypeId
+              `perfWrite`
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam` = `valueParam`
             else:
               {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
@@ -535,18 +545,17 @@ proc genTypeAccess*(): NimNode =
         let
           dotOp = nnkAccQuoted.newTree(newIdentNode ".")
           dotEqOp = nnkAccQuoted.newTree(newIdentNode ".=")
+
         typeAccess.add(quote do:
           template `dotOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
-              static:
-                readsFrom.add `typeId`.ComponentTypeId
+              `perfRead`
               `lcTypeIdent`[`inst`.int].`fieldParam`
             else:
               {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
-              static:
-                writesTo.add `typeId`.ComponentTypeId
+              `perfWrite`
               `lcTypeIdent`[`inst`.int].`fieldParam` = `valueParam`
             else:
               {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
