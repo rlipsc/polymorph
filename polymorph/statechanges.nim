@@ -448,7 +448,7 @@ proc genComponents*(entity: NimNode, compInfo: ComponentParamInfo): NimNode =
           `userCode`
       )
     if hasUserCallback:
-      let cbProcName = ident addCallbackName(typeStr)
+      let cbProcName = ident addCallbackName(info.typeName)
       userEventDecls.add(quote do:
         `cbProcName`(`entity`, `instVar`)
       )
