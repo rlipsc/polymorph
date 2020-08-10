@@ -619,7 +619,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     sysLen = ident "sysLen"
     gi = ident "gi"
     # if `entity` != `item.entity` then this row has been removed.
-    rowEnt = ident "rowEntity"
+    rowEnt = ident "entity"
     allCore = quote do:
 
       static:
