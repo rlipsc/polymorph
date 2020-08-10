@@ -788,11 +788,12 @@ proc makeAddComponents*(entOpts: ECSEntityOptions): NimNode =
         # Add as normal.
         entity.addComponent component
     
-    proc addIfMissing*[T: ComponentTypeclass](entity: EntityRef, component: T) =
+    proc addIfMissing*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
       ## This procedure allows you to add a component only if it isn't already present.
-      ## If the component is already present, no changes are made.
+      ## If the component is already present, no changes are made and an invalid result is returned.
+      ## If the component isn't present, it will be added and the instance is returned.
       if not entity.hasComponent T.type:
-        entity.addComponent component
+        result = entity.addComponent component
 
 proc removeComponentRef(entityId, index: NimNode, componentTypeId: int, options: ECSEntityOptions): NimNode = 
   # Removes a component from entity storage.
