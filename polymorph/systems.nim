@@ -513,20 +513,29 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     let
       verb = $item[0]
       code = item[1]
+      tcn = ident typeClassName()
+
+    let clearSystemTemplate = quote do:
+      template removeComponents(ty: typedesc[`tcn`]) {.used.} =
+        ## Remove the component `ty` from all entities in this system.
+        for i in countDown(`sys`.count - 1, 0):
+          `sys`.groups[i].entity.removeComponent ty
 
     case verb.toLowerAscii
     of initStr:
       item[1].expectKind nnkStmtList
-      initBody.add(quote do: `code`)
+      initBody.add(code)
     of startStr:
       item[1].expectKind nnkStmtList
-      startBody.add(quote do: `code`)
+      startBody.add(code)
     of allStr:
       item[1].expectKind nnkStmtList
       allBody = code
     of finishStr:
+      if finishBody.len == 0:
+        finishBody.add clearSystemTemplate
       item[1].expectKind nnkStmtList
-      finishBody.add(quote do: `code`)
+      finishBody.add(code)
     of addedStr:
       systemInfo[sysIndex].onAdded.add code
     of removedStr:
