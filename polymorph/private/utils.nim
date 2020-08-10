@@ -281,16 +281,6 @@ proc updateIndex*(entity: NimNode, sys: SystemIndex, row: NimNode, sysOpts: ECSS
     entId = quote do: `entity`.entityId
   result = systemNode.indexWrite(entId, row, sysOpts)
 
-proc addSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptions): NimNode =
-  # Extend system groups depending on options.
-  case sysOpts.storageFormat
-    of ssSeq:
-      quote do:
-        `systemNode`.groups.add(`value`)
-    of ssArray:
-      quote do:
-        `systemNode`.groups[`systemNode`.nextFreeIdx] = `value`
-        `systemNode`.nextFreeIdx += 1
 
 proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
   ## Adds any user code for `onSystemAddTo` and `onSystemAdd`.
@@ -329,10 +319,9 @@ proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, t
   if addedCode.len > 0:
     currentNode.add addedCode
 
-# State list updates
-
 
 proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
+  ## Update state variables outside of entity and system storage.
   let
     typeStr = typeInfo.typeName typeId
     aliveIdent = ident aliveStateInstanceName(typeStr)
@@ -351,6 +340,16 @@ proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, ro
       `aliveIdent`[`row`] = true
       `instanceIdent`[`row`] += 1.IdBaseType
 
+proc addToSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptions): NimNode =
+  # Extend system groups depending on options.
+  case sysOpts.storageFormat
+    of ssSeq:
+      quote do:
+        `systemNode`.groups.add(`value`)
+    of ssArray:
+      quote do:
+        `systemNode`.groups[`systemNode`.nextFreeIdx] = `value`
+        `systemNode`.nextFreeIdx += 1
 
 proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): NimNode =
   ## Assumes you have a generated variable that matches each field in the system tuple already defined.
@@ -361,7 +360,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
   # Generate system tuple assignment.
   var
     sysTuple = nnkPar.newTree()
-    updateOwnedAlive = newStmtList()
+    updateOwnedState = newStmtList()
     userSysAddCode = newStmtList()
 
   sysTuple.add nnkExprColonExpr.newTree(ident "entity", entity)
@@ -380,7 +379,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
 
       let sysHigh = quote: `sysVar`.count
-      updateOwnedAlive.add fields.id.updateOwnedComponentState(sys, sysHigh)
+      updateOwnedState.add fields.id.updateOwnedComponentState(sys, sysHigh)
 
     else:
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, compSource)
@@ -389,7 +388,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
     userSysAddCode.addUserSysCode(entity, sys, fields.id, compSource)
 
   # Add the tuple of components to the system groups list.
-  let updateGroup = sysVar.addSystemTuple(sysTuple, sysOpts)
+  let updateGroup = sysVar.addToSystemTuple(sysTuple, sysOpts)
 
   let
     entIdIdent = quote do: `entity`.entityId
@@ -408,7 +407,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
     )
 
   quote do:
-    `updateOwnedAlive`
+    `updateOwnedState`
     `updateGroup`
     `updateIndex`
     `userSysAddCode`

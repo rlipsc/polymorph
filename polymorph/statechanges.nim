@@ -719,7 +719,7 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
       template curEntity: EntityRef {.used.} = `entity`
     )
     result.add tupleSetup
-    result.add addSystemTuple(systemNode, sysTupleVar, sysOpts)
+    result.add addToSystemTuple(systemNode, sysTupleVar, sysOpts)
     result.add assignCompRefs
     result.add updateIndex
     result.add stateUpdates

@@ -143,7 +143,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
       let
         sysOpts = systemInfo[sys.int].options
         updateIndex = entity.updateIndex(sys, newRow, sysOpts)
-        addToSystem = addSystemTuple(systemNode, sysTupleVar, sysOpts)
+        addToSystem = addToSystemTuple(systemNode, sysTupleVar, sysOpts)
         curEntTmpl =
           if userSysAddCode.len > 0:
             quote do:
