@@ -604,7 +604,6 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
   case options.echoRunning:
   of seNone: discard
   of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
-    # Always announce that a system is running and finished.
     if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
       echoRun = quote do:
         echo `name` & " running..."
@@ -724,17 +723,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
             debugPerformance "Info: System " & `name` & " calls a remove that affects this system, length must be checked each iteration"
           elif systemCalledDeleteEntity:
             debugPerformance "Info: System " & `name` & " calls deleteEntity, length must be checked each iteration"
-          #[const prefix = "Info: System " & `name`
-          if readsFrom.len > 0:
-            echo prefix, ": Reads from: ", readsFrom.commaSeparate
-          if writesTo.len > 0:
-            echo prefix, ": Writes to: ", readsFrom.commaSeparate
-          if systemCalledDelete:
-            echo prefix & " uses an arbitrary delete, length must be checked each iteration"
-          elif sysRemoveAffectedThisSystem:
-            echo "Info: System " & `name` & " calls a remove that affects this system, length must be checked each iteration"
-          elif systemCalledDeleteEntity:
-            echo "Info: System " & `name` & " calls deleteEntity, length must be checked each iteration"]#
+
         inSystem = false
         inSystemAll = false
         sysRemoveAffectedThisSystem = false
