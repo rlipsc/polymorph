@@ -62,7 +62,9 @@ const
   storageName* = "componentStorage"
   invalidComponentStr* = "<Invalid Component>"
 
-type TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
+type
+  TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
+  SystemBlockKind* = enum sbkInit, sbkStart, sbkAll, sbkStream, sbkFinish, sbkAdded, sbkRemoved
 
 # Systems
 var
@@ -356,6 +358,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
   let
     sysOpts = systemInfo[sys.int].options
     sysVar = systemInfo[sys.int].instantiation
+    sysName = systemInfo[sys.int].systemName
 
   # Generate system tuple assignment.
   var
@@ -398,11 +401,18 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
   # Invoke code defined in the system's `added:` section.
   var userAddedEvent = newStmtList()
   if systemInfo[sys.int].onAdded.len > 0:
-    let userAddedEventCode = systemInfo[sys.int].onAdded
+    let
+      doEcho =
+        if sysOpts.echoRunning != seNone:
+          quote do:
+            echo `sysName` & " adding entry"
+        else: newEmptyNode()
+      userAddedEventCode = systemInfo[sys.int].onAdded
     userAddedEvent.add(quote do:
       block:
         template item: untyped {.used.} = `sysVar`.groups[`row`]
         template sys: untyped {.used.} = `sysVar`
+        `doEcho`
         `userAddedEventCode`
     )
 

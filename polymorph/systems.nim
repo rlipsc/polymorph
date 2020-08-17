@@ -585,15 +585,52 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         streamBody = code
     else: error(&"makeSystem: Unknown verb \"{verb}\", expected {verbChoices}")
 
-  if initBody.len == 0 and
-    systemInfo[sysIndex].onAdded.len == 0 and
-    systemInfo[sysIndex].onRemoved.len == 0 and
-    startBody.len == 0 and
-    startBody.len == 0 and
-    allBody.len == 0 and
-    streamBody.len == 0 and
-    finishBody.len == 0:
-      error("Systems must do something within " & verbChoices)
+  var activeBlocks: set[SystemBlockKind]
+
+  if initBody.len > 0: activeBlocks.incl sbkInit
+  if startBody.len > 0: activeBlocks.incl sbkStart
+  if allBody.len > 0: activeBlocks.incl sbkAll
+  if streamBody.len > 0: activeBlocks.incl sbkStream
+  if finishBody.len > 0: activeBlocks.incl sbkFinish
+  if systemInfo[sysIndex].onAdded.len > 0: activeBlocks.incl sbkAdded
+  if systemInfo[sysIndex].onRemoved.len > 0: activeBlocks.incl sbkRemoved
+
+  if activeBlocks == {}:
+    error("Systems must do something within " & verbChoices)
+
+  # Set up debug echo statements.
+
+  var echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
+  case options.echoRunning:
+  of seNone: discard
+  of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
+    # Always announce that a system is running and finished.
+    if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
+      echoRun = quote do:
+        echo `name` & " running..."
+    if sbkInit in activeBlocks:
+      echoInit = quote do:
+        echo `name` & " initialising"
+    if sbkAll in activeBlocks:
+      echoAll = quote do:
+        echo `name` & " run all"
+    if sbkFinish in activeBlocks:
+      echoFinish = quote do:
+        echo `name` & " run finish"
+    if options.echoRunning == seEchoUsedAndRunningAndFinished:
+      echoCompleted = quote do:
+        echo `name` & " completed"
+  of seEchoAll:
+    echoRun = quote do:
+      echo `name` & " running..."
+    echoInit = quote do:
+      echo `name` & " initialising"
+    echoAll = quote do:
+      echo `name` & " run all"
+    echoFinish = quote do:
+      echo `name` & " run finish"
+    echoCompleted = quote do:
+      echo `name` & " completed"
 
   proc timeWrapper(core: NimNode): NimNode =
     ## Wraps `core` with timing code if `timings` is true, otherwise passes through `core` unchanged.
@@ -805,23 +842,11 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
       if initBody.len > 0:
         quote do:
           if unlikely(not `sys`.initialised):
+            `echoInit`
             `initBody`
             `sys`.initialised = true
       else:
         initBody
-
-  var  echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
-  if options.echoRunning:
-    echoRun = quote do:
-      echo `name` & " running..."
-    echoInit = quote do:
-      echo `name` & " initialising"
-    echoAll = quote do:
-      echo `name` & " run all"
-    echoFinish = quote do:
-      echo `name` & " run finish"
-    echoCompleted = quote do:
-      echo `name` & " completed"
 
   let
     # Assemble the final proc.
@@ -831,7 +856,6 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         `echoRun`
         if `runCheck`:
           `sys`.deleteList.setLen 0
-          `echoInit`
           `initWrapper`
           `startBody`
           if not `sys`.paused:

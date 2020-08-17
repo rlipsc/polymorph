@@ -70,6 +70,7 @@ type
   ECSSysStorage* = enum ssSeq, ssArray
   ECSSysIndexFormat* = enum sifTable, sifArray, sifAllocatedSeq
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
+  ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
   ECSSysOptions* = object
     ## Maximum entities this system can hold.
     maxEntities*: int
@@ -82,9 +83,8 @@ type
     timings*: ECSSysTimings
     ## Declare systems as {.threadVar.}
     useThreadVar*: bool
-    ## Debugging use: When true, echos a message for each stage (init/all/finish/completed) when a system runs.
-    ## Useful for debugging blocking systems.
-    echoRunning*: bool
+    ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
+    echoRunning*: ECSSysEcho
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowError

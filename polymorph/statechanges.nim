@@ -884,6 +884,8 @@ proc removeSysReference(systemIndex: int, sys, sysRowExists, rowIdent, entIdIden
     updatedEntId = newDotExpr(updatedRowEntIdent, ident "entityId")
     # updates index with entity id to group row.
     setIndex = sys.indexWrite(updatedEntId, rowIdent, sysOpts)
+    sysInfo = systemInfo[systemIndex.int]
+    sysName = sysInfo.systemName
   
   # TODO: If this system contains an owned component, don't swap the row on deletion.
 
@@ -915,12 +917,20 @@ proc removeSysReference(systemIndex: int, sys, sysRowExists, rowIdent, entIdIden
 
   # Get code defined in the system's `removed:` section.
   var userRemovedEvent = newStmtList()
-  if systemInfo[systemIndex].onRemoved.len > 0:
-    let userRemovedEventCode = systemInfo[systemIndex.int].onRemoved
+  if sysInfo.onRemoved.len > 0:
+    let
+      doEcho =
+        if sysOpts.echoRunning != seNone:
+          quote do:
+            echo `sysName` & " removing entry"
+        else: newEmptyNode()
+
+      userRemovedEventCode = sysInfo.onRemoved
     userRemovedEvent.add(quote do:
       block:
         template item: untyped {.used.} = `sys`.groups[`rowIdent`]
         template sys: untyped {.used.} = `sys`
+        `doEcho`
         `userRemovedEventCode`
     )
 
