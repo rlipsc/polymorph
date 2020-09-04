@@ -2,8 +2,7 @@
 import macros, private/[ecsstateinfo, utils], sharedtypes, tables
 from strutils import toLowerAscii
 
-  
-proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloning: bool): NimNode =
+proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloning: bool): tuple[core, userDecls, userCode: NimNode] =
   ## Build a case statement to handle updating systems linked to any component
   ## found in the input list.
   let
@@ -13,6 +12,8 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
 
   var
     compCase = nnkCaseStmt.newTree()
+    userCode = newStmtList()
+    userCodeBoolDecls: Table[SystemIndex, NimNode]
 
     # Fetch array of component id by list of system indexes.
     systemsByCompId = compSystems()
@@ -29,8 +30,8 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
       addToSystems = newStmtList()
       ofBranch = nnkOfBranch.newTree()
       ofStmts = newStmtList()
-      userSysAddCode = newStmtList()
-      userCompAddCode = newStmtList()
+      
+      userAddComponent = newStmtList()
 
     ofBranch.add newLit typeId.int
 
@@ -44,25 +45,19 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
     # User callback.
     if ofCompInfo.onAddCallback.len > 0:
       # Check for this type's initialiser.
-      let
-        cbProcName = ident addCallbackName(ofCompInfo.typeName)
-      userCompAddCode.add(quote do:
+      let cbProcName = ident addCallbackName(ofCompInfo.typeName)
+      userAddComponent.add(quote do:
         `cbProcName`(`entity`, `ofInstType`(`source`))
       )
 
     # Component add user code.
     let userAddToEnt = ofCompInfo.onAddToEntCode
     if userAddToEnt.len > 0:
-      userCompAddCode.add(quote do:
+      userAddComponent.add(quote do:
         block:
           ## Current component being added to entity. 
           template curComponent: untyped {.used.} = `ofInstType`(`source`)
           `userAddToEnt`
-      )
-
-    #if userCompAddCode.len > 0:
-    ofStmts.add(quote do:
-      template curEntity: EntityRef {.used.} = `entity`
       )
 
     for sys in linkedSystems:
@@ -74,11 +69,15 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
         sysTupleVar = ident tupleName(systemStr).toLowerAscii
         systemNode = sysInfo.instantiation
         newRow = ident "newRow"
+        # This is recorded in the match block and used for user events.
+        sysUserCodeIdx = ident "run" & systemStr & "UserCodeIdx"
+
       var
         matchList = newSeqOfCap[NimNode](requiredCompsLen)
         sysFields = newStmtList()
         stateUpdates = newStmtList()
         assertions = newStmtList()
+        userSysAddCode = newStmtList()
 
       if requiredCompsLen > 0:
         # Generate code to check the system is satisfied,
@@ -113,8 +112,15 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
             else:
               quote do: `types`[`compId`]
 
-          # Add user events.
-          userSysAddCode.addUserSysCode(entity, sys, comp, source)
+          # Handle system's `added` block.
+          #let
+            #[curComp =
+              if cloning: quote do: `instType`(`source`)
+              else: quote do: `instType`(`source`[1])]#
+          
+          # TODO: Check cloning works with this
+          userSysAddCode.addUserSysCode(entity, sys, comp, quote do:
+            `systemNode`.groups[`sysUserCodeIdx`].`typeField`)
 
           # Assignment of the tuple field for this component.
           if not cloning:
@@ -144,44 +150,69 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
         sysOpts = systemInfo[sys.int].options
         updateIndex = entity.updateIndex(sys, newRow, sysOpts)
         addToSystem = addToSystemTuple(systemNode, sysTupleVar, sysOpts)
-        curEntTmpl =
-          if userSysAddCode.len > 0:
-            quote do:
-              template curEntity: EntityRef {.used.} = `entity`
-          else:
-            newEmptyNode()
+        hasUserAddToSysCode = userSysAddCode.len > 0
+        hasUserAddedBlock = systemInfo[sys.int].onAdded.len > 0
+        hasUserSystemCode = hasUserAddToSysCode or hasUserAddedBlock
+
+        setUserCodeIdx =
+          if hasUserSystemCode: quote do:
+            `sysUserCodeIdx` = `newRow`
+          else: newStmtList()
+        
         matchCode = quote do:
           if not `visited`[`sys`.int]:
-            `curEntTmpl`
             `visited`[`sys`.int] = true
             `assertions`
             var `sysTupleVar`: `sysTupleType`
             `sysTupleVar`.entity = `entity`
             `sysFields`
-            `userSysAddCode`
             `addToSystem`
             let `newRow` = `systemNode`.high
             `updateIndex`
             `stateUpdates`
+            `setUserCodeIdx`
+
+      if hasUserSystemCode and sys notin userCodeBoolDecls:
+        # Both events for adding to systems and the `added:` block within a system are invoked
+        # in their own block, after state construction.
+        userCodeBoolDecls.add sys, newIdentDefs(sysUserCodeIdx, ident "int", newLit -1)
+
+        let addedEvent = sys.sysInvokeAdded(sysUserCodeIdx)
+
+        userCode.add(quote do:
+          if `sysUserCodeIdx` >= 0:
+            `addedEvent`
+            `userSysAddCode`
+        )
       
       if matchList.len > 0:
+        # Wrap matchCode with if statement so we only add when the system is satisfied.
         let sysMatchClause = genInfixes(matchList, "and")
         addToSystems.add(newIfStmt( (sysMatchClause, matchCode) ))
+        
       else:
+        # No conditions, always add to this system.
         addToSystems.add matchCode
+    
     let
       hasSystems = addToSystems.len > 0
-      hasUserEvents = userCompAddCode.len > 0
-    if hasSystems or hasUserEvents:
+      hasUserComponentEvents = userAddComponent.len > 0
+
+    if hasSystems or hasUserComponentEvents:
       if hasSystems:
         ofStmts.add addToSystems
-      if hasUserEvents:
-        ofStmts.add userCompAddCode
+      if hasUserComponentEvents:
+        ofStmts.add userAddComponent
       ofBranch.add ofStmts
       compCase.add ofBranch
 
   compCase.add nnkElse.newTree(newStmtList(quote do: discard))
-  compCase
+
+  var decls = nnkVarSection.newTree()
+  for node in userCodeBoolDecls.values:
+    decls.add node
+
+  (compCase, decls, userCode)
 
 proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
   ## Builds procedures for creating entities from component lists
@@ -205,14 +236,26 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
     entity = ident "entity"
     typeId = ident "typeId"
     callback = ident "callback"
-    constructCase = buildConstructionCaseStmt(res, entOpts, false)
-    cloneCase = buildConstructionCaseStmt(res, entOpts, true)
+
+    constructCaseInfo = buildConstructionCaseStmt(res, entOpts, false)
+    userConstructEvents = constructCaseInfo.userCode
+    userDecls = constructCaseInfo.userDecls
+    constructCase = constructCaseInfo.core
+
+    cloneCaseInfo = buildConstructionCaseStmt(res, entOpts, true)
+    cloneCase = cloneCaseInfo.core
+    userCloneEvents = cloneCaseInfo.userCode
+    userCloneDecls = constructCaseInfo.userDecls
+
     entId = quote do: `entity`.entityId
     entCompCount = componentRefsLen(entId, entOpts)
 
     # Assumes components are added in ascending order.
     lowCompId = ecsComponentsToBeSealed[0].int
     highCompId = ecsComponentsToBeSealed[^1].int
+    curEntTempl = 
+      quote do:
+        template curEntity: EntityRef {.used.} = `res`
 
   result = quote do:
     var
@@ -251,6 +294,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       var
         `types`: Table[int, tuple[`component`: Component, `compIdx`: ComponentIndex]]
         `visited`: array[`maxSys`, bool]
+      `curEntTempl`
 
       for compRef in `cList`:
         assert compRef.typeId != InvalidComponent, "Cannot construct: invalid component type id: " & $compRef.typeId.int
@@ -300,8 +344,10 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
             `types`.add(compRef.typeId.int, (compRef, `reference`.index))
 
       # Update systems.
+      `userDecls`
       for `compIndexInfo` in `types`.pairs:
         `constructCase`
+      `userConstructEvents`
 
     proc construct*(`construction`: ConstructionTemplate): seq[EntityRef] =
       ## Constructs multiple entities and returns their entity ids.
@@ -367,6 +413,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       var
         `types`: Table[int, ComponentIndex]
         `visited`: array[`maxSys`, bool]
+      `curEntTempl`
 
       for compRef in `entity`.components:
         assert compRef.typeId != InvalidComponent, "Cannot construct: invalid component type id: " & $compRef.typeId.int
@@ -408,7 +455,9 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
             `types`.add(compRef.typeId.int, `reference`.index)
             
       # Update systems.
+      `userCloneDecls`
       for `compIndexInfo` in `types`.pairs:
         `cloneCase`
+      `userCloneEvents`
 
   genLog "# Run-time construction tools:\n", result.repr

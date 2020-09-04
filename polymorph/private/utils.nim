@@ -294,6 +294,7 @@ proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, t
   if systemInfo[sys.int].onAddToCode.len > 0:
     # Check if matches a specific system and component type.
     let userAddToSys = systemInfo[sys.int].onAddToCode.getOrDefault(typeId)
+    
     if userAddToSys != nil:
       addedCode.add(quote do:
         block:
@@ -353,6 +354,29 @@ proc addToSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptio
         `systemNode`.groups[`systemNode`.nextFreeIdx] = `value`
         `systemNode`.nextFreeIdx += 1
 
+proc sysInvokeAdded*(sys: SystemIndex, row: NimNode): NimNode =
+  ## Invoke code defined in the system's `added:` section.
+  let
+    echoRunning = systemInfo[sys.int].options.echoRunning
+    sysName = systemInfo[sys.int].systemName
+    sysVar = systemInfo[sys.int].instantiation
+  result = newStmtList()
+  if systemInfo[sys.int].onAdded.len > 0:
+    let
+      doEcho =
+        if echoRunning != seNone:
+          quote do:
+            echo `sysName` & " adding entry"
+        else: newEmptyNode()
+      userAddedEventCode = systemInfo[sys.int].onAdded
+    result.add(quote do:
+      block:
+        template item: untyped {.used.} = `sysVar`.groups[`row`]
+        template sys: untyped {.used.} = `sysVar`
+        `doEcho`
+        `userAddedEventCode`
+    )
+
 proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): NimNode =
   ## Assumes you have a generated variable that matches each field in the system tuple already defined.
   let
@@ -397,24 +421,7 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
     entIdIdent = quote do: `entity`.entityId
     row = quote do: `sysVar`.high
     updateIndex = sysVar.indexWrite(entIdIdent, row, sysOpts)
-
-  # Invoke code defined in the system's `added:` section.
-  var userAddedEvent = newStmtList()
-  if systemInfo[sys.int].onAdded.len > 0:
-    let
-      doEcho =
-        if sysOpts.echoRunning != seNone:
-          quote do:
-            echo `sysName` & " adding entry"
-        else: newEmptyNode()
-      userAddedEventCode = systemInfo[sys.int].onAdded
-    userAddedEvent.add(quote do:
-      block:
-        template item: untyped {.used.} = `sysVar`.groups[`row`]
-        template sys: untyped {.used.} = `sysVar`
-        `doEcho`
-        `userAddedEventCode`
-    )
+    userAddedEvent = sys.sysInvokeAdded(row)
 
   quote do:
     `updateOwnedState`

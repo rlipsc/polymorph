@@ -815,6 +815,23 @@ proc sealRuntimeTools(entOpts: ECSEntityOptions): NimNode =
   result.add makeListSystem()
   result.add makeRuntimeDebugOutput()
 
+proc invalidSystemAdds: (bool, string) =
+  for item in systemInfo:
+    for compId in item.onAddToCode.keys:
+      if compId notin item.requirements:
+        let
+          compStr = typeInfo[compId.int].typeName
+          sysStr = item.systemName
+          compList = item.requirements.commaSeparate
+        return (true, "Trying to set a user event for component \"" & compStr & "\" being added to system \"" & sysStr & "\", but this system does not use the component. \"" & sysStr & "\" uses [" & compList & "]")
+    for compId in item.onRemoveFromCode.keys:
+      if compId notin item.requirements:
+        let
+          compStr = typeInfo[compId.int].typeName
+          sysStr = item.systemName
+          compList = item.requirements.commaSeparate
+        return (true, "Trying to set a user event for component \"" & compStr & "\" being removed from system \"" & sysStr & "\", but this system does not use the component. \"" & sysStr & "\" uses [" & compList & "]")
+
 macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   ## Seal all components, create access functions that allow adding/removing/deleting components,
   ## and instantiate entity storage.
@@ -831,6 +848,9 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result.add sealEntities(entOpts)
   result.add sealRuntimeTools(entOpts)
   result.add sealComps(entOpts)
+  let invalidEvents = invalidSystemAdds()
+  if invalidEvents[0]:
+    error invalidEvents[1]
   debugPerformance "Sealing complete."
 
   result.add makeRuntimeConstruction(entOpts)
