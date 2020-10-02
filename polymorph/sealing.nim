@@ -417,7 +417,7 @@ proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
       tId.caseComponent:
         `res` = `compName`() & " (id: " & $int(tId) & ", index: " & $componentRef.index.int & ", generation: " & $componentRef.generation.int & ")"
         if showData:
-          `res` &= ": "
+          `res` &= ":\n"
           try:
             `res` &= componentInstanceType()(componentRef.index.int).access.repr
           except:
@@ -579,7 +579,7 @@ proc makeListSystem: NimNode =
         if `hasKey`:
           `res` &= sysName & `sysNameBracketed` & " \n"
         else:
-          `res` &= sysName & `sysNameBracketed` & " Sync issue: entity contains components but entity is missing from this system's index)\n"
+          `res` &= sysName & `sysNameBracketed` & " Sync issue: entity contains components but entity is missing from this system's index\n"
       )
 
   result = quote do:
