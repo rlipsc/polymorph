@@ -765,7 +765,8 @@ proc genTypeAccess*(): NimNode =
         ## Utility function that takes this type's distinct `ComponentIndex`,
         ## returned for example from fetchComponent, and creates a reference
         ## tuple for the live component currently at this index.
-        (inst.typeId, inst.ComponentIndex, inst.generation)
+        let i = inst  # Prevents duplicate instantiation of `inst`.
+        (i.typeId, i.ComponentIndex, i.generation)
 
       proc `strOp`*(val: `instanceTypeIdent`): string =
         if val.valid:
