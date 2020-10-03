@@ -217,16 +217,16 @@ const
   FIRST_ENTITY_ID* = (NO_ENTITY.int + 1).EntityId
   FIRST_COMPONENT_ID* = (InvalidComponentIndex.int + 1).ComponentIndex
 
-proc `==`*(s1, s2: SystemIndex): bool {.inline.} = s1.int == s2.int
+func `==`*(s1, s2: SystemIndex): bool {.inline.} = s1.int == s2.int
 
-proc `==`*(c1, c2: ComponentTypeId): bool = c1.int == c2.int
+func `==`*(c1, c2: ComponentTypeId): bool = c1.int == c2.int
 
 ## Entities start at 1 so a zero EntityId is invalid or not found
+func `==`*(e1, e2: EntityId): bool {.inline.} = e1.IdBaseType == e2.IdBaseType
+func `==`*(e1, e2: EntityRef): bool {.inline.} =
+  e1.entityId.IdBaseType == e2.entityId.IdBaseType and e1.instance.IdBaseType == e2.instance.IdBaseType
 template valid*(entityId: EntityId): bool = entityId != NO_ENTITY
 template valid*(entity: EntityRef): bool = entity != NO_ENTITY_REF
-proc `==`*(e1, e2: EntityId): bool {.inline.} = e1.IdBaseType == e2.IdBaseType
-proc `==`*(e1, e2: EntityRef): bool {.inline.} =
-  e1.entityId.IdBaseType == e2.entityId.IdBaseType and e1.instance.IdBaseType == e2.instance.IdBaseType
 
 type
   ## Constructor called on first create.
