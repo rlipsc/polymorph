@@ -37,7 +37,7 @@ proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentType
   result.add(quote do:
     type
       `sysIdent`* = object
-        lastIndex: int            ## Records the last item position processed for streaming.
+        lastIndex*: int            ## Records the last item position processed for streaming.
         streamRate*: Natural      ## Rate at which this system streams items by default, overridden if defined using `stream x:`.
         # TODO: Currently writable, use sys.name to get a generated constant by system type.
         systemName*: string       ## Name is automatically set up at code construction in defineSystem
@@ -769,13 +769,16 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         inSystemIndex = `sysIndex`.SystemIndex
         sysRemoveAffectedThisSystem = false
 
-      var sysLen = `sys`.count()
+      var
+        sysLen = `sys`.count()
+        `idx`: int
+
       if sysLen > 0:
         let `firstItem` = `sys`.lastIndex
         var processed: int
         while processed < `streamAmount`:
           ## The entity this row started execution with.
-          let `rowEnt` {.used.} = `sys`.groups[`idx`].entity
+          let `rowEnt` {.used.} = `sys`.groups[`sys`.lastIndex].entity
           ## Read only index into `groups`.
           template groupIndex: auto {.used.} =
             let r = `sys`.lastIndex
