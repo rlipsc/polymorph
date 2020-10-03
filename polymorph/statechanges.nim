@@ -902,6 +902,7 @@ proc removeSysReference(systemIndex: int, sys, sysRowExists, rowIdent, entIdIden
             # Update the index for the moved row
             `setIndex`
 
+          assert `sys`.groups.len > 0, " System " & `sys`.name & " has empty group but is scheduled to delete from row " & $`rowIdent` & ". Top row is " & $`topIdxIdent`
           `sys`.groups.setLen(`sys`.groups.len - 1)
       of ssArray:
         quote do:
