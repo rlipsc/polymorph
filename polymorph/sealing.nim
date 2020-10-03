@@ -918,14 +918,20 @@ macro commitSystems*(procName: static[string]): untyped =
   # Reset call tree for this batch.
   runAllDoProcsNode = newStmtList()
   
-  # Reset uncommitted list.
-  ecsSysUncommitted.setLen 0
-
   # Check for defined but not committed systems.
   var noBodies: seq[string]
   for system in ecsSysDefined.keys:
     if system notin ecsSysBodiesAdded:
       noBodies.add systemInfo[system.int].systemName
+    else:
+      # Remove system from uncommitted list.
+      var found = -1
+      for i, s in ecsSysUncommitted:
+        if s.int == system.int:
+          found = i
+          break
+      if found > -1:
+        ecsSysUncommitted.del found
   
   if noBodies.len > 0:
     var outputStr = noBodies[0]
