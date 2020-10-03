@@ -289,8 +289,8 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
             entityData(`entityId`).componentRefs.clear
 
   let
-    # Get error response code
     maxEntLen = maxEntLen(options)
+
     maxLenCheck =
       case options.entityStorageFormat
       of esArray, esPtrArray:
@@ -302,9 +302,9 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
           quote do:
             if `entStorage`.nextEntityId.IdBaseType >= `maxEntLen`:
               raise newException(EntityOverflow, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1))
-      else:
+      of esSeq:
         newStmtList()
-    # Get code for reading length
+
     updateEntStorage =
       case options.entityStorageFormat
       of esSeq:
