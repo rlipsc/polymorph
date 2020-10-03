@@ -289,27 +289,32 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
             entityData(`entityId`).componentRefs.clear
 
   let
+    # Get error response code
+    maxEntLen = maxEntLen(options)
+    maxLenCheck =
+      case options.entityStorageFormat
+      of esArray, esPtrArray:
+        case options.errors.entityOverflow:
+        of erAssert:
+          quote do:
+            assert `entStorage`.nextEntityId.IdBaseType < `maxEntLen`, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1)
+        of erRaise:
+          quote do:
+            if `entStorage`.nextEntityId.IdBaseType >= `maxEntLen`:
+              raise newException(EntityOverflow, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1))
+      else:
+        newStmtList()
     # Get code for reading length
-    (maxLenCheck, updateEntStorage) =
+    updateEntStorage =
       case options.entityStorageFormat
       of esSeq:
-        let extendSeq = quote do:
+        quote do:
           `entStorage`.entityComponents.setLen `entStorage`.nextEntityId.int + 1
           `entStorage`.nextEntityId = `entStorage`.entityComponents.len.EntityId
-        (newEmptyNode(), extendSeq)
 
       of esArray, esPtrArray:
-        let
-          maxEntLen = maxEntLen(options)
-          lenCheck = quote do:
-            # nextEntityId is recycled to zero when delete detects entityCounter == 0.
-            if `entStorage`.nextEntityId.IdBaseType >= `maxEntLen`:
-              writeStackTrace()
-              raise newException(EntityOverflow, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1))
-          setNextId = quote do:
-            `entStorage`.nextEntityId = (`entStorage`.nextEntityId.IdBaseType + 1).EntityId
-
-        (lenCheck, setNextId)
+        quote do:
+          `entStorage`.nextEntityId = (`entStorage`.nextEntityId.IdBaseType + 1).EntityId
 
     recyclerData = entStorage.recyclerHasData(options)
     recyclerGet = entStorage.recyclerGet(options)
@@ -604,7 +609,7 @@ proc doStartLog: NimNode =
 proc doWriteLog: NimNode =
   quote do: flushGenLog(`defaultGenLogFilename`)
 
-proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
+proc makeCaseComponent(options: ECSEntityOptions, componentsToInclude: seq[ComponentTypeId]): NimNode =
   ## Generate caseComponent for the current component set.
   let
     actions = ident "actions"
@@ -669,9 +674,18 @@ proc makeCaseComponent(componentsToInclude: seq[ComponentTypeId]): NimNode =
       `actions`
     )
     caseStmt.add ofNode
-  let elseCode = quote do:
-    raise newException(ValueError, "Invalid component type id: " & $(`id`.toInt))
+
+  let elseCode =
+    case options.errors.caseComponent
+    of erAssert:
+      quote do:
+        assert false, "Invalid component type id: " & $(`id`.toInt)
+        discard
+    of erRaise:
+      quote do:
+        raise newException(ValueError, "Invalid component type id: " & $(`id`.toInt))
   caseStmt.add(nnkElse.newTree(elseCode))
+
   result = newStmtList()
   result.add(quote do:
     template caseComponent*(`id`: ComponentTypeId, `actions`: untyped): untyped =
@@ -777,8 +791,10 @@ proc makeCompRefAlive: NimNode =
       ## Check if this component ref's index is still valid and active.
       ## Requires use of run-time case statement to match against type id.
       let index = compRef.index.int
+      var r: bool
       caseComponent compRef.typeId:
-        componentAlive()[index] and compRef.generation.int == componentGenerations()[index]
+        r = componentAlive()[index] and compRef.generation.int == componentGenerations()[index]
+      r
 
 proc sealComps(entOpts: ECSEntityOptions): NimNode =
   assert ecsComponentsToBeSealed.len > 0, "No components defined"
@@ -804,7 +820,7 @@ proc sealEntities(entOpts: ECSEntityOptions): NimNode =
   result.add genTypeAccess()
   result.add makeEntities(entOpts)
   result.add makeCompRefAlive()
-  result.add makeCaseComponent(ecsComponentsToBeSealed)
+  result.add makeCaseComponent(entOpts, ecsComponentsToBeSealed)
   result.add makeFetchComponent(entOpts)
   result.add makeDelete(entOpts)
   result.add makeNewEntityWith(entOpts)

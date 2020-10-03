@@ -6,9 +6,18 @@
 # ECS generation options and types.
 type
   ECSCompStorage* = enum csSeq, csArray, csTable
-  ECSCompDuplicates* = enum cdAssertRaise, cdRaise
+  ECSErrorResponse* = enum erAssert, erRaise
   ECSEntityItemStorage* = enum esSeq, esArray, esPtrArray
   ECSRecyclerFormat* = enum rfSeq, rfArray
+  ECSErrorResponses* = object
+    ## Note that with cdRaise, the component list is searched for duplicates each
+    ## time a component is added, even with release/danger.
+    duplicates*: ECSErrorResponse # TODO
+    entityOverflow*: ECSErrorResponse
+    caseComponent*: ECSErrorResponse
+    caseSystem*: ECSErrorResponse
+    incompleteOwned*: ECSErrorResponse
+
   ECSEntityOptions* = object
     ## Controls the maximum amount of entities to be instantiated at any one time.
     ## This is ignored for dynamically sized storage such as seq and Table.
@@ -38,9 +47,8 @@ type
     # TODO: Add ability to mark components as priority for inserting them at the
     # start of an entity's list rather than the end.
     useSet*: bool
-    ## Note that with cdRaise, the component list is searched for duplicates each
-    ## time a component is added, even with release/danger.
-    duplicates*: ECSCompDuplicates
+    errors*: ECSErrorResponses
+
 
   # Component storage options
   ECSAccessMethod* = enum amDotOp, amFieldTemplates

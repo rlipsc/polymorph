@@ -537,23 +537,31 @@ proc buildFetch(entity: NimNode, compInfo: ComponentParamInfo, entOpts: ECSEntit
     result.add compDecl
     result.add fetch
 
-proc checkRequired(compInfo: ComponentParamInfo): NimNode =
+proc checkRequired(options: ECSEntityOptions, compInfo: ComponentParamInfo): NimNode =
   ## Check fetched components that satisfy owned component systems are valid.
   result = newStmtList()
   if compInfo.requiredFetches.len > 0:
     var checkSystem: seq[NimNode]
+
     for typeId in compInfo.requiredFetches:
       let
         typeStr = typeInfo[typeId.int].typeName
         typeField = ident typeStr.toLower & instPostfix
-      checkSystem.add(quote do: `typeField`.alive)
+      checkSystem.add newDotExpr(typeField, ident "alive")
+
     let
       matchesSystem = genInfixes(checkSystem, "and")
       unsatisfiedErrStr =
         newLit "Cannot complete this add operation because systems that own the parameter components are not fully satisfied, missing: " & compInfo.requiredFetches.commaSeparate
-    result.add(quote do:
-      if not(`matchesSystem`): raise newException(ValueError, `unsatisfiedErrStr`)
-    )
+      errorResponse =
+        case options.errors.incompleteOwned
+        of erAssert:
+          quote do:
+            assert `matchesSystem`, `unsatisfiedErrStr`
+        of erRaise:
+          quote do:
+            if not(`matchesSystem`): raise newException(ValueError, `unsatisfiedErrStr`)
+    result.add errorResponse
 
 proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNode =
   ## Add components to systems that have no owned components.
@@ -740,7 +748,7 @@ proc doAddComponents(entOpts: ECSEntityOptions, entity: NimNode, componentList: 
 
   inner.add genComponents(entity, componentInfo)
   inner.add buildFetch(entity, componentInfo, entOpts)
-  inner.add checkRequired(componentInfo)
+  inner.add checkRequired(entOpts, componentInfo)
   inner.add addOwned(entity, componentInfo)
   inner.add addToEntityList(entity, componentInfo.passed, entOpts)
   inner.add addConditionalSystems(entity, componentInfo)
