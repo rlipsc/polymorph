@@ -865,7 +865,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
   inSystem = false
 
   # Store a call to the do proc. Not linked to system number.
-  runAllDoProcsNode.add(quote do: `doSystem`())
+  runAllDoProcsNode.add(newCall(doSystem))
 
   # Store the body of the do proc.
   # The procs themselves are only accessible after commitSystem is called.
