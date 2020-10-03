@@ -418,6 +418,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
       for compRef in `entity`.components:
         assert compRef.typeId != InvalidComponent, "Cannot construct: invalid component type id: " & $compRef.typeId.int
         assert not `types`.hasKey(compRef.typeId.int), "Cannot construct: Entity has duplicate components for " & $compRef.typeId
+
         var `reference`: ComponentRef
 
         # Index and unowned component generation.
@@ -439,7 +440,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
               assert not `types`.hasKey(comp.typeId.int), "Cannot construct: Entity has duplicate components for " & $comp.typeId
               caseComponent comp.typeId:
                 when owningSystemIndex == InvalidSystemIndex:
-                  `reference` = newInstance(componentRefType()(comp).value).toRef            
+                  `reference` = newInstance(componentRefType()(comp).value).toRef
                 else:
                   # This reference isn't valid until we add the tuple in the second pass.
                   `reference` = compRef
@@ -447,7 +448,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
                 `types`.add(comp.typeId.int, `reference`.index)
           else:
             when owningSystemIndex == InvalidSystemIndex:
-              `reference` = newInstance(componentInstanceType()(compRef.index).access).toRef            
+              `reference` = newInstance(componentInstanceType()(compRef.index).access).toRef
             else:
               # This reference isn't valid until we add the tuple in the second pass.
               `reference` = compRef

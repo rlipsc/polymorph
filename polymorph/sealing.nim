@@ -366,9 +366,10 @@ template getComponentUpdatePerformance: seq[ComponentUpdatePerfTuple] =
   r
 
 macro componentUpdatePerformance*: untyped =
-  ## Generates a static sequence of components and the number of systems they update,
-  ## ordered by increasing system accesses. This can effectively display the cost
-  ## of performing `addComponent` or `removeComponent` and thus also `delete`.
+  ## Generates a static sequence of components by the number of systems they update,
+  ## ordered by increasing system accesses.
+  ## 
+  ## This can act as a guide of the cost of performing `addComponent`, `removeComponent` and `newEntityWith`.
   var items = getComponentUpdatePerformance()
 
   var bracket = nnkBracket.newTree
@@ -377,7 +378,7 @@ macro componentUpdatePerformance*: untyped =
   result = newStmtList(nnkPrefix.newTree(ident "@", bracket))
 
 proc makeEntities(entOpts: ECSEntityOptions): NimNode =
-  ## Create entity state.
+  # Create entity state.
   var r = newStmtList()
   if entOpts.entityStorageFormat != esSeq and entOpts.maxEntities <= 0:
     error "Cannot generate entities with a max count of zero as the entity storage format is non-resizable"
@@ -392,7 +393,7 @@ proc makeEntities(entOpts: ECSEntityOptions): NimNode =
 # Runtime systems
 
 proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
-  ## These tools need to use `addComponent` generated in `commitSystems`.
+  # These tools need to use `addComponent` generated in `commitSystems`.
   let
     res = ident "result"
     compCount = newIntLitNode ecsComponentsToBeSealed.len
@@ -760,6 +761,7 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
       ## the instantiated variable for the seventh system.
       ## This allows you to write generic code that dynamically applies to any system
       ## chosen at runtime.
+      ## Use the `sys` template to access to the system variable the index represents.
       `body`
 
     template forAllSystems*(`actions`: untyped): untyped =
@@ -833,8 +835,15 @@ proc invalidSystemAdds: (bool, string) =
         return (true, "Trying to set a user event for component \"" & compStr & "\" being removed from system \"" & sysStr & "\", but this system does not use the component. \"" & sysStr & "\" uses [" & compList & "]")
 
 macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
-  ## Seal all components, create access functions that allow adding/removing/deleting components,
-  ## and instantiate entity storage.
+  ## This macro seals and fully defines the ECS state.
+  ## 
+  ## Once completed you can:
+  ## 
+  ## * Create new entities,
+  ## * Add/remove components from entities,
+  ## * System variables are initialised and will be updated when components are added or removed.
+  ## 
+  ## To create the system execution procedures, use `commitSystems`.
   echo "Building ECS..."
   result = newStmtList()
   result.add doStartLog()
@@ -875,6 +884,8 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   # Since the events are tied to type id, and component type ids are not
   # cleared, we can assume there will be no clashing upon further
   # events when registerComponents is invoked again.
+  # This allows multiple fully defined ECS states for each scope makeEcs
+  # is invoked.
   echo "ECS Built."
   debugPerformance "Adding output of generated code log..."
   result.add doWriteLog()
@@ -903,7 +914,13 @@ proc genRunProc(name: string): NimNode =
   genLog "# Run proc \"" & $name & "\", " & $runAllDoProcsNode.len & " systems defined:\n", result.repr
 
 macro commitSystems*(procName: static[string]): untyped =
-  ## Output system do proc definitions at the call site.
+  ## The macro will output the system execution procedures, and should be run after `makeEcs`.
+  ## 
+  ## Each procedure is defined as the system's name prefixed with "do", eg; a system "foo" generates `doFoo()`.
+  ## 
+  ## These procedures perform all the actions within `makeSystem`, and can be considered as "polling" or "ticking" the ECS state for this system.
+  ## 
+  ## If `procName` is given, a wrapper proc is generated that includes all the procedures since the last `commitSystems` was invoked.
   result = newStmtList()
   debugPerformance "Committing systems..."
   for sys in ecsSysUncommitted:
