@@ -1,5 +1,6 @@
 import macros, strutils, strformat, components, typetraits, sequtils, times, sharedtypes,
   private/[ecsstateinfo, utils], tables
+import random
 
 template newEntityTemplate*: ComponentList = @[]
 proc initComponents*: ComponentList = @[]
@@ -489,9 +490,11 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
   systemBody.expectKind nnkStmtList
 
+  type Command = enum cmNone, cmMultiPass, cmStochastic
   var
+    command: Command
     streamAmount = newEmptyNode()
-    multipass: bool
+
   const
     initStr =     "init"
     startStr =    "start"
@@ -500,12 +503,14 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     finishStr =   "finish"
     addedStr =    "added"
     removedStr =  "removed"
-    # commands
-    multipassStr = "multipass"
     verbChoices = initStr & ", " & startStr & ", " & allStr & ", " & streamStr & ", " & addedStr & ", " & removedStr & ", or " & finishStr
+    commandStrs = [
+      cmMultiPass: "multipass",
+      cmStochastic: "stochastic"
+      ]
 
+  # Step through top level nodes and extract verbs and commands.
   for item in systemBody:
-    # Here we expect `body: <statements>`
     if item.kind notin [nnkCall, nnkCommand]: continue
 
     doAssert item[0].kind in [nnkIdent, nnkSym],
@@ -541,42 +546,58 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     of removedStr:
       systemInfo[sysIndex].onRemoved.add code
     of streamStr:
+
+      # Stream commands:
+      #   stream multipass <optional count>: <code block>
+      #     - forces a minimum of `count` rows to be processed even if repeated.
+      #     - omitting count uses system.streamRate.
+      #   stream stochastic <optional count>: <code block>
+      #     - selects rows to process at random.
+      #     - omitting count uses system.streamRate.
+
       case code.kind
       of nnkIntLit:
         # Provided a stream amount `stream 10:` or `stream expression:`.
         item.expectLen 3
 
+        streamAmount = item[1]
         item[2].expectKind nnkStmtList
         streamBody = item[2]
 
-      # `stream multipass <count>:` forces a minimum of `count` rows to be processed,
-      # even if it means repeating rows, as long as there is one or more rows in the
-      # system.
-      # You can also use `stream multipass:`, which will use the system's `streamRate`
-      # field.
-      #
       of nnkCommand:
-        # Extra command/parameter eg `stream multipass variable:`.
-        # Currently only one command that accepts a parameter for stream.
+        # Stream is followed by a command and parameter, eg `stream stochastic 10:`.
         item[1].expectLen 2
         item[1][0].expectKind nnkIdent
 
-        assert item[1][0].strVal.toLowerAscii == multipassStr, "Only multipass can take an extra parameter"
-        multipass = true
+        let userCommand = item[1][0].strVal.toLowerAscii
+
+        case userCommand
+        of commandStrs[cmMultipass]:
+          command = cmMultiPass
+        of commandStrs[cmStochastic]:
+          command = cmStochastic
+        else:
+          error "Unknown command for streaming: \"" & userCommand & "\""
 
         streamAmount = item[1][1]
 
         item[2].expectKind nnkStmtList
         streamBody = item[2]
+
       of nnkIdent:
-        if item[1].strVal.toLowerAscii == multipassStr:
-          # Trap `stream multipass:`.
-          #
-          # Since we're not providing a value or other ident, the system.streamRate will be used.
-          multipass = true
+        # Stream is followed by an ident which could be a command or parameter.
+        let userCommand = item[1].strVal.toLowerAscii
+
+        # When a command is provided here the system.streamRate will be used.
+        case userCommand
+        of commandStrs[cmMultipass]:
+          command = cmMultiPass
+        of commandStrs[cmStochastic]:
+          command = cmStochastic
         else:
           # Allow `stream myVar:`
           streamAmount = item[1]
+
         item[2].expectKind nnkStmtList
         streamBody = item[2]
       else:
@@ -659,7 +680,6 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
   ##
 
   let
-    # All-items body.
     idx = genSym(nskVar, "i")
     sysLen = ident "sysLen"
     gi = ident "gi"
@@ -745,18 +765,37 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
   # Use default stream rate if not provided.
   if streamAmount.kind == nnkEmpty: streamAmount = quote do: `sys`.streamRate
   let
-    firstItem = ident "firstItem"
-    # Multi-pass forces `streamAmount` process events even if it means repeating items.
-    passProcess = 
-      if multipass:
-        newEmptyNode()
-      else:
+    processed = genSym(nskVar, "processed")
+    finished = genSym(nskVar, "finished")
+    randomValue = bindSym "rand"
+
+    processNext =
+      case command
+      of cmNone:
         quote do:
-          if `sys`.lastIndex == `firstItem`: break
+          `sys`.lastIndex = `sys`.lastIndex + 1
+          `finished` = (`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`)
+      of cmMultiPass:
+        quote do:
+          `sys`.lastIndex = (`sys`.lastIndex + 1) mod `sysLen`
+          `finished` = `processed` >= `streamAmount`
+      of cmStochastic:
+        quote do:
+          `sys`.lastIndex = `randomValue`(`sys`.high)
+          `finished` = `processed` >= `streamAmount`
+    initFirstRun =
+      case command
+      of cmNone, cmMultiPass:
+        quote do:
+          if `sys`.lastIndex >= `sysLen` - 1: `sys`.lastIndex = 0
+      of cmStochastic:
+        quote do:
+          if not `finished`:
+            `sys`.lastIndex = `randomValue`(`sys`.high)
 
   let
     # Streaming body.
-
+    rowIdent = ident "curRow"
     streamCore = quote do:
       # loop per entity in system
 
@@ -770,38 +809,37 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
         sysRemoveAffectedThisSystem = false
 
       var
-        sysLen = `sys`.count()
+        `sysLen` = `sys`.count()
         `idx`: int
+        `processed`: int
+        `finished` = `sysLen` == 0
+      `initFirstRun`
+      while `finished` == false:
+        ## The entity this row started execution with.
+        let
+          `rowIdent` = `sys`.lastIndex
+        assert `rowIdent` in 0 ..< `sys`.groups.len, "?? got " & $`rowIdent` & " max " & $`sys`.groups.len & " fi " & $`finished` &
+          " " & $(`processed` >= `streamAmount`) & " " & $(`sys`.lastIndex >= `sysLen`) & " " & $`sysLen` & " " & $((`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`))
+        let
+          `rowEnt` {.used.} = `sys`.groups[`rowIdent`].entity
+        ## Read only index into `groups`.
+        template groupIndex: auto {.used.} =
+          let r = `rowIdent`
+          r
+        ## Current system item being processed.
+        template item: `typeIdent` {.used.} = `sys`.groups[`rowIdent`]
+        template deleteEntity: untyped {.used.} =
+          ## Convenience shortcut for deleting just this row's entity.
+          `rowEnt`.delete
+        
+        # Inject stream statements.
+        `streamBody`
+        
+        `processed` = `processed` + 1
+        `sysLen` = `sys`.count()
 
-      if sysLen > 0:
-        let `firstItem` = `sys`.lastIndex
-        var processed: int
-        while processed < `streamAmount`:
-          ## The entity this row started execution with.
-          let `rowEnt` {.used.} = `sys`.groups[`sys`.lastIndex].entity
-          ## Read only index into `groups`.
-          template groupIndex: auto {.used.} =
-            let r = `sys`.lastIndex
-            r
-          ## Current system item being processed.
-          template item: `typeIdent` = `sys`.groups[`sys`.lastIndex]
-          ## Use `reprocessRow` when manually deleting the current row's entity if you want to guarantee no skipped items.
-          template reprocessRow: untyped {.used.} =
-            `sys`.lastIndex = max(0, `sys`.lastIndex - 1)
-          template deleteEntity: untyped {.used.} =
-            ## Convenience shortcut for deleting just this row's entity.
-            `rowEnt`.delete
-          
-          # Inject stream statements.
-          `streamBody`
-          
-          processed = processed + 1
-          `sys`.lastIndex = `sys`.lastIndex + 1
-          sysLen = `sys`.count()
-          # Wrap
-          if `sys`.lastIndex >= sysLen: `sys`.lastIndex = 0
-          # Limit processing to one pass if not multipassing.
-          `passProcess`
+        # processing based on commands.
+        `processNext`
       
       static:
         inSystem = true
