@@ -175,7 +175,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
       if hasUserSystemCode and sys notin userCodeBoolDecls:
         # Both events for adding to systems and the `added:` block within a system are invoked
         # in their own block, after state construction.
-        userCodeBoolDecls.add sys, newIdentDefs(sysUserCodeIdx, ident "int", newLit -1)
+        userCodeBoolDecls[sys] = newIdentDefs(sysUserCodeIdx, ident "int", newLit -1)
 
         let addedEvent = sys.sysInvokeAdded(sysUserCodeIdx)
 
@@ -329,7 +329,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
                     1.ComponentGeneration
                   )
                 `addToEnt`
-                `types`.add(comp.typeId.int, (comp, `reference`.index))
+                `types`[comp.typeId.int] = (comp, `reference`.index)
           else:
             when owningSystemIndex == InvalidSystemIndex:
               `reference` = newInstance(componentRefType()(compRef).value).toRef            
@@ -341,7 +341,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
                 1.ComponentGeneration
               )
             `addToEnt`
-            `types`.add(compRef.typeId.int, (compRef, `reference`.index))
+            `types`[compRef.typeId.int] = (compRef, `reference`.index)
 
       # Update systems.
       `userDecls`
@@ -445,7 +445,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
                   # This reference isn't valid until we add the tuple in the second pass.
                   `reference` = compRef
                 `addToEnt`
-                `types`.add(comp.typeId.int, `reference`.index)
+                `types`[comp.typeId.int] = `reference`.index
           else:
             when owningSystemIndex == InvalidSystemIndex:
               `reference` = newInstance(componentInstanceType()(compRef.index).access).toRef
@@ -453,7 +453,7 @@ proc makeRuntimeConstruction*(entOpts: ECSEntityOptions): NimNode =
               # This reference isn't valid until we add the tuple in the second pass.
               `reference` = compRef
             `addToEnt`
-            `types`.add(compRef.typeId.int, `reference`.index)
+            `types`[compRef.typeId.int] = `reference`.index
             
       # Update systems.
       `userCloneDecls`

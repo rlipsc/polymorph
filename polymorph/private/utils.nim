@@ -382,7 +382,6 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
   let
     sysOpts = systemInfo[sys.int].options
     sysVar = systemInfo[sys.int].instantiation
-    sysName = systemInfo[sys.int].systemName
 
   # Generate system tuple assignment.
   var

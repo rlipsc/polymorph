@@ -53,7 +53,11 @@ let totalEnts = 10
 for i in 0 ..< totalEnts:
   discard newEntityWith(StreamA(), StreamB())
 
-suite "Streaming":
-  test "All":
-    for i in 0..1:
-      run()
+proc testStreaming* =
+  suite "Streaming":
+    test "All":
+      for i in 0..1:
+        run()
+
+when isMainModule:
+  testStreaming()

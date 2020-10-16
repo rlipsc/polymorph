@@ -601,7 +601,7 @@ proc makeListSystem: NimNode =
 
 proc doStartLog: NimNode =
   if not logInitialised.hasKey(defaultGenLogFilename):
-    logInitialised.add defaultGenLogFilename, true
+    logInitialised[defaultGenLogFilename] = true
     quote do: startGenLog(`defaultGenLogFilename`)
   else:
     newStmtList()
@@ -889,7 +889,7 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
 
   # Make a note of which components have been sealed.
   for compId in ecsComponentsToBeSealed:
-    ecsSealedComponents.add compId, true
+    ecsSealedComponents[compId] = true
 
   # Reset state for next ECS.
   ecsComponentsToBeSealed.setLen 0

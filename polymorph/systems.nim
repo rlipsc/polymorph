@@ -388,7 +388,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
 
   ecsSystemsToBeSealed.add sysIndex
   ecsSysUncommitted.add sysIndex
-  ecsSysDefined.add(sysIndex, true)
+  ecsSysDefined[sysIndex] = true
 
   genLog "# SysTuple: ", result.repr
 

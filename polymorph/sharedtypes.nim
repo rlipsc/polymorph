@@ -95,7 +95,7 @@ type
     echoRunning*: ECSSysEcho
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
-  EntityOverflow* = object of OverflowError
+  EntityOverflow* = object of OverflowDefect
   DuplicateComponent* = object of ValueError
 
 const
