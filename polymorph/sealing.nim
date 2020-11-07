@@ -102,9 +102,15 @@ proc makeEntitySupport(entOpts: ECSEntityOptions): NimNode =
         of csTable:
           quote do:
             return entityData(`entIdNode`).componentRefs.hasKey(`componentTypeId`)
-        of csSeq, csArray:
+        of csSeq:
           quote do:
             for c in entityData(`entIdNode`).componentRefs:
+              if c.typeId == `componentTypeId`:
+                return true
+        of csArray:
+          quote do:
+            for i in 0 ..< entityData(`entIdNode`).nextCompIdx:
+              let c = entityData(`entIdNode`).componentRefs[i]
               if c.typeId == `componentTypeId`:
                 return true
   result = newStmtList()
@@ -576,12 +582,11 @@ proc makeListSystem: NimNode =
     innards.add(quote do:
       var inSys = true
       for req in `reqs`:
-        if not (req.ComponentTypeId in `entIdent`):
+        if req.ComponentTypeId notin `entIdent`:
           inSys = false
           break
       if inSys:
-        let
-          sysName: string = `name`
+        let sysName: string = `name`
         if `hasKey`:
           `res` &= sysName & `sysNameBracketed` & " \n"
         else:

@@ -50,15 +50,17 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
         `cbProcName`(`entity`, `ofInstType`(`source`))
       )
 
-    # Component add user code.
-    let userAddToEnt = ofCompInfo.onAddToEntCode
-    if userAddToEnt.len > 0:
-      userAddComponent.add(quote do:
-        block:
-          ## Current component being added to entity. 
-          template curComponent: untyped {.used.} = `ofInstType`(`source`)
-          `userAddToEnt`
-      )
+    if typeInfo[typeId.int].systemOwner == InvalidSystemIndex:
+      # TODO: This needs to be removed to a collected event processing proc.
+      # Component add user code.
+      let userAddToEnt = ofCompInfo.onAddToEntCode
+      if userAddToEnt.len > 0:
+        userAddComponent.add(quote do:
+          block:
+            ## Current component being added to entity. 
+            template curComponent: untyped {.used.} = `ofInstType`(`source`)
+            `userAddToEnt`
+        )
 
     for sys in linkedSystems:
       template sysInfo: untyped = systemInfo[sys.int]
@@ -91,32 +93,27 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
             instType = ident typeStr.instanceTypeName
             refType = ident typeStr.refTypeName
             ownedByThisSystem = compInfo.systemOwner == sys
+            neededByOwnedSystem = typeInfo[typeId.int].systemOwner == sys and comp != typeId
             compId = comp.int
 
+          if neededByOwnedSystem:
+            # It's a run time error to not specify all the owned components.
+            let caseTypeIdStr = typeInfo[typeId.int].typeName
+            assertions.add quote do:
+              assert `types`.hasKey(`comp`),
+                "Cannot construct: Specified owned component \"" & `caseTypeIdStr` &
+                "\" also needs owned component \"" & `typeStr` & "\""
+          
           if comp != typeId:
-            if ownedByThisSystem:
-              # It's a run time error to not specify all the owned components.
-              let caseTypeIdStr = typeInfo[typeId.int].typeName
-              assertions.add quote do:
-                assert `types`.hasKey(`comp`),
-                  "Cannot construct: Specified owned component \"" & `caseTypeIdStr` &
-                  "\" also needs owned component \"" & `typeStr` & "\""
-            else:
-              # if statement clause fragment.
-              matchList.add quote do:
-                `types`.hasKey(`comp`)
+            # Fragment of if statement clause.
+            matchList.add quote do:
+              `types`.hasKey(`comp`)
 
           let source =
             if comp == typeId:
               quote do: `compIndexInfo`[1]
             else:
               quote do: `types`[`compId`]
-
-          # Handle system's `added` block.
-          #let
-            #[curComp =
-              if cloning: quote do: `instType`(`source`)
-              else: quote do: `instType`(`source`[1])]#
           
           # TODO: Check cloning works with this
           userSysAddCode.addUserSysCode(entity, sys, comp, quote do:
@@ -124,23 +121,46 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
 
           # Assignment of the tuple field for this component.
           if not cloning:
+            # Construct.
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
               stateUpdates.add updateOwnedComponentState(comp, sys, newRow)
-              # Assignment source is the parameter ref type.
+              # Fetch any user init for owned types.
+              let
+                typeAccess = quote do:
+                  `refType`(`source`[0]).value
+                (ownedOnAddEvent, ownedUserInitEvent, ownedUpdateEvent) =
+                  sys.ownedUserInitEvents(sysTupleVar, typeAccess, comp, entity, typeAccess)
               sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `refType`(`source`[0]).value)
+                `sysTupleVar`.`typeField` = `typeAccess`)
+              if ownedByThisSystem:
+                sysFields.add(quote do:
+                  `ownedOnAddEvent`
+                  `ownedUserInitEvent`
+                  `ownedUpdateEvent`)
             else:
               # We already have the Instance type stored for unowned components.
               sysFields.add(quote do:
                 `sysTupleVar`.`typeField` = `instType`(`source`[1]))
+          
           else:
+            # Clone.
             if ownedByThisSystem:
               # Owned fields also need their state initialised.
               stateUpdates.add updateOwnedComponentState(comp, sys, newRow)
-              # Assignment source is copied from the owned component.
+              # Fetch any user init for owned types.
+              let
+                typeInst = newCall(instType, source)
+                typeAccess = newDotExpr(typeInst, ident "access")
+                (ownedOnAddEvent, ownedUserInitEvent, ownedUpdateEvent) =
+                  sys.ownedUserInitEvents(sysTupleVar, typeInst, comp, entity, typeAccess)
               sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `instType`(`source`).access)
+                `sysTupleVar`.`typeField` = `typeAccess`)
+              if ownedByThisSystem:
+                sysFields.add(quote do:
+                  `ownedOnAddEvent`
+                  `ownedUserInitEvent`
+                  `ownedUpdateEvent`)
             else:
               # We already have the Instance type stored for unowned components.
               sysFields.add(quote do:
@@ -162,7 +182,6 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
         matchCode = quote do:
           if not `visited`[`sys`.int]:
             `visited`[`sys`.int] = true
-            `assertions`
             var `sysTupleVar`: `sysTupleType`
             `sysTupleVar`.entity = `entity`
             `sysFields`
@@ -184,8 +203,11 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
             `addedEvent`
             `userSysAddCode`
         )
-      
+
+      addToSystems.add assertions
+
       if matchList.len > 0:
+        # TODO: Pare down checks so only one hash per system set.
         # Wrap matchCode with if statement so we only add when the system is satisfied.
         let sysMatchClause = genInfixes(matchList, "and")
         addToSystems.add(newIfStmt( (sysMatchClause, matchCode) ))
@@ -198,6 +220,7 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
       hasSystems = addToSystems.len > 0
       hasUserComponentEvents = userAddComponent.len > 0
 
+    # Only create an of branch for components with events.
     if hasSystems or hasUserComponentEvents:
       if hasSystems:
         ofStmts.add addToSystems

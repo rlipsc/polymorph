@@ -657,41 +657,10 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
 
         let
           value = compParamInfo.values[index]
-          onAddCode =
-            if compInfo.onAddToEntCode.len > 0:
-              let userCode = compInfo.onAddToEntCode
-              quote do:
-                block:
-                  template curComponent: untyped {.used.} = `instField`
-                  template curEntity: untyped {.used.} = `entity`
-                  `userCode`
-            else: newStmtList()
-          
-          userInitCode =
-            if compInfo.onInitCode.len > 0:
-              let code = compInfo.onInitCode
-              quote do:
-                block:
-                  template curEntity: untyped {.used.} = `entity`
-                  template curComponent: untyped {.used.} = `instField`
-                  `code`
-            else:
-              newStmtList()
+          sysTupleVar = ident(sysTupleStr.toLower)
+          instField = ident lcTypeStr & instPostfix
 
-          updateCode =
-            if compInfo.onInterceptValueInitCode.len > 0:
-              # It's now the user's responsibility to call commit.
-              let code = compInfo.onInterceptValueInitCode
-              quote do:
-                block:
-                  template curEntity: untyped {.used.} = `entity`
-                  template curValue: untyped {.used.} = `value`
-                  template commit(value: untyped) {.used.} =
-                    `sysTupleVar`.`typeField` = value
-                  `code`
-            else:
-              quote do:
-                `sysTupleVar`.`typeField` = `value`
+          (onAddCode, userInitCode, updateCode) = sys.ownedUserInitEvents(sysTupleVar, instField, typeId, entity, value)
 
         # Updating state lists is usually done in the component's
         # creation procs for non-owned components.
@@ -974,7 +943,6 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
   for typeId in ecsComponentsToBeSealed:
     let
       typeName = typeInfo[typeId.int].typeName
-      typeInstanceIdent = ident instanceTypeName(typeName)
       tyDelete = ident deleteInstanceName()
 
       compTypedesc = nnkBracketExpr.newTree(ident "typedesc", ident typeName)
@@ -986,7 +954,6 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
     var
       updateSystems = newStmtList()
       userUpdates = newStmtList()
-      visited = newSeq[bool](systemInfo.len)
       findSysCode = newStmtList()
       foundDecl = nnkVarSection.newTree()
       componentsToRemove: set[uint16]
@@ -998,65 +965,53 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
       # is populated.
       numComponentsToRemove = 1
 
-    # Always remove parameter component to removeComponent.
+    # Always remove parameter component.
     componentsToRemove.incl typeId.uint16
     
-    template compInfo: untyped = typeInfo[typeId.int]
+    # Gather components that will be affected.
     for systemIndex in relevantSystems:
-      if not visited[systemIndex.int]:
-        template sysInfo: untyped = systemInfo[systemIndex.int]
-        
-        visited[systemIndex.int] = true
-        
-        # We must remove all references to every relevant system here,
-        # as we're removing a required component for the system to run.
-        let
-          sysOpts = sysInfo.options
-          sysName = sysInfo.systemName
-          sysIdent = ident systemVarName(sysName)
-          foundSys = ident sysName.toLower & "Found"
-          foundSysRow = ident sysName.toLower & "FoundRow"
-          userSysRemove = userRemoveCode(systemIndex.int, sysIdent, foundSysRow, entityIdIdent, entityIdent, sysOpts)
-          sysNode = systemInfo[systemIndex.int].instantiation
-          tryGetIndex = sysNode.indexTryGet(entityIdIdent, rowIdent, sysOpts)
-        
-        foundDecl.add newIdentDefs(foundSys, ident "bool")
-        foundDecl.add newIdentDefs(foundSysRow, ident "int")
-        if typeId.uint16 notin componentsToRemove:
-          numComponentsToRemove += 1
-        componentsToRemove.incl typeId.uint16
+      template sysInfo: untyped = systemInfo[systemIndex.int]
+      
+      # We must remove all references to every relevant system here,
+      # as we're removing a required component for the system to run.
+      let
+        sysOpts = sysInfo.options
+        sysName = sysInfo.systemName
+        sysIdent = ident systemVarName(sysName)
+        foundSys = ident sysName.toLower & "Found"
+        foundSysRow = ident sysName.toLower & "FoundRow"
 
-        findSysCode.add(quote do:
-          if `tryGetIndex`:
-            `foundSys` = true
-            `foundSysRow` = `rowIdent`
-          )
-        updateSystems.add(removeSysReference(systemIndex.int, sysIdent, foundSys, foundSysRow, entityIdIdent, entityIdent, sysOpts))
+      foundDecl.add newIdentDefs(foundSys, ident "bool")
+      foundDecl.add newIdentDefs(foundSysRow, ident "int")
 
-        # When removing a component that's also part of an owned system, we must also remove any owned components
-        # for that system, since we are effectively invalidating the owned component's storage.
-        for ownedComp in systemInfo[systemIndex.int].ownedComponents:
-          if ownedComp != typeId:
-            # Increment search counter to include owned components.
-            if ownedComp.uint16 notin componentsToRemove:
-              numComponentsToRemove += 1
+      # Add a check to see if the entity is in this system.
+      let
+        sysNode = systemInfo[systemIndex.int].instantiation
+        tryGetIndex = sysNode.indexTryGet(entityIdIdent, rowIdent, sysOpts)
+      findSysCode.add(quote do:
+        if `tryGetIndex`:
+          `foundSys` = true
+          `foundSysRow` = `rowIdent`
+        )
+      
+      updateSystems.add(removeSysReference(systemIndex.int, sysIdent, foundSys, foundSysRow, entityIdIdent, entityIdent, sysOpts))
+
+      # When removing a component that's also part of an owned system, we must also remove any owned components
+      # for that system, since we are effectively invalidating the owned component's storage.
+      for ownedComp in systemInfo[systemIndex.int].ownedComponents:
+        if ownedComp != typeId:
+          # Increment search counter to include owned components.
+          if ownedComp.uint16 notin componentsToRemove:
+            numComponentsToRemove += 1
             componentsToRemove.incl ownedComp.uint16
 
-        # Add user remove code.
-        if compInfo.systemOwner == systemIndex and compInfo.onRemoveFromEntCode.len > 0:
-          let compRem = compInfo.onRemoveFromEntCode
-          if compRem != nil:
-            userSysRemove.add(quote do:
-              block:
-                template curComponent: untyped {.used.} = `typeInstanceIdent`(`foundSysRow`)
-                `compRem`
-            )
-
-        if userSysRemove.len > 0:
-          userUpdates.add(quote do:
-            if `foundSys`:
-              `userSysRemove`
-          )
+      # Add event handlers for remove.
+      let userSysRemove = userRemoveCode(systemIndex.int, sysIdent, foundSysRow, entityIdIdent, entityIdent, sysOpts)
+      if userSysRemove.len > 0:
+        userUpdates.add(quote do:
+          if `foundSys`:
+            `userSysRemove`
+        )
 
     var removeRefCore = newStmtList()
     let
@@ -1064,6 +1019,8 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
       delCompCount = newLit numComponentsToRemove
     
     var compIdx = 0
+
+    # Build code to remove the selected components.
     for delComp in componentsToRemove:
       template delCompInfo: untyped = typeInfo[delComp.int]
       let
@@ -1098,13 +1055,15 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
           `removeCompFromEntity`
           `updateOwnedAliveState`
       
-      if entOpts.componentStorageFormat == csTable:
+      case entOpts.componentStorageFormat
+      of csTable:
         removeRefCore.add(quote do:
           `foundComp` = entityData(`entityIdIdent`).componentRefs.getOrDefault(`delComp`.ComponentTypeId)
           if `foundComp`.typeId == `delComp`.ComponentTypeId:
             `coreDelete`
           )
-      else:
+      of csSeq, csArray:
+        # TODO: Replace if statements with case when looping components.
         removeRefCore.add(quote do:
           if `foundComp`.typeId == `delComp`.ComponentTypeId:
             `coreDelete`

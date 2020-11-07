@@ -322,6 +322,54 @@ proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, t
   if addedCode.len > 0:
     currentNode.add addedCode
 
+proc ownedUserInitEvents*(sys: SystemIndex, sysTupleVar, curComp: NimNode, typeId: ComponentTypeId, entity, value: NimNode): tuple[onAdd, onInit, onUpdate: NimNode] =
+  ## Whereas un-owned components handle their user initialisation
+  ## events within the component creation procedure, owned components
+  ## don't have init procedures and so need to invoke this inline.
+  template compInfo: auto = typeInfo[typeId.int]
+  let
+    typeStr = compInfo.typeName
+    lcTypeStr = typeStr.toLower
+    typeField = ident lcTypeStr
+    ownedByThisSystem = compInfo.systemOwner == sys
+
+  let
+    onAddCode =
+      if ownedByThisSystem and compInfo.onAddToEntCode.len > 0:
+        let userCode = compInfo.onAddToEntCode
+        quote do:
+          block:
+            template curComponent: untyped {.used.} = `curComp`
+            template curEntity: untyped {.used.} = `entity`
+            `userCode`
+      else: newStmtList()
+    
+    userInitCode =
+      if ownedByThisSystem and compInfo.onInitCode.len > 0:
+        let code = compInfo.onInitCode
+        quote do:
+          block:
+            template curEntity: untyped {.used.} = `entity`
+            template curComponent: untyped {.used.} = `curComp`
+            `code`
+      else:
+        newStmtList()
+
+    updateCode =
+      if ownedByThisSystem and compInfo.onInterceptValueInitCode.len > 0:
+        # It's now the user's responsibility to call commit.
+        let code = compInfo.onInterceptValueInitCode
+        quote do:
+          block:
+            template curEntity: untyped {.used.} = `entity`
+            template curValue: untyped {.used.} = `value`
+            template commit(value: untyped) {.used.} =
+              `sysTupleVar`.`typeField` = value
+            `code`
+      else:
+        quote do:
+          `sysTupleVar`.`typeField` = `value`
+  (onAddCode, userInitCode, updateCode)
 
 proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
   ## Update state variables outside of entity and system storage.
