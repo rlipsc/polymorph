@@ -53,7 +53,7 @@ template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
             fail()
           return
       if not found:
-        checkpoint "Cannot find expected kind " & $expectedKind & " in expected list: " & $expected & ", curComponent TypeId " & $curComp.typeId.int
+        checkpoint "Cannot find expected kind " & $expectedKind & " in expected list: " & $expected & ", curComponent TypeId " & $(curComp.repr)
       check found
 
   Test1.onInterceptUpdate:
@@ -157,79 +157,121 @@ proc runOnEvents* =
   for i in 0 ..< entCount:
     # Expecting x2 Test2 instances going through `update`.
     suite "e1 newEntityWith...":
-      
-      testVal = Test1(data: 1)
-      expectedE1 = @[TestType(kind: ttTest, test: testVal)]
-      expected = expectedE1
+      test "e1 newEntityWith":
+        testVal = Test1(data: 1)
+        expectedE1 = @[TestType(kind: ttTest, test: testVal)]
+        expected = expectedE1
 
-      log "NewEntityWith:"
-      e1 = newEntityWith(
-        testVal 
-      )
+        log "NewEntityWith:"
+        e1 = newEntityWith(
+          testVal 
+        )
 
     suite "Other entity...":
-      expected = @[TestType(kind: ttTest, test: otherEntVal)]
-      log "NewEntityWith:"
-      otherEnts.add newEntityWith(Test1(data: 180))
+      test "Other entity":
+        expected = @[TestType(kind: ttTest, test: otherEntVal)]
+        log "NewEntityWith:"
+        otherEnts.add newEntityWith(Test1(data: 180))
 
     suite "e2 addComponents...":
-      e2 = newEntity()
-      testVal = Test1(data: rand 10000)
-      test2Val = Test2(val: rand 1.0)
-      
-      expectedE2 = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
-      expected = expectedE2
-      log "AddComponents:"
-      discard e2.addComponents(testVal, test2Val)
+      test "e2 addComponents":
+        e2 = newEntity()
+        testVal = Test1(data: rand 10000)
+        test2Val = Test2(val: rand 1.0)
+        
+        expectedE2 = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
+        expected = expectedE2
+        log "AddComponents:"
+        discard e2.addComponents(testVal, test2Val)
 
     checkGroups("e2 addComponents")
       
     suite "e2 deleting...":
-      # Expected should match addComponents.
-      log "Deleting:"
-      e2.delete
+      test "e2 deleting":
+        # Expected should match addComponents.
+        log "Deleting:"
+        e2.delete
 
     checkGroups("e2 deleting")
 
     suite "e3 addComponent 1...":
-      e3 = newEntity()
-      testVal = Test1(data: 3)
-      expectedE3 = @[TestType(kind: ttTest, test: testVal)]
-      expected = expectedE3
+      test "e3 addComponent 1":
+        e3 = newEntity()
+        testVal = Test1(data: 3)
+        expectedE3 = @[TestType(kind: ttTest, test: testVal)]
+        expected = expectedE3
 
-      log "AddComponent Test1:"
-      discard e3.addComponent testVal
+        log "AddComponent Test1:"
+        discard e3.addComponent testVal
       
     suite "e3 addComponent 2...":
-      test2Val = Test2(val: rand 1.0)
-      # The entity already had Test1 and so now matches "d", as such
-      # we should expect two system add invocations for Test1 and Test1 2 being placed within "d".  
-      expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
-      log "AddComponent Test2:"
-      discard e3.addComponents test2Val
+      test "e3 addComponent 2":
+        test2Val = Test2(val: rand 1.0)
+        # The entity already had Test1 and so now matches "d", as such
+        # we should expect two system add invocations for Test1 and Test1 2 being placed within "d".  
+        expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
+        log "AddComponent Test2:"
+        discard e3.addComponents test2Val
     
     suite "e3 Removing component...":
-      # This will trigger for both components in the "d" system as well as for each of the other
-      # systems that take Test1.
-      expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
-      log "RemoveComponent:"
+      test "e3 Removing component":
+        # This will trigger for both components in the "d" system as well as for each of the other
+        # systems that take Test1.
+        expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
+        log "RemoveComponent:"
 
-      e3.removeComponent Test1
-      
-      # We expect that because Test2 is owned, removing Test1
-      # invalidates Test2's storage so it is also removed.
-      check e3.componentCount == 0
-      checkGroups("e3 remove Test1")
+        e3.removeComponent Test1
+        
+        # We expect that because Test2 is owned, removing Test1
+        # invalidates Test2's storage so it is also removed.
+        check e3.componentCount == 0
+        checkGroups("e3 remove Test1")
 
     suite "e1 delete...":
-      expected = expectedE1
-      log "Delete:"
-      e1.delete
-      checkGroups("e1 deleting")
+      test "e1 delete":
+        expected = expectedE1
+        log "Delete:"
+        e1.delete
+        checkGroups("e1 deleting")
     suite "e3 delete...":
-      expected = @[TestType(kind: ttTest2, test2: test2Val)]
-      e3.delete
-      checkGroups("e3 deleting")
+      test "e3 delete":
+        expected = @[TestType(kind: ttTest2, test2: test2Val)]
+        e3.delete
+        checkGroups("e3 deleting")
+    suite "Construct":
+      test "Single component construction":
+        let
+          testVal = Test1(data: 7)
+          test2Val = Test2(val: rand 1.0)
+
+        check compAdds == otherEnts.len
+        check comp2Adds == 0
+
+        expected = @[TestType(kind: ttTest, test: testVal)]
+        let entity1 = @[Component(testVal.makeContainer)].construct()
+
+        check compAdds == otherEnts.len + 1
+        check comp2Adds == 0
+
+        entity1.delete
+
+        check compAdds == otherEnts.len
+        check comp2Adds == 0
+
+      test "Construction with an owned component":
+
+        # Construction of owned type with multiple\n components.
+        expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
+        let entity2 = @[testVal.makeContainer, test2Val.makeContainer].construct()
+
+        check compAdds == otherEnts.len + 1
+        check comp2Adds == 1
+
+        entity2.delete
+
+        check compAdds == otherEnts.len
+        check comp2Adds == 0
+
     log "---"
 
   test "Deleting other ents...":
@@ -253,9 +295,9 @@ proc runOnEvents* =
   test "Add to specific system":
     check systemAddTos.balanced
   test "Intercept create unowned":
-    check comp1Intercepts == entCount * 4
+    check comp1Intercepts == entCount * 6
   test "Intercept create owned":
-    check comp2Intercepts == entCount * 2
+    check comp2Intercepts == entCount * 3
   
   when displayLog:
     echo "Log:"
