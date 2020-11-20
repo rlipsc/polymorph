@@ -425,7 +425,7 @@ proc sysInvokeAdded*(sys: SystemIndex, row: NimNode): NimNode =
         `userAddedEventCode`
     )
 
-proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): NimNode =
+proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): tuple[sysUpdates, userEvents: NimNode, eventsExist: bool] =
   ## Assumes you have a generated variable that matches each field in the system tuple already defined.
   let
     sysOpts = systemInfo[sys.int].options
@@ -470,12 +470,14 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
     updateIndex = sysVar.indexWrite(entIdIdent, row, sysOpts)
     userAddedEvent = sys.sysInvokeAdded(row)
 
-  quote do:
+  result.sysUpdates = quote do:
     `updateOwnedState`
     `updateGroup`
     `updateIndex`
+  result.userEvents = quote do:
     `userSysAddCode`
     `userAddedEvent`
+  result.eventsExist = userAddedEvent.len > 0 or userSysAddCode.len > 0
 
 
 # Type utils

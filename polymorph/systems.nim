@@ -448,25 +448,25 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
     # This system has already been defined.
     let
       existingSysIdx = sysIdxSearch.index
-      types = systemInfo[existingSysIdx].requirements
+      expectedTypes = systemInfo[existingSysIdx].requirements
     
     if componentTypes.len > 0:
       # Check the components given to makeSystem match defineSystem.
       template errMsg =
-        error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: [" & types.commaSeparate & "]"
+        error "Component types passed to makeSystem " & componentTypes.repr & " for system \"" & name & "\" in conflict with previous definition in defineSystem: [" & expectedTypes.commaSeparate & "]"
       
-      if componentTypes.len != types.len:
+      if componentTypes.len != expectedTypes.len:
         errMsg()
 
       for i, givenType in componentTypes:
         # Types must be given in the same order.
-        if typeStringToId($givenType) != types[i]:
+        if typeStringToId($givenType) != expectedTypes[i]:
           errMsg()
 
     if ecsSysBodiesAdded.hasKey(sysIdxSearch.index.SystemIndex):
       error "System \"" & name & "\" already has a body defined"
 
-    echo "Adding body to pre-defined system ", name, " with types ", types.commaSeparate
+    echo "Adding body to pre-defined system ", name, " with types ", expectedTypes.commaSeparate
   else:
     # This is an inline makeSystem.
     echo "Defining system and body ", name, " with types ", componentTypes.repr

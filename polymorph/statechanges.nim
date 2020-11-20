@@ -264,7 +264,9 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     `setOp`
   )
   
-  var missingComps, ownedComps: seq[ComponentTypeId]
+  var
+    missingComps, ownedComps: seq[ComponentTypeId]
+    userAddedEvents = newStmtList()
 
   for compId in compIds:      
     let ownerSystem = typeInfo.systemOwner compId
@@ -290,7 +292,10 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
 
           if not discarded:
             # Add component to system.
-            statements.add genSystemUpdate(entity, sys, compIds, componentList)
+            let (sysUpdate, event, eventsExist) = genSystemUpdate(entity, sys, compIds, componentList)
+            statements.add sysUpdate
+            if eventsExist:
+              userAddedEvents.add event
 
 
   if missingComps.len > 0:
@@ -302,26 +307,22 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     `addToEntity`
     `userSysAddCode`
     `userCompAddCode`
+    `userAddedEvents`
     `entity`
   )
 
-  result = quote do:
-    block:
-      `statements`
-
+  result = newBlockStmt(statements)
+  
   genLog "# newEntityWith " & compIds.commaSeparate & ":\n", result.repr
 
 proc makeNewEntityWith*(entOpts: ECSEntityOptions): NimNode =
-  let
-    componentList = ident "componentList"
-    #newEntCode = doNewEntityWith(entOpts, componentList)
+  let componentList = ident "componentList"
   quote do:
     macro newEntityWith*(`componentList`: varargs[typed]): untyped =
       ## Create an entity with the parameter components.
       ## This macro statically generates updates for only systems
       ## entirely contained within the parameters and ensures no
       ## run time component list iterations and associated checks.
-      #`newEntCode`
       doNewEntityWith(`entOpts`, `componentList`)
 
 ## This structure is used at compile-time to convert a list of components to a
@@ -567,6 +568,9 @@ proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNo
   ## Add components to systems that have no owned components.
   ## These systems may or may not be updated depending on fetched instances.
   result = newStmtList()
+  var
+    addedEvents = newStmtList()
+    conditionalAddedEvents = newStmtList()
   for sys in compInfo.unownedSystems:
     template sysInfo: untyped = systemInfo[sys.int]
     let
@@ -582,7 +586,7 @@ proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNo
 
     # Generate the code that adds this component instance to this system.
     # This includes user events and special handling for owned components.
-    let updateSystem = genSystemUpdate(entity, sys, compInfo.passed, compInfo.values)
+    let (updateSystem, addedEvent, eventsExist) = genSystemUpdate(entity, sys, compInfo.passed, compInfo.values)
 
     # Build the checks to see if this system matches.
     for typeId in sysInfo.requirements:
@@ -595,15 +599,23 @@ proc addConditionalSystems(entity: NimNode, compInfo: ComponentParamInfo): NimNo
           checkSystem.add(quote do: `typeField`.valid)
 
     if checkSystem.len > 0:
-      let matchesSystem = genInfixes(checkSystem, "and")
-      result.add(quote do:
-        if `matchesSystem`:
-          `updateSystem`
-      )
+      let
+        matchesSystem = genInfixes(checkSystem, "and")
+        conditionalAdd = quote do:
+          if `matchesSystem`:
+            `updateSystem`
+            `addedEvent`
+      if eventsExist:
+        conditionalAddedEvents.add conditionalAdd
+      else:
+        result.add conditionalAdd
     else:
-      result.add(quote do:
-        `updateSystem`
-      )
+      addedEvents.add addedEvent
+      result.add updateSystem
+  if addedEvents.len > 0:
+    result.add addedEvents
+  if conditionalAddedEvents.len > 0:
+    result.add conditionalAddedEvents
 
 proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
   ## Assumes we have everything we need to add to owned systems.
