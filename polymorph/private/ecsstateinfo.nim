@@ -17,6 +17,7 @@ type
     isOwned*: bool
     systemOwner*: SystemIndex
     fields*: seq[tuple[fieldNode, typeNode: NimNode]]
+    systems*: seq[SystemIndex]
 
     onInitCode*, onFinalisationCode*,
       onAddToEntCode*, onRemoveFromEntCode*,

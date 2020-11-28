@@ -335,6 +335,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
       elements.add(nnkIdentDefs.newTree(
         ident(tyName.toLowerAscii), ident(tyName.instanceTypeName()), newEmptyNode())
       )
+    typeInfo[id.int].systems.add sysIndex
     systemInfo[sysIndex.int].requirements.add(id)
   
   # Build system tuple type and access variable.
