@@ -327,6 +327,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
     if id in ownedComponentIds:
       # Owned component storage is the system itself.
       typeInfo[id.int].systemOwner = sysIndex
+      typeInfo[id.int].isOwned = true
       elements.add(nnkIdentDefs.newTree(
         ident((tyName).toLowerAscii), ident(tyName), newEmptyNode())
       )
