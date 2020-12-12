@@ -204,10 +204,12 @@ proc instantiateSystem(options: ECSSysOptions, sysIndex: SystemIndex, sysName: s
 
     proc contains*(sys: `sysIdent`, `entity`: EntityRef): bool =
       `sysHasEntity`
+    
+    proc id*(sys: `sysIdent`): SystemIndex = `sysIndex`.SystemIndex
   )
 
 proc processPragma(identNode, valueType: NimNode): tuple[ident: NimNode, def: NimNode] =
-  # Process and remove `public` pragma if present.
+  ## Process and remove `public` pragma if present.
   identNode[1].expectKind nnkPragma
   for pIdx in countDown(identNode[1].len - 1, 0):
     if identNode[1][pIdx].kind == nnkIdent:
@@ -290,12 +292,11 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
     ownedComponentIds.add typeId
 
   for id in passedComponentIds:
-    let curOwner = typeInfo.systemOwner id
+    let curOwner = typeInfo[id.int].systemOwner
     
     if curOwner != InvalidSystemIndex and id in ownedComponentIds:
       error "Component " & typeInfo.typeName(id) & " is already owned by system \"" & systemInfo[curOwner.int].systemName & "\"" 
   
-  # Update compile-time states.
   when defined debugSystemOptions:
     echo "=== System generation options for " & sysName & " ===\n", sysOptions.repr
 
@@ -307,6 +308,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
 
   # Define system index.
   let sysIndex = systemInfo.len.SystemIndex
+
   systemInfo.add SystemInfo(
     id: sysIndex,
     systemName: sysName,
@@ -321,7 +323,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
   var elements = nnkTupleTy.newTree()
   # Add entity field.
   elements.add(nnkIdentDefs.newTree(ident("entity"), ident("EntityRef"), newEmptyNode()))
-  # Add components.
+  # Add component fields to the tuple.
   for id in passedComponentIds:
     let tyName = typeInfo.typeName id
     if id in ownedComponentIds:
@@ -336,6 +338,7 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
       elements.add(nnkIdentDefs.newTree(
         ident(tyName.toLowerAscii), ident(tyName.instanceTypeName()), newEmptyNode())
       )
+    # Update component to system links.
     typeInfo[id.int].systems.add sysIndex
     systemInfo[sysIndex.int].requirements.add(id)
   
@@ -387,6 +390,19 @@ proc createSysTuple(sysName: string, componentTypes, ownedComponents: NimNode, e
   # Generate the system type according to provided options.
   result.add makeSystemType(sysOptions, sysIndex, componentTypes, extraFieldDefs)
   result.add instantiateSystem(sysOptions, sysIndex, sysName, fieldSetup)
+
+  # Static access to the state of ownership in the system.
+  let sysType = ident systemTypeName(sysName)
+  if ownedComponentIds.len > 0:
+    result.add(quote do:
+      template isOwner*(sys: `sysType`): bool = true
+      template ownedComponents*(sys: `sysType`): seq[ComponentTypeId] = `ownedComponents`
+      )
+  else:
+    result.add(quote do:
+      template isOwner*(sys: `sysType`): bool = false
+      template ownedComponents*(sys: `sysType`): seq[ComponentTypeId] = []
+      )
 
   ecsSystemsToBeSealed.add sysIndex
   ecsSysUncommitted.add sysIndex
@@ -682,11 +698,20 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
   ##
 
   let
+    groupIndex = ident "groupIndex"
     idx = genSym(nskVar, "i")
     sysLen = ident "sysLen"
-    gi = ident "gi"
     # if `entity` != `item.entity` then this row has been removed.
     rowEnt = ident "entity"
+    defineIdx =
+      if systemInfo[sysIndex.int].ownedComponents.len > 0:
+        # Owner systems forgo the first item to keep parity
+        # with component storage and the mechanics of `valid`.
+        quote do:
+          var `idx` = 1
+      else:
+        quote do:
+          var `idx`: int
     allCore = quote do:
 
       static:
@@ -702,15 +727,15 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
       var `sysLen` = `sys`.count()
       if `sysLen` > 0:
-        var `idx`: int
+        `defineIdx`
 
         while `idx` < `sysLen`:
           ## The entity this row started execution with.
-          let `rowEnt` {.used.} = `sys`.groups[`idx`].entity
-          ## Read only index into `groups`.
-          template groupIndex: auto {.used.} =
-            let `gi` = `idx`
-            `gi`
+          let
+            `rowEnt` {.used, inject.} = `sys`.groups[`idx`].entity
+            ## Read only index into `groups`.
+            `groupIndex` {.used, inject.} = `idx`
+
           ## Current system item being processed.
           template item: `typeIdent` {.used.} = `sys`.groups[`idx`]
           template deleteEntity: untyped {.used.} =
@@ -797,7 +822,6 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
   let
     # Streaming body.
-    rowIdent = ident "curRow"
     streamCore = quote do:
       # loop per entity in system
 
@@ -812,24 +836,18 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
       var
         `sysLen` = `sys`.count()
-        `idx`: int
         `processed`: int
         `finished` = `sysLen` == 0
+      `defineIdx` # TODO: Ensure owner streaming starts at index 1.
       `initFirstRun`
       while `finished` == false:
-        ## The entity this row started execution with.
         let
-          `rowIdent` = `sys`.lastIndex
-        assert `rowIdent` in 0 ..< `sys`.groups.len, "?? got " & $`rowIdent` & " max " & $`sys`.groups.len & " fi " & $`finished` &
-          " " & $(`processed` >= `streamAmount`) & " " & $(`sys`.lastIndex >= `sysLen`) & " " & $`sysLen` & " " & $((`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`))
-        let
-          `rowEnt` {.used.} = `sys`.groups[`rowIdent`].entity
-        ## Read only index into `groups`.
-        template groupIndex: auto {.used.} =
-          let r = `rowIdent`
-          r
+          ## Current index into `groups`.
+          `groupIndex` {.used, inject.} = `sys`.lastIndex
+          ## The entity this row started execution with.
+          `rowEnt` {.used, inject.} = `sys`.groups[`groupIndex`].entity
         ## Current system item being processed.
-        template item: `typeIdent` {.used.} = `sys`.groups[`rowIdent`]
+        template item: `typeIdent` {.used.} = `sys`.groups[`groupIndex`]
         template deleteEntity: untyped {.used.} =
           ## Convenience shortcut for deleting just this row's entity.
           `rowEnt`.delete
@@ -862,7 +880,7 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
 
   let
     doSystem = ident(doProcName(name))
-    systemComment = newCommentStmtNode("System " & name & ", using components " & sysTypeNames)
+    systemComment = newCommentStmtNode("System " & name & ", using components: " & sysTypeNames)
     sysType = ident systemTypeName(name)
     runCheck =
       case options.timings
@@ -946,11 +964,9 @@ macro forSystemsUsing*(typeIds: static[openarray[ComponentTypeId]], actions: unt
   ## Statically perform `actions` only for systems defined for these types.
   ## Note that typeIds must be known at compile time.
   var processed: seq[SystemIndex]
-  let systemsByCompId = compSystems()
   result = newStmtList()
   for id in typeIds:
-    let linkedSystems = systemsByCompId[id.int]
-    for sys in linkedSystems:
+    for sys in typeInfo[id.int].systems:
       if sys notin processed:
         processed.add sys
         let

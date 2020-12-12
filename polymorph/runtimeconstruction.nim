@@ -15,16 +15,13 @@ proc buildConstructionCaseStmt(entity: NimNode, entOpts: ECSEntityOptions, cloni
     userCode = newStmtList()
     userCodeBoolDecls: Table[SystemIndex, NimNode]
 
-    # Fetch array of component id by list of system indexes.
-    systemsByCompId = compSystems()
-
   # Select on typeId.
   compCase.add(quote do: `compIndexInfo`[0].int)
 
   for typeId in ecsComponentsToBeSealed:
     template ofCompInfo: untyped = typeInfo[typeId.int]
     let
-      linkedSystems = systemsByCompId[typeId.int]
+      linkedSystems = typeInfo[typeId.int].linked
       ofInstType = ident ofCompInfo.typeName.instanceTypeName
     var
       addToSystems = newStmtList()

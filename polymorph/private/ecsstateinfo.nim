@@ -17,7 +17,13 @@ type
     isOwned*: bool
     systemOwner*: SystemIndex
     fields*: seq[tuple[fieldNode, typeNode: NimNode]]
+    
+    # Systems that directly reference this component.
     systems*: seq[SystemIndex]
+    # Owner systems that are indirectly dependent on this component.
+    dependentOwners*: seq[SystemIndex]
+    # Both direct and indirect owned systems linked to this component.
+    linked*: seq[SystemIndex]
 
     onInitCode*, onFinalisationCode*,
       onAddToEntCode*, onRemoveFromEntCode*,
@@ -39,6 +45,9 @@ type
     # Adding to system events
     onAddToCode*, onRemoveFromCode*: Table[ComponentTypeId, NimNode]
     onAdded*, onRemoved*: NimNode
+
+    ## The ECS is sealed for this system and events can't be altered.
+    sealed*: bool
 
     requirements*: seq[ComponentTypeId]
     ownedComponents*: seq[ComponentTypeId]
@@ -91,9 +100,6 @@ proc info*(cd: ComponentData, id: ComponentTypeId): ComponentInfo {.compileTime.
 
 proc typeName*(cd: ComponentData, id: ComponentTypeId): string {.compileTime.} =
   cd[id.int].typeName
-
-proc systemOwner*(cd: ComponentData, id: ComponentTypeId): SystemIndex {.compileTime.} =
-  cd[id.int].systemOwner
 
 proc allTypeNames*(cd: ComponentData): string =
   if cd.len > 1:

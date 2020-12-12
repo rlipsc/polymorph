@@ -364,12 +364,11 @@ template getComponentUpdatePerformance: seq[ComponentUpdatePerfTuple] =
   ## Needs to be late bound as a template; as a proc it will bind when ecsComponentsToBeSealed is
   ## empty and not update.
   var r: seq[ComponentUpdatePerfTuple]
-  let systemsByCompId = compSystems()
   for tId in ecsComponentsToBeSealed:
     # Each component gets a direct access addComponent
     let
       tyNameStr = typeInfo[tId.int].typeName
-      relevantSystems = systemsByCompId[tId.int]
+      relevantSystems = typeInfo[tId.int].linked
     r.add((tyNameStr, relevantSystems.len))
 
   r.sort do (x, y: ComponentUpdatePerfTuple) -> int:
@@ -509,7 +508,7 @@ proc makeRuntimeDebugOutput: NimNode =
               genMax = componentGenerations().len
               let gen = componentGenerations()[compRef.index.int]
               genStr = $gen
-              owned = componentInstanceType().ownedComponent
+              owned = componentInstanceType().isOwnedComponent
           except: genStr = " ERROR ACCESSING generations (index: " & $compRef.index.int & ", count: " & $genMax & ")"
 
           `res` &= compDesc
@@ -869,7 +868,16 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result = newStmtList()
   result.add doStartLog()
   addPerformanceLog()
-  for info in typeInfo:
+
+  for i in 1 ..< typeInfo.len:
+    template info: untyped = typeInfo[i]
+    
+    # Walk the ownership graph for this component.
+    info.dependentOwners = dependentOwners(info.id)
+    # All systems that need to be involved in state
+    # changes with this component.
+    info.linked = info.systems & info.dependentOwners
+
     if info.onAddCallbackForwardDecl.len > 0:
       result.add info.onAddCallbackForwardDecl
     if info.onRemoveCallbackForwardDecl.len > 0:
@@ -878,6 +886,7 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result.add sealEntities(entOpts)
   result.add sealRuntimeTools(entOpts)
   result.add sealComps(entOpts)
+
   let invalidEvents = invalidSystemAdds()
   if invalidEvents[0]:
     error invalidEvents[1]
@@ -886,7 +895,8 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   result.add makeRuntimeConstruction(entOpts)
   debugPerformance "Construction tools complete."
 
-  for info in typeInfo:
+  for i in 1 ..< typeInfo.len:
+    template info: untyped = typeInfo[i]
     if info.onAddCallback.len > 0:
       result.add info.onAddCallback
     if info.onRemoveCallback.len > 0:
@@ -895,7 +905,11 @@ macro makeEcs*(entOpts: static[ECSEntityOptions]): untyped =
   # Make a note of which components have been sealed.
   for compId in ecsComponentsToBeSealed:
     ecsSealedComponents[compId] = true
-
+  
+  # Flag systems as sealed.
+  for sys in ecsSystemsToBeSealed:
+    systemInfo[sys.int].sealed = true
+  
   # Reset state for next ECS.
   ecsComponentsToBeSealed.setLen 0
   ecsSystemsToBeSealed.setLen 0

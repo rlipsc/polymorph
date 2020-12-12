@@ -1,4 +1,4 @@
-import macros, sharedtypes, private/[utils, ecsstateinfo], components, strutils, tables, typetraits
+import macros, sharedtypes, private/[utils, ecsstateinfo], components, strutils, tables, typetraits, sets
 
 macro componentToSysRequirements*(varName: untyped): untyped =
   ## Create a static sequence that matches componentTypeId to an array of indexes into systemNodes
@@ -7,7 +7,10 @@ macro componentToSysRequirements*(varName: untyped): untyped =
   ## This means we can check at run time what systems are required per component.
   ## Note this must only be used after seal has been called, otherwise the compile-time lists will be
   ## incomplete.
-  let res = compSystems().genStaticArray()
+  var compSys = newSeq[seq[SystemIndex]](typeInfo.len)
+  for ty in typeInfo:
+    compSys.add ty.systems
+  let res = compSys.genStaticArray()
   result = quote do:
     const `varName` = `res`
   genLog "# componentToSysRequirements:\n", result.repr
@@ -178,16 +181,16 @@ macro onSystemRemoveFrom*(typeToUse: typedesc, systemName: static[string], actio
 proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode {.compileTime.} =
   # Note: Currently does not generate a container and writes out the innards
   # within a block statement in the caller scope.
-  # Pros: No call overhead when creating entities in a tight loop, and direct
-  # mechanics manipulation.
   # Consequences: All ECS mechanics must be exposed to the user.
-  #   * The user can potentially mess about with the internal entity state and corrupt the ECS.
-  #   * The user can work with internal states and add features that need to process this info.
+  #   - Pros:
+  #     - No caller overhead,
+  #     - The user can create features that access any part of the ECS state.
+  #   - Cons:
+  #     - The user can potentially corrupt the ECS with low level access.
   result = newStmtList()
   let
     entity = genSym(nskVar, "entity")
     entIdNode = quote: `entity`.entityId
-    systemsByCompId = compSystems()
   var
     componentDecl = nnkVarSection.newTree()
     addToEntity = newStmtList()
@@ -214,20 +217,22 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     # Create storage for this component
     let compOwner = info.systemOwner
     if compOwner != InvalidSystemIndex:
+      # Owned component access is part of the system row and cannot be accessed
+      # until a new row is added.
       let sysNode = systemInfo[compOwner.int].instantiation
       # This should correspond to the next index for groups, which is added just below.
       componentDecl.add genFieldAssignment(fieldName, false, quote do:
         `sysNode`.count.`instTypeIdent`
       )
     else:
-      # Create and update storage with parameter value
+      # Create storage and assign the parameter value.
       componentDecl.add genFieldAssignment(fieldName, false, quote do:
         newInstance(`component`))
 
-    let compRef = quote do: `fieldIdent`.toRef
+    let compRef = newDotExpr(fieldIdent, ident "toRef")
     addToEntity.add addComponentRef(entity, compRef, entOpts)
 
-    # Component add user code.
+    # Component add user inline event.
     let userAddToEnt = info.onAddToEntCode
     if userAddToEnt.len > 0:
       userCompAddCode.add(quote do:
@@ -237,7 +242,7 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
           `userAddToEnt`
       )
 
-    # User callback.
+    # Component add user callback event.
     if info.onAddCallback.len > 0:
       # Check for this type's initialiser.
       let cbProcName = ident addCallbackName(tyName)
@@ -255,7 +260,7 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
       newEmptyNode()
 
   var
-    processed: set[int16]
+    processed: HashSet[SystemIndex]
     userSysAddCode = newStmtList()
 
   statements.add(quote do:
@@ -269,8 +274,10 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
     userAddedEvents = newStmtList()
 
   for compId in compIds:      
-    let ownerSystem = typeInfo.systemOwner compId
+    let ownerSystem = typeInfo[compId.int].systemOwner
     var satisfied = true
+
+    # Parameters that include owned components must fully satisfy their owning system.
     if ownerSystem != InvalidSystemIndex:
       ownedComps.add compId
       for comp in systemInfo[ownerSystem.int].requirements:
@@ -279,10 +286,9 @@ proc doNewEntityWith(entOpts: ECSEntityOptions, componentList: NimNode): NimNode
           missingComps.add comp
 
     if satisfied:
-      let systems = systemsByCompId[compId.int]
-      for sys in systems:
-        if sys.int16 notin processed:
-          processed.incl(sys.int16)
+      for sys in typeInfo[compId.int].systems:
+        if sys notin processed:
+          processed.incl sys
 
           # We only need to update systems that are fully qualified by componentList.
           var discarded: bool
@@ -328,7 +334,7 @@ proc makeNewEntityWith*(entOpts: ECSEntityOptions): NimNode =
 ## This structure is used at compile-time to convert a list of components to a
 ## map of tasks for code generation to use.
 type ComponentParamInfo* = ref object
-  ## The components given by the arguments.
+  ## The component types of arguments in their given order.
   passed*:          seq[ComponentTypeId]
   ## The actual code/variable/data given for the component matching `passed`.
   values*:          seq[NimNode]
@@ -343,7 +349,7 @@ type ComponentParamInfo* = ref object
   ## `addComponent A()` on its own, `B` and `C` will be in `lookFor` to see
   ## if the entity satisfies `sysA` at run-time, and a row can be added.
   lookFor*:         seq[ComponentTypeId]
-  ## Index into `passed`.
+  ## Components that require storage generation, stored as an index into `passed`.
   generateIdx*:     seq[int]
   ## Owned components, their owning systems, and index into `passed`.
   owned*:           seq[tuple[id: ComponentTypeId, sys: SystemIndex, passedIdx: int]]
@@ -353,12 +359,13 @@ type ComponentParamInfo* = ref object
   ownedSystems*:    seq[SystemIndex]
 
 proc processComponentParameters(componentList: NimNode): ComponentParamInfo =
-  ## Collects information from parameters passed as part of a state change.
+  ## Collect information from parameters passed as part of a state change
+  ## and process into targetted lists for each code generation job.
 
   # Generate a list of SystemIndexes used by each ComponentTypeId.
-  let systemsByCompId = compSystems()
   result = ComponentParamInfo()
 
+  # Initial parse of parameters to component ids and value nodes.
   for compNode in componentList:
     let tyName = compNode.findType
     doAssert tyName != "", "Cannot determine type name of argument:\n" & compNode.treeRepr & "\ngetType:\n" & compNode.getType.repr
@@ -373,12 +380,11 @@ proc processComponentParameters(componentList: NimNode): ComponentParamInfo =
     result.passed.add typeId
     result.values.add compNode
 
-  # Process requirements.
+  # Process parameters for dependent requirements.
   for i, typeId in result.passed:
     let
-      ownerSystem = typeInfo.systemOwner typeId
+      ownerSystem = typeInfo[typeId.int].systemOwner
       isOwned = ownerSystem != InvalidSystemIndex
-      typeStr = typeInfo[typeId.int].typeName
     
     if isOwned:
       if ownerSystem notin result.ownedSystems:
@@ -390,26 +396,29 @@ proc processComponentParameters(componentList: NimNode): ComponentParamInfo =
         for comp in systemInfo[ownerSystem.int].requirements:
           if comp notin result.passed:
             if typeInfo.isOwned comp:
-              let curName = typeInfo[comp.int].typeName
+              let
+                curName = typeInfo[comp.int].typeName
+                typeStr = typeInfo[typeId.int].typeName
               error "Cannot add " & typeStr & ", missing required owned component " & curName
             elif comp notin result.requiredFetches:
               result.requiredFetches.add comp
               result.lookFor.add comp
 
     else:
-      # Passed components that are not owned must generate ComponentRefs.
+      # Passed components that are not owned must generate a storage slot index.
       result.generateIdx.add i
 
-    let linkedSystems = systemsByCompId[typeId.int]
-    
     # Create a list of components we're missing that would potentially
     # satisfy all systems that use our parameters.
-    for sys in linkedSystems:
+    # We only need to check systems directly using each component,
+    # not dependent owner systems, as we can assume incomplete
+    # ownership has been disallowed above.
+    for sys in typeInfo[typeId.int].systems:
 
       let sysIsOwner = systemInfo[sys.int].ownedComponents.len > 0
-      
       if not sysIsOwner:
-        # Owned systems that weren't in the parameters are ignored.
+        # Owner systems that weren't in the parameters are ignored since
+        # they cannot exist in isolation.
 
         if sys notin result.unownedSystems:
           result.unownedSystems.add sys
@@ -678,7 +687,10 @@ proc addOwned(entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
         # creation procs for non-owned components.
         stateUpdates.add updateOwnedComponentState(typeId, sys, sysHighVar)
 
-        tupleSetup.add `updateCode`
+        tupleSetup.add(quote do:
+          `sysTupleVar`.`typeField` = `value`
+          `updateCode`
+        )
 
         stateUpdates.add(quote do:
           `userInitCode`
@@ -944,8 +956,6 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
     index = ident "index"
     entityIdent = ident "entity"
     entityIdIdent = ident "entityId"
-    # Array of all types by systems
-    systemsByCompId = compSystems()
     componentLen = componentRefsLen(entityIdIdent, entOpts)
     alive = ident "alive" # Late bind for this template
     rowIdent = ident "row"
@@ -959,7 +969,7 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
 
       compTypedesc = nnkBracketExpr.newTree(ident "typedesc", ident typeName)
       # System indexes that use the component being removed
-      relevantSystems = systemsByCompId[typeId.int]
+      relevantSystems = typeInfo[typeId.int].linked
       removeIdxIdent = ident "compIdx"
       foundComp = ident "found"
 
@@ -1191,7 +1201,6 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
     ent = ident("entity")
     delProcName = ident("delete")
     compRefIdent = ident("compRef")
-    allCompSystems = compSystems()
     storageVar = ident entityStorageVarName()
     totalSystemCount = systemInfo.len
     rowIdent = ident "row"
@@ -1224,7 +1233,6 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
   for compId in ecsComponentsToBeSealed:
     let
       compIdx = compId.int
-      compSystems = allCompSystems[compIdx]
       tyName = typeInfo[compIdx.int].typeName
       tyInstance = newIdentNode instanceTypeName(tyName)
 
@@ -1235,7 +1243,7 @@ proc makeDelete*(options: ECSEntityOptions): NimNode =
       userBody = newStmtList()
 
     # For each component, update any systems referenced.  
-    for sysIdx in compSystems:
+    for sysIdx in typeInfo[compIdx.int].systems:
       # Process only new systems we haven't seen before for this set of entities.
       if sysIdx in ecsSystemsToBeSealed:
         template sysInfo: untyped =  systemInfo[sysIdx.int]

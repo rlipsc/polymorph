@@ -1,5 +1,5 @@
 import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
-import debugging
+import debugging, tables, deques, sequtils, sets
 export debugging
 
 #[
@@ -22,16 +22,20 @@ var
   # Current range of systems that need their procs committed.
   ecsSysUncommitted* {.compileTime.}: seq[SystemIndex]
 
+  # Systems that have had their type and instance defined.
   ecsSysDefined* {.compileTime.}: Table[SystemIndex, bool]
+  # Systems that have been output by commitSystems().
   ecsSysBodiesAdded* {.compileTime.}: Table[SystemIndex, bool]
+  # Raw component type definition AST.
   componentDefinitions* {.compileTime.}: seq[NimNode]
 
   # These variables allow adapting system code generation when systems request to change entity state.
   # * entity.delete called within a system body invokes a check to ensure index is within length each iteration.
   #   This is required because delete cannot know at compile time what components an entity might have, and if
   #   the entity is part of this system. Thus to prevent the user deleting entities in front of it's iteration path,
-  #   and causing it's own index to be invalid, the length must be checked each iteration.
-  #   This check can be avoided if you only delete the current row using deleteEntity
+  #   and causing its own index to be invalid, the length must be checked each iteration.
+  #   This check isn't needed if you remove components the system doesn't use, and can be avoided by for entity
+  #   deletes by performing them outside of an `all` or `stream` block, such as in `finish`.
 
   # Current state of generation.
   inSystem* {.compileTime.}: bool
@@ -160,9 +164,9 @@ proc addComponentRef*(entity: NimNode, componentRef: NimNode, options: ECSEntity
   of csArray:
     quote do:
       let newIdx = entityData(`entity`.entityId).nextCompIdx
-      entityData(`entity`.entityId).nextCompIdx = newIdx + 1
       assert newIdx < entityData(`entity`.entityId).componentRefs.len, "Exceeded entity component storage capacity of " &
         $entityData(`entity`.entityId).componentRefs.len & " with index " & $newIdx
+      entityData(`entity`.entityId).nextCompIdx = newIdx + 1
       entityData(`entity`.entityId).componentRefs[newIdx] = `componentRef`
 
 proc addToEntityList*(entity: NimNode, passed: seq[ComponentTypeId], entOpts: ECSEntityOptions): NimNode =
@@ -216,17 +220,6 @@ iterator systemTypesStrPair*(systemIndex: SystemIndex): tuple[typeName: string, 
   ## Utility function to yield the name and type id of the types used in the system specified by systemIndex.
   for id in systemInfo[systemIndex.int].requirements:
     yield (typeName: typeInfo.typeName id, id: id)
-
-template compSystems*: untyped =
-  ## Creates a lookup of all known component type ids to a list of systems that use them.
-  # sysRequirements is indexed by system to give component, but we want to index component to get systems.
-  var r = newSeq[seq[SystemIndex]](typeInfo.len)
-  for i in 0 ..< typeInfo.len: # 0 is invalid component but we need to include in the result
-    # Create a list of system indexes for each component type
-    for sysIdx in 0 ..< systemInfo.len:
-      if i.ComponentTypeId in systemInfo[sysIdx].requirements:
-        r[i].add sysIdx.SystemIndex
-  r
 
 proc indexRead*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
   case options.indexFormat
@@ -282,7 +275,6 @@ proc updateIndex*(entity: NimNode, sys: SystemIndex, row: NimNode, sysOpts: ECSS
     systemNode = systemInfo[sys.int].instantiation
     entId = quote do: `entity`.entityId
   result = systemNode.indexWrite(entId, row, sysOpts)
-
 
 proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
   ## Adds any user code for `onSystemAddTo` and `onSystemAdd`.
@@ -366,9 +358,8 @@ proc ownedUserInitEvents*(sys: SystemIndex, sysTupleVar, curComp: NimNode, typeI
             template commit(value: untyped) {.used.} =
               `sysTupleVar`.`typeField` = value
             `code`
-      else:
-        quote do:
-          `sysTupleVar`.`typeField` = `value`
+      else: newStmtList()
+  
   (onAddCode, userInitCode, updateCode)
 
 proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
@@ -872,3 +863,65 @@ proc fill*[T](val: var T, node: NimNode) =
           else:
             error "Unhandled type for fill: " & $curVal.kind
 
+# System relationships
+
+proc toSeq*[T](v: HashSet[T]): seq[T] =
+  result.setLen v.len
+  var i: int
+  for item in v:
+    result[i] = item
+    i += 1
+
+proc dependentOwners*(id: ComponentTypeId): seq[SystemIndex] =
+  ## Returns owner systems that have dependent owned components
+  ## in a chain from this component.
+  ## 
+  ## The returned systems require this component to instantiate
+  ## a row, either directly or indirectly, through one or more
+  ## other components.
+  ## 
+  ## For example, consider the following dependent systems:
+  ##   sys1 A, B        Owns: [A, B]
+  ##   sys2 A, B, C, D  Owns: [C, D]
+  ##   sys3 C, D, E, F  Owns: [E, F]
+  ##   sys4 E, F, G, H  Owns: [G, H]
+  ## 
+  ## In order for any of sys1..sys4 to exist, all the components
+  ## A, B, C, D, E, F, G, and H must be added in one operation.
+  ## Likewise, removal of any of these components individually will
+  ## invalidate the chain of ownership for sys1..sys4, and therefore
+  ## causes all of them to be removed. These components only exist
+  ## in relation to each other.
+  ## 
+  ## This is not true for non-owned components as they have independent
+  ## existence outside of a system, and can be attached to an entity
+  ## even if no system uses them.
+  var
+    systemsToVisit = initDeque[SystemIndex]()
+    queuedSystems: HashSet[SystemIndex]
+    resultSystems: HashSet[SystemIndex]
+    visitedComps: HashSet[ComponentTypeId]
+
+  proc queueDependents(sys: SystemIndex) =
+    # Add any systems directly referencing owned components of `sys`.
+    for component in systemInfo[sys.int].ownedComponents:
+      if component notin visitedComps:
+        visitedComps.incl component
+
+        for linkedSys in typeInfo[component.int].systems:
+          if linkedSys notin queuedSystems:
+            queuedSystems.incl linkedSys
+            systemsToVisit.addLast linkedSys
+
+  let owner = typeInfo[id.int].systemOwner
+  # Only owned components require graph traversal.
+  if owner != InvalidSystemIndex and typeInfo[id.int].systems.len > 0:
+    owner.queueDependents
+
+    while systemsToVisit.len > 0:
+      let sys = systemsToVisit.popFirst
+      resultSystems.incl sys
+      sys.queueDependents
+
+  let systemsUsingSourceType = typeInfo[id.int].systems.toHashSet
+  toSeq(resultSystems - systemsUsingSourceType)

@@ -11,7 +11,8 @@ macro componentNames*: untyped =
     @`comps`
 
 proc addComponentTypeId(typeNameStr: string, definition: FieldList): ComponentTypeId {.compileTime.} = 
-  assert typeNameStr notin typeInfo, "Type name " & typeNameStr & " is already registered as a component"
+  if typeNameStr in typeInfo:
+    error "Type name " & typeNameStr & " is already registered as a component"
   
   typeInfo.add ComponentInfo(
     typeName: typeNameStr,
@@ -304,19 +305,21 @@ proc generateTypeStorage*(): NimNode =
 
     let
       useThreadVar = options.useThreadVar
-      ownerSystem = typeInfo.systemOwner typeId
+      ownerSystem = typeInfo[typeId.int].systemOwner
       supportStorageSize =
         if ownerSystem == InvalidSystemIndex:
           maxComponentCount + 1
         else:
           let sysOpts = systemInfo[ownerSystem.int].options
           if sysOpts.storageFormat == ssArray:
+            # For arrays, owned systems must be set to the maximum number of entities.
             sysOpts.maxEntities + 1
           else:
             0
 
     # Generate the field that will hold this component within storage.
     # eg; a: array[100000, A]
+    # Note: Currently this field has to be added unconditionally as we don't know if this component is owned yet.
     storageFields.add genField(storageFieldName, true, typeNameIdent.storageField(supportStorageSize), useThreadVar)
     
     # Generate the last index list for this component of the specific instance type
@@ -350,6 +353,18 @@ proc genTypeAccess*(): NimNode =
     typeAccess = newStmtList()
     firstCompIdInits = newStmtList()
 
+  #[
+    The user can choose whether they want to use dot operators or generate access templates for each field.
+    Dot operators:
+      * Pros: Tend to work seamlessly with other templates and overloading resolution.
+      * Cons: Can get confused when chaining long sequences together (in which case, use `access`).
+    Templates:
+      * Pros: In theory better direct replacement of statements so more able to chain without issue.
+      * Cons: In reality, variables with the same name as a template field can fail as ambiguous.
+      * We can replace templates with procs, but now we the overhead of new stack frames for each access (though
+        expect compiler to inline), and may also change semantics to copy instead of access.
+  ]#
+
   for typeId in ecsComponentsToBeSealed:
     let
       options = typeInfo[typeId.int].options
@@ -359,14 +374,14 @@ proc genTypeAccess*(): NimNode =
       typeNameStr = compInfo.typeName
       typeNameIdent = ident typeNameStr
       storageFieldName = storageFieldName(typeNameStr)
-      lcTypeIdent = newIdentNode storageFieldName
-      createIdent = newIdentNode createInstanceName(typeNameStr)
-      deleteIdent = newIdentNode deleteInstanceName()
-      freeIdxIdent = newIdentNode freeInstancesName(typeNameStr)
+      lcTypeIdent = newIdentNode storageFieldName                   # Variable holding the component's data, indexed by ComponentIndex.
+      createIdent = newIdentNode createInstanceName(typeNameStr)    # Proc to create a storage entry and return the ComponentIndex.
+      deleteIdent = newIdentNode deleteInstanceName()               # Proc to remove a storage entry by ComponentIndex.
+      freeIdxIdent = newIdentNode freeInstancesName(typeNameStr)    # Variable holding a stack of free indexes.
       instParam = ident "instance"
-      instanceIds = newIdentNode instanceIdsName(typeNameStr)   # Type's instance id array
+      instanceIds = newIdentNode instanceIdsName(typeNameStr)       # Variable holding the generation of indexes.
       instanceTypeIdent = ident instanceTypeName(typeNameStr)
-      refTypeNameIdent = newIdentNode compInfo.refType          # Ref container type
+      refTypeNameIdent = newIdentNode compInfo.refType              # Ref container type
       aliveIdent = newIdentNode aliveStateInstanceName(typeNameStr)
       nextIdxIdent = newIdentNode nextInstanceName(typeNameStr)
       tyParam = ident "ty"
@@ -374,8 +389,8 @@ proc genTypeAccess*(): NimNode =
       instTypeNode = newIdentNode instTypeName                  # Type's instance type
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       res = ident "result"
-      invalidField = newLit typeNameStr & " doesn't have a field `"
-      invalidFieldPostfix = "`"
+      invalidFieldPrefix = newLit "undeclared field: '"
+      invalidFieldPostfix = "' for component type " & typeNameStr
       perfRead =
         when defined(debugSystemPerformance): quote do:
           static:
@@ -395,12 +410,14 @@ proc genTypeAccess*(): NimNode =
     
     # Potentially extra init for heap items
     case options.componentStorageFormat
-      of cisArray: discard
+      of cisArray:
+        # No init needed for array types.
+        discard
       of cisSeq:
         firstCompIdInits.add(quote do:
-          `lcTypeIdent` = newSeq[`typeNameIdent`](1)
-          `aliveIdent` = newSeq[bool](1)
-          `instanceIds` = newSeq[int32](1)
+          `lcTypeIdent`.setLen 1
+          `aliveIdent`.setLen 1
+          `instanceIds`.setLen 1
         )
 
     # Ensure first component item is valid.
@@ -429,7 +446,8 @@ proc genTypeAccess*(): NimNode =
       # This component is owned by a system, so access templates need to
       # directly reference the owner system.
       let
-        ownerSystem = systemInfo[compInfo.systemOwner.int].instantiation
+        owner = compInfo.systemOwner
+        ownerSystem = systemInfo[owner.int].instantiation
         sysTupleFieldStr = typeNameStr.toLowerAscii
         sysTupleField = ident sysTupleFieldStr
         standAloneUpdate =
@@ -444,7 +462,7 @@ proc genTypeAccess*(): NimNode =
             quote do:
               `ownerSystem`.groups[`inst`.int].`sysTupleField` = `valueParam`
 
-      # Access the fields of the component in storage via the index.
+      # Dot overload to access the fields of the component in the owner system via the index.
       # Two approaches, via dot operators or building access templates for every field in this component (not recursive).
       case options.accessMethod
       of amDotOp:
@@ -460,13 +478,15 @@ proc genTypeAccess*(): NimNode =
               `perfRead`
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`
             else:
-              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              {.error: `invalidFieldPrefix` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              discard
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam`):
               `perfWrite`
               `ownerSystem`.groups[`inst`.int].`sysTupleField`.`fieldParam` = `valueParam`
             else:
-              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              {.error: `invalidFieldPrefix` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              discard
         )
         {.pop.}
       of amFieldTemplates:
@@ -483,7 +503,7 @@ proc genTypeAccess*(): NimNode =
           )
 
       typeAccess.add(quote do:
-        template ownedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = true
+        template isOwnedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = true
         template valid*(`inst`: `instanceTypeIdent`): bool =
           # TODO: Check generation.
           `inst`.int >= 0 and `inst`.int < `ownerSystem`.groups.len
@@ -495,13 +515,16 @@ proc genTypeAccess*(): NimNode =
         template generation*(inst: `instTypeNode`): untyped =
           ## Access the generation of this component.
           `generationTypeNode`(`instanceIds`[inst.int]).ComponentGeneration
-        template `createIdent`: untyped = discard
-        proc `deleteIdent`*(`instParam`: `instanceTypeIdent`) = discard
+        template `createIdent` = discard
+        template `deleteIdent`*(`instParam`: `instanceTypeIdent`) = discard
         ## Updating storage.
         ## `update` operates as a simple assignment into the storage array and therefore operates on the type's `==` proc.
         template update*(`instParam`: `instanceTypeIdent`, `valueParam`: `typeNameIdent`): untyped =
           `standAloneUpdate`
         template count*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): int = `ownerSystem`.count
+        ## Allows access to the owning system's `groups` field that stores components of this type.
+        template componentStorage*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `ownerSystem`.groups
+        template ownerSystemIndex*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `owner`.SystemIndex
       )
 
     else:
@@ -520,23 +543,7 @@ proc genTypeAccess*(): NimNode =
             quote do:
               `lcTypeIdent`[`instParam`.int] = `valueParam`
 
-      # Add a translation from the type of the component to the base storage array for it's data.
-      # This allows ComponentIndex.storage[some_index] to refer to other components of the same type.
-      typeAccess.add(quote do:
-        template storage*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`]): untyped = `lcTypeIdent`
-        )
-
-      # The user can choose whether they want to use dot operators or generate access templates for each field.
-      # Dot operators:
-      #   * Pros: Tend to work seamlessly with other templates and overloading resolution.
-      #   * Cons: Can get confused when chaining long sequences together (in which case, use `access`).
-      # Templates:
-      #   * Pros: In theory better direct replacement of statements so more able to chain without issue.
-      #   * Cons: In reality, variables with the same name as a template field can fail as ambiguous.
-      #   * We can replace templates with procs, but now we the overhead of new stack frames for each access (though
-      #     expect compiler to inline), and may also change semantics to copy instead of access.
-
-      # Access the fields of the component in storage via the index.
+      # Dot overload to access the fields of the component in the storage list via the index.
       # Two approaches, via dot operators or building access templates for every field in this component (not recursive).
       case options.accessMethod
       of amDotOp:
@@ -552,13 +559,15 @@ proc genTypeAccess*(): NimNode =
               `perfRead`
               `lcTypeIdent`[`inst`.int].`fieldParam`
             else:
-              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              {.error: `invalidFieldPrefix` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              discard
           template `dotEqOp`*(`inst`: `instanceTypeIdent`, `fieldParam`: untyped, `valueParam`: untyped): untyped =
             when compiles(`lcTypeIdent`[`inst`.int].`fieldParam`):
               `perfWrite`
               `lcTypeIdent`[`inst`.int].`fieldParam` = `valueParam`
             else:
-              {.error: `invalidField` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              {.error: `invalidFieldPrefix` & astToStr(`fieldParam`) & `invalidFieldPostfix`.}
+              discard
         )
         {.pop.}
       of amFieldTemplates:
@@ -575,7 +584,7 @@ proc genTypeAccess*(): NimNode =
 
       typeAccess.add(quote do:
         ## Converts the instance to a component storage directly.
-        template ownedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = false
+        template isOwnedComponent*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): bool = false
         template access*(instance: `instanceTypeIdent`): `typeNameIdent` = `lcTypeIdent`[instance.int]
         template alive*(inst: `instTypeNode`): bool =
           ## Check if this component ref's index is still in use.
@@ -584,6 +593,9 @@ proc genTypeAccess*(): NimNode =
         template generation*(inst: `instTypeNode`): untyped =
           ## Access the generation of this component.
           `generationTypeNode`(`instanceIds`[inst.int]).ComponentGeneration
+        ## Allows access to the base storage container that stores all components of this type.
+        template componentStorage*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `lcTypeIdent`
+        template ownerSystemIndex*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = InvalidSystemIndex
       )
 
       case options.componentStorageFormat
@@ -645,6 +657,7 @@ proc genTypeAccess*(): NimNode =
               # We need to reserve index zero for invalid component.
               # The free list is full, everything is free so we can reset the list.
               `freeIdxIdent`.setLen(0)
+              # TODO: Update other lists?
             else:
               # Add to free indexes.
               `freeIdxIdent`.add `delIdx`.`instanceTypeIdent`
@@ -801,7 +814,7 @@ proc genTypeAccess*(): NimNode =
   result.add genTypeClass(refTypeClassName(), true, refTypeNodes)
   result.add genTypeClass(instanceTypeClassName(), true, instanceTypeNode)
 
-  # Add an `add` for `ComponentList` that handles `typeId`
+  # Add an `add` for `ComponentList` that handles `typeId`.
   let
     allCompsTC = ident typeClassName()
     allInstTC = ident instanceTypeClassName()
