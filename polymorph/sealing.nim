@@ -1,7 +1,9 @@
 import
-  macros, sharedtypes, private/[utils, ecsstateinfo], components, entities, #systems,
-  statechanges, typetraits, runtimeconstruction
-import tables, strutils
+  macros, sharedtypes, private/[utils, ecsstateinfo], components, entities,
+  statechanges, runtimeconstruction
+import tables, strutils, stats
+from typetraits import tupleLen
+
 export
   onAddCallback, onRemoveCallback,
   onAdd, onRemove, onInit, onInterceptUpdate,
@@ -479,10 +481,12 @@ proc makeRuntimeDebugOutput: NimNode =
   let
     res = ident("result")
     entity = ident("entity")
-    strProcName = nnkAccQuoted.newTree(ident("$"))
     totalCount = systemInfo.len
     tsc = ident("totalSystemCount")
     strOp = nnkAccQuoted.newTree(ident "$")
+    componentIndexTC = ident instanceTypeClassName()
+    statsPush = bindSym("push", brClosed)
+    tupleLen = bindSym("tupleLen", brClosed)
 
   # Build static array of system components.
   var ownedComponents = nnkBracket.newTree()
@@ -556,6 +560,184 @@ proc makeRuntimeDebugOutput: NimNode =
     ## Total number of systems defined
     const `tsc`* = `totalCount`
   
+    proc analyseSystem*[T](sys: T, jumpThreshold: Natural = 0): SystemAnalysis =
+      ## Analyse a system for sequential component access by measuring
+      ## the difference between consecutively accessed memory addresses.
+      ## 
+      ## Address deltas greater than `jumpThreshold` are counted in the field
+      ## `forwardJumps`.
+      ## 
+      ## If `jumpThreshold` is zero, each component's `jumpThreshold` is set
+      ## to the size of the component type in bytes.
+      ## 
+      ## The ideal access pattern is generally forward sequential memory access,
+      ## minimising jumps and not moving backwards.
+      ## 
+      ## Passing `SystemAnalysis` to `$` outputs a string that includes
+      ## fragmentation metrics and distribution data.
+      ## 
+      ## Note that different systems may have different memory access patterns
+      ## to the same components. Systems and component storage generally takes
+      ## a "first come, first served" approach with regard to processing.
+      ## 
+      ## For example, if the first entity in a system list has component(s)
+      ## binding it to the system removed, then re-added, its position in the
+      ## system's processing order is likely to change even if the component(s)
+      ## added back have the same memory address as before, leading to
+      ## non-sequential access.
+
+      mixin name
+      result.name = sys.name
+
+      template getAddressInt(value: untyped): int =
+        var address: pointer
+        when value is `componentIndexTC`:
+          # Standard index components.
+          address = value.access.addr
+        else:
+          # Owned components.
+          address = value.unsafeAddr
+        cast[int](address)
+
+      const
+        # Even if groups.len == 0, we can still retrieve the type.
+        tupleLen = `tupleLen`(sys.groups[0].type)
+        # The tuple's entity field isn't included.
+        compCount = tupleLen - 1
+      result.components.setLen compCount
+      result.entities = sys.count
+
+      template component(idx): untyped = result.components[idx]
+
+      var
+        # Dummy tuple to iterate field details.
+        sysTuple: sys.tupleType
+        fieldIdx = 0
+
+      # Gather system tuple field info.
+      for field, value in sysTuple.fieldPairs:
+        when not(value is EntityRef):
+          when value is `componentIndexTC`:
+            # Indirection to component.
+            type valueType = value.access.type
+          else:
+            # Owned components.
+            type valueType = value.type
+
+          # We cannot necessarily use const here because the type's
+          # size may be run-time dependent, for instance {.importc.}
+          # types that are not marked with {.completeStruct.}.
+          let valueSize = valueType.sizeOf
+
+          component(fieldIdx).name = field
+          component(fieldIdx).valueSize = valueSize
+          component(fieldIdx).jumpThreshold =
+            if jumpThreshold == 0:
+              # For owned components, the minimum jump size is the
+              # next group item.
+              if value.isOwnedComponent: sysTuple.sizeOf
+              else: valueSize
+            else:
+              jumpThreshold
+
+          fieldIdx += 1
+
+      var lastAddresses: array[compCount, int]
+      let systemItems = sys.count
+
+      # Init lastAddresses with first row.
+      if systemItems > 1:
+
+        const startIdx =
+          # Owner systems skip the first item.
+          if sys.isOwner: 2
+          else: 1
+
+        fieldIdx = 0
+        for value in sys.groups[startIdx - 1].fields:
+          when not(value is EntityRef):
+            lastAddresses[fieldIdx] = value.getAddressInt
+            fieldIdx += 1
+
+        # Get address diffs.
+        for i in startIdx ..< systemItems:
+          fieldIdx = 0
+          for value in sys.groups[i].fields:
+            when not(value is EntityRef):
+              let
+                thresh = component(fieldIdx).jumpThreshold
+                address = getAddressInt(value)
+                diff = address - lastAddresses[fieldIdx]
+              var tagged: bool
+
+              component(fieldIdx).allData.`statsPush` diff
+
+              if diff < 0:
+                component(fieldIdx).backwardsJumps += 1
+                tagged = true
+              elif diff > thresh:
+                component(fieldIdx).forwardJumps += 1
+                tagged = true
+
+              if tagged:
+                component(fieldIdx).taggedData.`statsPush` diff
+
+              lastAddresses[fieldIdx] = address
+              fieldIdx += 1
+
+        for i, c in result.components:
+          component(i).fragmentation =
+            (c.backwardsJumps + c.forwardJumps).float / systemItems.float
+
+    proc `strOp`*(analysis: SystemAnalysis): string =
+      ## Outputs a string detailing a system analysis.
+      ## 
+      ## For each component in the system, fragmentation is calculated
+      ## as the ratio of non-consecutive vs consecutive address accesses
+      ## that the system makes.
+      ## 
+      ## A fragmentation of 0.0 means the system accesses this component
+      ## sequentially forward no greater than `jumpThreshold` per item.
+      ## 
+      ## A fragmentation of 1.0 means every consecutive address
+      ## accessed by the system for this component was greater than
+      ## the `jumpThreshold`, or travelling backwards in memory. 
+      ## 
+      ## The shape of the distribution of address accesses by this system
+      ## is described in the "Address deltas" section.
+      result = "Analysis for " & analysis.name &
+        " (" & $analysis.entities & " rows of " & $analysis.components.len & " components):\n"
+      if analysis.components.len == 0:
+        result &= "<No components found>\n"
+      else:
+        for c in analysis.components:
+          let
+            jt = c.jumpThreshold.float
+          proc dataStr(data: RunningStat): string =
+              "      Min: " & $data.min & ", max: " & $data.max & ", sum: " & $data.sum & "\n" &
+              "      Mean: " & $data.mean & ", std dev: " & $data.standardDeviation & "\n" &
+              "      Variance: " & $data.variance & "\n" &
+              "      Kurtosis/spread: " & $data.kurtosis & ", skewness: " & $data.skewness & "\n"
+
+          result &= "  " & c.name & ":\n" &
+            "    Fragmentation: " & $(c.fragmentation * 100.0) & "% (n = " & $c.taggedData.n & "):\n"
+          if c.taggedData.n > 0: result &=
+            "      Mean scale: " & $(c.taggedData.mean / jt) & " times threshold\n" &
+            c.taggedData.dataStr
+          else: result &=
+            "      <No fragmented indirections>\n"
+          
+          result &=
+            "    Value size: " & $c.valueSize & ", jump threshold: " & $c.jumpThreshold & "\n" &
+            "    Jumps over threshold : " & $c.forwardJumps & "\n" &
+            "    Backwards jumps      : " & $c.backwardsJumps & "\n" &
+            "    All address deltas (n = " & $c.allData.n & "):\n"
+          if c.allData.n > 0:
+            result &= c.allData.dataStr
+          else: result &=
+            "      <No data>\n"
+  )
+
   genLog "# Runtime debug output:\n", result.repr
 
 proc makeListSystem: NimNode =

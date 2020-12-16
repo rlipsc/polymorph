@@ -244,4 +244,30 @@ type
   ## Constructor called when `clone` is invoked.
   CloneConstructorProc* = proc (entity: EntityRef, component: ComponentRef): seq[Component]
 
+import stats
 
+type
+  ## This object stores information about the access pattern of a
+  ## component from a system.
+  ComponentAccessAnalysis* = object
+    name*: string
+    ## The minimum forward address delta to be included in `forwardJumps`.
+    ## When zero anything larger than the size of the type is included.
+    jumpThreshold*: int
+    ## SizeOf(T) for the component data.
+    valueSize*: int
+    ## How many lookups go backwards per component that might cause fetching.
+    backwardsJumps*: int
+    ## How many jumps in forward access that might cause fetching.
+    forwardJumps*: int
+    ## Average information on the system access pattern for this component.
+    allData*: RunningStat
+    taggedData*: RunningStat
+    ## The ratio of non-sequential vs sequential address accesses.
+    fragmentation*: float
+
+  ## Information about access patterns within a system obtained by `analyseSystem`.
+  SystemAnalysis* = object
+    name*: string
+    entities*: int
+    components*: seq[ComponentAccessAnalysis]
