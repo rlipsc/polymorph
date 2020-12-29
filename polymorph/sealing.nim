@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import
   macros, sharedtypes, private/[utils, ecsstateinfo], components, entities,
   statechanges, runtimeconstruction
@@ -70,7 +86,7 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
     ## Generate a reference to a particular instance of an entity.
     proc makeRef*(entityId: EntityId): EntityRef {.inline.} = (entityId, entityData(entityId).instance)
     proc entityCount*: int = `ecStateVarIdent`.entityCounter
-    ## Alive checks the entity id (the slot, not instance) is valid (not NO_ENTITY) and that it's index has been initialised.
+    ## Alive checks the entity id (the slot, not instance) is valid (not NO_ENTITY) and that its index has been initialised.
     template alive*(entity: EntityId): bool = entity.valid and entityData(entity).setup
     ## For an EntityRef, alive checks that the instance matches the referenced entity, ie; if
     ## the entity has been deleted/recreated since the reference was made, as well as checking
@@ -471,7 +487,7 @@ proc makeRuntimeTools(entOpts: ECSEntityOptions): NimNode =
     proc componentCount*: int = `compCount`
 
     template matchToSystems*(componentTypeId: ComponentTypeId, actions: untyped): untyped =
-      # Match a runtime componentTypeId with it's systems. Has to check all systems at runtime, so is slow.
+      # Match a runtime componentTypeId with its systems. Has to check all systems at runtime, so is slow.
       # This is intended for aiding debugging.
       forAllSystems:
         if componentTypeId in system.requirements:
@@ -875,7 +891,7 @@ proc makeCaseComponent(options: ECSEntityOptions, componentsToInclude: seq[Compo
   result = newStmtList()
   result.add(quote do:
     template caseComponent*(`id`: ComponentTypeId, `actions`: untyped): untyped =
-      ## Creates a case statement that matches `id` with it's component.
+      ## Creates a case statement that matches `id` with its component.
       ##
       ## Note:
       ## * Has no concept of entity, this is a static case statement with injected
@@ -949,7 +965,7 @@ proc makeMatchSystem*(systemsToInclude: seq[SystemIndex]): NimNode =
 
   result = quote do:
     template caseSystem*(`index`: SystemIndex, `actions`: untyped): untyped =
-      ## Creates a case statement that matches a `SystemIndex` with it's instantiation.
+      ## Creates a case statement that matches a `SystemIndex` with its instantiation.
       ## This generates a runtime case statement that will perform `actions`
       ## for all systems like so:
       ##  case index

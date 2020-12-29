@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import macros, sharedtypes, private/[utils, ecsstateinfo], components, strutils, tables, typetraits, sets
 
 macro componentToSysRequirements*(varName: untyped): untyped =
@@ -153,7 +169,7 @@ macro onSystemAddTo*(typeToUse: typedesc, systemName: static[string], actions: u
 macro onSystemRemove*(typeToUse: typedesc, actions: untyped): untyped =
   ## Add some code to be executed when a component of this type is removed from any system.
   ## The system variable is provided by the `curSystem` template.
-  ## Each invocation will append to the code that will be inserted.
+  ## Each invocation will append to the code to be inserted.
   let typeIndex = typeStringToId($typeToUse).int
   doAssert typeIndex != 0, "Cannot find type " & $typeToUse & " in registered components "
   
@@ -163,7 +179,7 @@ macro onSystemRemove*(typeToUse: typedesc, actions: untyped): untyped =
 macro onSystemRemoveFrom*(typeToUse: typedesc, systemName: static[string], actions: untyped): untyped =
   ## Add some code to be executed when a component of this type is removed from this system.
   ## The system variable is provided by the `curSystem` template.
-  ## Each invocation will append to the code that will be inserted.
+  ## Each invocation will append to the code to be inserted.
   let
     sysFound = findSystemIndex(systemName)
     typeIndex = typeStringToId($typeToUse)
@@ -770,16 +786,17 @@ proc makeAddComponents*(entOpts: ECSEntityOptions): NimNode =
     entity = ident "entity"
   quote do:
     macro addComponents*(`entity`: EntityRef, `componentList`: varargs[typed]): untyped =
-      ## Generates efficient system updates for a set of components.
-      ## Fetches are only performed if required components are not in the parameters.
+      ## Add components to an entity and update systems in one pass.
       doAddComponents(`entOpts`, `entity`, `componentList`)
 
     proc addComponent*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
+      ## Add a component to an entity and return the instance.
       entity.addComponents(component)[0]
 
     # TODO: addOrUpdate that allows granular updating fields rather than whole component item.
     proc addOrUpdate*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
-      ## This procedure allows you to forget about assertion failures due to duplicate adds.
+      ## Add `component` to `entity`, or if `component` already exists, overwrite it.
+      ## Returns the component instance.
       let fetched = entity.fetchComponent T.type
       if fetched.valid:
         # Replace original. No further work is required as the types or indexes have not been updated.
@@ -790,7 +807,7 @@ proc makeAddComponents*(entOpts: ECSEntityOptions): NimNode =
         entity.addComponent component
     
     proc addIfMissing*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
-      ## This procedure allows you to add a component only if it isn't already present.
+      ## Add a component only if it isn't already present.
       ## If the component is already present, no changes are made and an invalid result is returned.
       ## If the component isn't present, it will be added and the instance is returned.
       if not entity.hasComponent T.type:
@@ -948,7 +965,7 @@ proc makeRemoveComponentDirect*(entOpts: ECSEntityOptions): NimNode =
   #[
     Important note!
     If you call removeComponent whilst in a system using that component, the current `item` will change!
-    In this case, item.entity.removeComponent will cause item.entity and it's components to be different.
+    In this case, item.entity.removeComponent will cause item.entity and its components to be different.
     This happens because `entity.removeComponent` and `entity.delete` remove items from systems by swapping
     the item with the last one in the list and reducing the list length.
   ]#

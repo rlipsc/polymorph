@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import macros, strutils, strformat, components, typetraits, sequtils, times, sharedtypes,
   private/[ecsstateinfo, utils], tables
 import random
@@ -38,7 +54,7 @@ proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentType
   result.add(quote do:
     type
       `sysIdent`* = object
-        lastIndex*: int            ## Records the last item position processed for streaming.
+        lastIndex*: int           ## Records the last item position processed for streaming.
         streamRate*: Natural      ## Rate at which this system streams items by default, overridden if defined using `stream x:`.
         # TODO: Currently writable, use sys.name to get a generated constant by system type.
         systemName*: string       ## Name is automatically set up at code construction in defineSystem
@@ -58,8 +74,7 @@ proc makeSystemType(options: ECSSysOptions, sysIndex: SystemIndex, componentType
   let reqCount = systemInfo[sysIndex.int].requirements.len
   fields.add genField("requirements", false, genArray(reqCount, ident "ComponentTypeId"))
 
-  # Append groups field to system's type, depending on options.
-
+  # Append groups field to the system type, depending on options.
   case options.storageFormat
   of ssSeq:
     fields.add genField("groups", true, genSeq(tupleTypeIdent))
@@ -417,15 +432,15 @@ macro defineSystemOwner*(name: static[string], componentTypes: openarray[typedes
   result = createSysTuple(name, componentTypes, ownedComponents, nil, options)
 
 macro defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
-  ## Forward-define a system and it's types, providing extra fields to incorporate into the resultant system instance.
+  ## Forward-define a system and its types, providing extra fields to incorporate into the resultant system instance.
   result = createSysTuple(name, componentTypes, nil, extraFields, options)
 
 template defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions]): untyped =
-  ## Forward-define a system and it's types using options.
+  ## Forward-define a system and its types using options.
   defineSystem(name, componentTypes, options, nil)
 
 template defineSystem*(name: static[string], componentTypes: openarray[typedesc]): untyped =
-  ## Forward-define a system and it's types using the default system options.
+  ## Forward-define a system and its types using the default system options.
   defineSystem(name, componentTypes, defaultSystemOptions, nil)
 
 template updateTimings*(sys: untyped): untyped =

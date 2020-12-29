@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import macros, typetraits, strformat, sharedtypes, private/[utils, ecsstateinfo], strutils
 export macros
 
@@ -47,7 +63,7 @@ proc toString*(id: ComponentTypeId): string = componentNames()[id.int]
 
 ## Checks against invalid component (for example uninitialised data).
 ## This does not check to see if the component is alive in the system, only that it is semantically valid.
-## Used for example to check that fetchComponent has found it's value.
+## Used for example to check that fetchComponent has found its value.
 proc valid*(compRef: ComponentRef): bool = compRef.typeId != InvalidComponent and compRef.generation.int != InvalidComponentGeneration.int
 
 proc contains*(compRefs: ComponentList, typeId: ComponentTypeId): bool {.inline.} =
@@ -282,10 +298,10 @@ proc generateTypeStorage*(): NimNode =
     typeUtils.add makeRefCompInit(refInitPrefix, typeNameStr, typeId.int)
     
     typeUtils.add(quote do:
-      ## Compile-time translation between a user's type/container type to it's instance type.
+      ## Compile-time translation between a user's type/container type to its instance type.
       ## Useful for converting a ComponentIndex into direct storage access.
       template instanceType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`]): untyped = `instTypeNode`
-      ## Compile-time translation between a user's type to it's container `ref` type.
+      ## Compile-time translation between a user's type to its container `ref` type.
       template containerType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instTypeNode`]): untyped = `refTypeNameIdent`
       ## Create a `ref` container from a user object.
       template makeContainer*(`tyParam`: `typeNameIdent`): `refTypeNameIdent` =
@@ -609,7 +625,7 @@ proc genTypeAccess*(): NimNode =
         )
 
       let
-        # delIdx is the index of the component in it's storage.
+        # delIdx is the index of the component in its storage.
         delIdx = ident "idx"
         storageHigh = newDotExpr(lcTypeIdent, ident "high")
         freeIdxLen = quote do: `freeIdxIdent`.len
@@ -727,8 +743,8 @@ proc genTypeAccess*(): NimNode =
         proc `createIdent`*: `instanceTypeIdent` =
           ## Create a component instance for this type.
           # This proc is generated for each type to use the separate storage locations.
-          # This involves either popping an index from the component's free list or incrementing it's next value counter,
-          # then setting it's alive index to true.
+          # This involves either popping an index from the component's free list or incrementing its next value counter,
+          # then setting its alive index to true.
           `res` = `rawCreate`
           `userInitCode`
         proc `deleteIdent`*(`instParam`: `instanceTypeIdent`) =

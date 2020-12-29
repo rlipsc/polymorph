@@ -1,3 +1,19 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
 import debugging, tables, deques, sequtils, sets
 export debugging
@@ -32,7 +48,7 @@ var
   # These variables allow adapting system code generation when systems request to change entity state.
   # * entity.delete called within a system body invokes a check to ensure index is within length each iteration.
   #   This is required because delete cannot know at compile time what components an entity might have, and if
-  #   the entity is part of this system. Thus to prevent the user deleting entities in front of it's iteration path,
+  #   the entity is part of this system. Thus to prevent the user deleting entities in front of its iteration path,
   #   and causing its own index to be invalid, the length must be checked each iteration.
   #   This check isn't needed if you remove components the system doesn't use, and can be avoided by for entity
   #   deletes by performing them outside of an `all` or `stream` block, such as in `finish`.
