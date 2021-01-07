@@ -497,6 +497,7 @@ proc makeRuntimeDebugOutput: NimNode =
   let
     res = ident("result")
     entity = ident("entity")
+    strProcName = nnkAccQuoted.newTree(ident("$"))
     totalCount = systemInfo.len
     tsc = ident("totalSystemCount")
     strOp = nnkAccQuoted.newTree(ident "$")
@@ -752,7 +753,6 @@ proc makeRuntimeDebugOutput: NimNode =
             result &= c.allData.dataStr
           else: result &=
             "      <No data>\n"
-  )
 
   genLog "# Runtime debug output:\n", result.repr
 
