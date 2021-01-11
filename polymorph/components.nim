@@ -229,6 +229,34 @@ proc doRegisterComponents(options: ECSCompOptions, body: NimNode): NimNode =
   let previousComponentsDeclared = typeInfo.len
 
   for tyDef in body.typeDefs:
+    # Handle {.notComponent.} for simplifying ad hoc types used
+    # inside registerComponents.
+    const
+      notComponentStr = "notComponent"
+      pragExpr = 0
+      pragmaList = 1
+
+    var notComponent = -1
+    
+    if tyDef[pragExpr].kind == nnkPragmaExpr:
+      tyDef[pragExpr].expectMinLen 2
+      let pragma = tyDef[pragExpr][pragmaList]
+      pragma.expectKind nnkPragma
+      if pragma.len > 0:
+        for i in 0 ..< pragma.len:
+          if pragma[i].strVal == notComponentStr:
+            notComponent = i
+            break
+
+      if notComponent > -1:
+        # Remove {.notComponent.} from typeDef and ignore.
+        pragma.del(notComponent)
+        if pragma.len == 0:
+          # Remove empty pragma declaration and transpose ident.
+          let pragmaIdent = 0
+          tyDef[pragExpr] = tyDef[pragExpr][pragmaIdent]
+        continue
+
     let
       typeNameIdent = tyDef.nameNode()
       typeNameStr = $typeNameIdent
