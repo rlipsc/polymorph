@@ -575,8 +575,12 @@ proc generateSystem(name: string, componentTypes: NimNode, options: ECSSysOption
       item[1].expectKind nnkStmtList
       finishBody.add(code)
     of addedStr:
+      if systemInfo[sysIndex].sealed:
+        error "This ECS has been sealed with makeEcs() and system added events cannot be changed"
       systemInfo[sysIndex].onAdded.add code
     of removedStr:
+      if systemInfo[sysIndex].sealed:
+        error "This ECS has been sealed with makeEcs() and system removed events cannot be changed"
       systemInfo[sysIndex].onRemoved.add code
     of streamStr:
 
