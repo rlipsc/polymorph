@@ -7,4 +7,4 @@ license       = "Apache License 2.0"
 requires "nim >= 1.0.0"
 
 task test, "Test suite":
-  exec "nim c -r tests/testall"
+  exec "nim c -d:debug -r tests/testall"
