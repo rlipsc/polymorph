@@ -14,83 +14,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, strutils, typetraits, ../sharedtypes, tables, ecsstateinfo
-import debugging, tables, deques, sequtils, sets
+import macros, strutils, typetraits, ../sharedtypes, tables, ecsstatedb
+import debugging, tables, deques, sequtils, sets, macrocache
 export debugging
 
 #[
-  This module covers shared internal utilities.
+  This module covers shared internal tools and utilities used to build
+  the ECS code.
   
   *This module is not exported to the user*.
-
-  * Procs used to generate consistent field and type names
-  * Macro generation utils
+  
+  Topics:
+  
+  - Procs used to generate consistent field and type names.
+  - Structural generation through various levels of abstraction.
+  - Building user event calls.
+  - Compile time utilities for inspecting and building types.
+  - Walking system ownership graphs to find dependencies.
 ]#
 
-var
-  # Current range of component id's that have yet to be sealed.
-  ecsComponentsToBeSealed* {.compileTime.}: seq[ComponentTypeId]
-  # Currently sealed components: it's an error to try to create systems with these
-  # as their component state operations have already been generated.
-  ecsSealedComponents* {.compileTime.}: Table[ComponentTypeId, bool]
-  # Current range of systems that have yet to be processed by `makeEcs`.
-  ecsSystemsToBeSealed* {.compileTime.}: seq[SystemIndex]
-  # Current range of systems that need their procs committed.
-  ecsSysUncommitted* {.compileTime.}: seq[SystemIndex]
-
-  # Systems that have had their type and instance defined.
-  ecsSysDefined* {.compileTime.}: Table[SystemIndex, bool]
-  # Systems that have been output by commitSystems().
-  ecsSysBodiesAdded* {.compileTime.}: Table[SystemIndex, bool]
-  # Raw component type definition AST.
-  componentDefinitions* {.compileTime.}: seq[NimNode]
-
-  # These variables allow adapting system code generation when systems request to change entity state.
-  # * entity.delete called within a system body invokes a check to ensure index is within length each iteration.
-  #   This is required because delete cannot know at compile time what components an entity might have, and if
-  #   the entity is part of this system. Thus to prevent the user deleting entities in front of its iteration path,
-  #   and causing its own index to be invalid, the length must be checked each iteration.
-  #   This check isn't needed if you remove components the system doesn't use, and can be avoided by for entity
-  #   deletes by performing them outside of an `all` or `stream` block, such as in `finish`.
-
-  # Current state of generation.
-  inSystem* {.compileTime.}: bool
-  inSystemAll* {.compileTime.}: bool
-  inSystemStream* {.compileTime.}: bool
-  inSystemDeleteRow* {.compileTime.}: bool
-  # Which system we're building.
-  inSystemIndex* {.compileTime.}: SystemIndex
-  # Control iteration generation.
-  sysCheckLengthPerIter* {.compileTime.}: bool
-  sysRemoveAffectedThisSystem* {.compileTime.}: bool
-  systemCalledDelete* {.compileTime.}: bool
-  systemCalledDeleteEntity* {.compileTime.}: bool
-  # State tracking.
-  readsFrom* {.compiletime.}: seq[ComponentTypeId]
-  writesTo* {.compiletime.}: seq[ComponentTypeId]
-
-  # Perform one log clear per unique path.
-  logInitialised* {.compileTime.}: Table[string, bool]
-
-proc findSystemIndex*(name: string): tuple[found: bool, index: int] {.compileTime.} =
-  for idx, item in systemInfo:
-    if name.toLowerAscii == item.systemName.toLowerAscii:
-      return (true, idx)
+proc findSystemIndex*(id: EcsIdentity, name: string): tuple[found: bool, index: SystemIndex] {.compileTime.} =
+  result[1] = id.findSysIdx(name)
+  result[0] = result[1] != InvalidSystemIndex
 
 const
-  # This is the postfix for both the instantiated storage variable and typename created for component storage.
+  # This is the postfix for both the instantiated storage variable
+  # and typename created for component storage.
   storageName* = "componentStorage"
   invalidComponentStr* = "<Invalid Component>"
 
 type
   TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
-  SystemBlockKind* = enum sbkInit, sbkStart, sbkAll, sbkStream, sbkFinish, sbkAdded, sbkRemoved
-
-# Systems
-var
-  # Idents of run procedures.
-  runAllDoProcsNode* {.compileTime.} = newStmtList()
-
+  SystemBlockKind* = enum
+    sbkInit, sbkStart, sbkAll, sbkStream, sbkFinish,
+    sbkAdded, sbkRemoved, sbkAddedCallback, sbkRemovedCallback
 
 # Type names derived from user types
 
@@ -142,17 +99,21 @@ proc nextInstanceName*(typeName: string): string = typeName.toLowerAscii() & "Ne
 proc systemTypeName*(name: string): string = name.capitalizeAscii() & "System"
 proc systemInitName*(name: string): string = "init" & name.capitalizeAscii() & "System"
 
+proc systemAddedCBName*(name: string): string = name & "AddedCallback"
+proc systemRemovedCBName*(name: string): string = name & "RemovedCallback"
+
 const
   sysVarPrefix = "sys"
   tupleNamePrefix = "SysTuple"  # capitalisation for type
   doProcPrefix = "do"
   instPostfix* = "Inst"
 
-proc tupleName*(name: string): string = tupleNamePrefix & name.capitalizeAscii
-proc doProcName*(name: string): string = doProcPrefix & name.capitalizeAscii
-proc systemVarName*(name: string): string = sysVarPrefix & name.capitalizeAscii
-proc addCallbackName*(name: string): string = "addCallback" & name
-proc removeCallbackName*(name: string): string = "removeCallback" & name
+func tupleName*(name: string): string = tupleNamePrefix & name.capitalizeAscii
+func doProcName*(name: string): string = doProcPrefix & name.capitalizeAscii
+func systemVarName*(name: string): string = sysVarPrefix & name.capitalizeAscii
+func addCallbackName*(name: string): string = "addCallback" & name
+func removeCallbackName*(name: string): string = "removeCallback" & name
+func systemStr*(name: string): string = name & " (" & systemVarName(name) & ")"
 
 # Type classes that cover component types. These are useful for parameter constraint.
 
@@ -163,9 +124,40 @@ proc refTypeClassName*: string = "ComponentRefTypeClass"
 ## The name of the type class that covers all the distinct int types.
 proc instanceTypeClassName*: string = "ComponentIndexTypeClass"
 
-
+#-------------
 # Entity utils
+#-------------
 
+proc maxEntLen*(options: ECSEntityOptions): NimNode =
+  ## Returns a statement that gets the maximum number of entities based on options.
+  let ecStateVarIdent = ident(entityStorageVarName())
+  case options.entityStorageFormat
+  of esSeq: newEmptyNode()
+  of esArray:
+    quote do: `ecStateVarIdent`.entityComponents.len
+  of esPtrArray:
+    quote do: `ecStateVarIdent`.entityComponents[].len
+
+proc entityIdUpperBound*(storageFormat: ECSEntityItemStorage): NimNode =
+  ## Returns a statement that gets the highest entityId currently available.
+  let ecStateVarIdent = ident(entityStorageVarName())
+  case storageFormat
+  of esSeq:
+    quote do: `ecStateVarIdent`.entityComponents.len
+  of esArray, esPtrArray:
+    quote do: `ecStateVarIdent`.nextEntityId.IdBaseType - 1
+
+proc entAccess*(options: ECSEntityOptions, entIdent: NimNode): NimNode =
+  ## Access the entity component item via an entity ref, based on options
+  ## This is wrapped by `entityData()` and used any time an entity's state is accessed.
+  let ecStateVarIdent = ident(entityStorageVarName())
+  case options.entityStorageFormat
+  of esSeq, esArray:
+    quote do:
+      `ecStateVarIdent`.entityComponents[`entIdent`.int]
+  of esPtrArray:
+    quote do:
+      `ecStateVarIdent`.entityComponents[][`entIdent`.int]
 
 proc addComponentRef*(entity: NimNode, componentRef: NimNode, options: ECSEntityOptions): NimNode =
   # Insert a component to entity storage. Doesn't touch systems, doesn't update the set for hasComponent.
@@ -185,32 +177,28 @@ proc addComponentRef*(entity: NimNode, componentRef: NimNode, options: ECSEntity
       entityData(`entity`.entityId).nextCompIdx = newIdx + 1
       entityData(`entity`.entityId).componentRefs[newIdx] = `componentRef`
 
-proc addToEntityList*(entity: NimNode, passed: seq[ComponentTypeId], entOpts: ECSEntityOptions): NimNode =
+proc addToEntityList*(id: EcsIdentity, entity: NimNode, passed: seq[ComponentTypeId]): NimNode =
   # Add to the entity's component list.
   result = newStmtList()
 
   for typeId in passed:
     let
-      typeStr = typeInfo.typeName typeId
+      typeStr = id.typeName typeId
       fieldName = typeStr.toLower
       fieldIdent = ident fieldName & instPostfix
-    result.add addComponentRef(entity, newDotExpr(fieldIdent, ident "toRef"), entOpts)
+    result.add addComponentRef(entity, newDotExpr(fieldIdent, ident "toRef"), id.entityOptions)
 
-proc entSetIncl*(entOpts: ECSEntityOptions, entityId: NimNode, setVal: NimNode): NimNode =
+proc entSetIncl*(entityId: NimNode, setVal: NimNode): NimNode =
   ## If `useSet` is true the set is updated with `setVal`,
   ## otherwise it does nothing.
-  if entOpts.useSet:
-    quote do:
-      entityData(`entityId`).exists.incl `setVal`
-  else: newEmptyNode()
+  quote do:
+    entityData(`entityId`).exists.incl `setVal`
 
-proc entSetExcl*(entOpts: ECSEntityOptions, entityId: NimNode, setVal: NimNode): NimNode =
+proc entSetExcl*(entityId: NimNode, setVal: NimNode): NimNode =
   ## If `useSet` is true `setVal` is removed from the set,
   ## otherwise it does nothing.
-  if entOpts.useSet:
-    quote do:
-      entityData(`entityId`).exists.excl `setVal`
-  else: newEmptyNode()
+  quote do:
+    entityData(`entityId`).exists.excl `setVal`
 
 proc componentRefsLen*(entityIdIdent: NimNode, options: ECSEntityOptions): NimNode =
   # This returns the number of items in the entity's componentRefs list, however that may be stored.
@@ -219,23 +207,57 @@ proc componentRefsLen*(entityIdIdent: NimNode, options: ECSEntityOptions): NimNo
     quote:
       entityData(`entityIdIdent`).componentRefs.len
   of csArray:
-    # The array book-keeps it's highest value.
+    # The array book-keeps its highest value.
     quote:
       entityData(`entityIdIdent`).nextCompIdx
 
+#------------------
+# System type utils
+#------------------
 
-# System utils
-
-
-iterator systemTypesStr*(systemIndex: SystemIndex): string =
+iterator systemTypesStr*(id: EcsIdentity, systemIndex: SystemIndex): string =
   # Utility function to yield the name of the types used in the system specified by systemIndex.
-  for id in systemInfo[systemIndex.int].requirements:
-    yield typeInfo.typeName id
+  for compId in id.ecsSysRequirements(systemIndex):
+    yield id.typeName(compId)
 
-iterator systemTypesStrPair*(systemIndex: SystemIndex): tuple[typeName: string, id: ComponentTypeId] =
+iterator systemTypesStrPair*(id: EcsIdentity, systemIndex: SystemIndex): tuple[typeName: string, id: ComponentTypeId] =
   ## Utility function to yield the name and type id of the types used in the system specified by systemIndex.
-  for id in systemInfo[systemIndex.int].requirements:
-    yield (typeName: typeInfo.typeName id, id: id)
+  for compId in id.ecsSysRequirements(systemIndex):
+    yield (typeName: id.typeName(compId), id: compId)
+
+#-------------------
+# User event storage
+#-------------------
+
+proc getCompEvent*(typeName, event: string): NimNode =
+  let key = CacheSeq("comp" & typeName & event)
+  result = newStmtList()
+  for event in key.items:
+    result.add event
+
+proc addCompEvent*(typeName, event: string, value: NimNode) =
+  let key = CacheSeq("comp" & typeName & event)
+  key.add value
+
+proc numCompEvents*(typeName, event: string): int =
+  ("comp" & typeName & event).len
+
+proc getSysEvent*(sysName, event: string): NimNode =
+  let key = CacheSeq("sys" & sysName & event)
+  result = newStmtList()
+  for event in key.items:
+    result.add event
+
+proc addSysEvent*(sysName, event: string, value: NimNode) =
+  let key = CacheSeq("sys" & sysName & event)
+  key.add value
+
+proc numSysEvents*(sysName, event: string): int =
+  ("sys" & sysName & event).len
+
+#------------
+# Index utils
+#------------
 
 proc indexRead*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
   case options.indexFormat
@@ -246,8 +268,8 @@ proc indexRead*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
     quote do:
       `sysNode`.index[`entIdNode`.int].row
 
-proc indexWrite*(sysNode, entIdNode, rowNode: NimNode, options: ECSSysOptions): NimNode =
-  case options.indexFormat
+proc indexWrite*(sysNode, entIdNode, rowNode: NimNode, idxFmt: ECSSysIndexFormat): NimNode =
+  case idxFmt
   of sifTable:
     quote do:
       `sysNode`.index[`entIdNode`] = `rowNode`
@@ -255,8 +277,8 @@ proc indexWrite*(sysNode, entIdNode, rowNode: NimNode, options: ECSSysOptions): 
     quote do:
       `sysNode`.index[`entIdNode`.int] = (true, `rowNode`.Natural)
 
-proc indexHasKey*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
-  case options.indexFormat
+proc indexHasKey*(sysNode, entIdNode: NimNode, idxFmt: ECSSysIndexFormat): NimNode =
+  case idxFmt
   of sifTable:
     quote do:
       `sysNode`.index.hasKey(`entIdNode`)
@@ -264,8 +286,8 @@ proc indexHasKey*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode 
     quote do:
       `sysNode`.index[`entIdNode`.int].exists
 
-proc indexDel*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
-  case options.indexFormat
+proc indexDel*(sysNode, entIdNode: NimNode, idxFmt: ECSSysIndexFormat): NimNode =
+  case idxFmt
   of sifTable:
     quote do:
       `sysNode`.index.del(`entIdNode`)
@@ -273,8 +295,8 @@ proc indexDel*(sysNode, entIdNode: NimNode, options: ECSSysOptions): NimNode =
     quote do:
       `sysNode`.index[`entIdNode`.int].exists = false
 
-proc indexTryGet*(sysNode, entIdNode, rowNode: NimNode, options: ECSSysOptions): NimNode =
-  case options.indexFormat
+proc indexTryGet*(sysNode, entIdNode, rowNode: NimNode, idxFmt: ECSSysIndexFormat): NimNode =
+  case idxFmt
   of sifTable:
     quote do:
       `rowNode` = `sysNode`.index.getOrDefault(`entIdNode`, -1)
@@ -285,23 +307,26 @@ proc indexTryGet*(sysNode, entIdNode, rowNode: NimNode, options: ECSSysOptions):
       `rowNode` = rowData.row
       rowData.exists
 
-proc updateIndex*(entity: NimNode, sys: SystemIndex, row: NimNode, sysOpts: ECSSysOptions): NimNode =
+proc updateIndex*(id: EcsIdentity, entity: NimNode, sys: SystemIndex, row: NimNode): NimNode =
   ## Update the system index with the entity.
   let
-    systemNode = systemInfo[sys.int].instantiation
+    systemNode = id.instantiation(sys)
     entId = quote do: `entity`.entityId
-  result = systemNode.indexWrite(entId, row, sysOpts)
+  result = systemNode.indexWrite(entId, row, id.indexFormat(sys))
 
-proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
-  ## Adds any user code for `onSystemAddTo` and `onSystemAdd`.
-  let sysNode = systemInfo[sys.int].instantiation
-  var
-    addTemplates: bool
-    addedCode = newStmtList()
+#------------------
+# Adding components
+#------------------
 
-  if systemInfo[sys.int].onAddToCode.len > 0:
-    # Check if matches a specific system and component type.
-    let userAddToSys = systemInfo[sys.int].onAddToCode.getOrDefault(typeId)
+proc addUserCompAddToSys*(id: EcsIdentity, currentNode: var NimNode, ent: NimNode, sys: SystemIndex, typeId: ComponentTypeId, fieldIdent: NimNode) =
+  ## Adds user events for components that use `onSystemAddTo` and `onSystemAdd`.
+  let sysNode = id.instantiation(sys)
+  var addedCode = newStmtList()
+
+  if id.len_onAddToCode(sys, typeId) > 0:
+
+    # Event triggered if system and component type match.
+    let userAddToSys = id.onAddToCodeNode(sys, typeId)
     
     if userAddToSys != nil:
       addedCode.add(quote do:
@@ -312,12 +337,11 @@ proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, t
           `userAddToSys`
       )
 
-  let userAddSys = typeInfo[typeId.int].onAddAnySystemCode
+  let userAddSys = id.onAddAnySystemCodeNode(typeId)
   
   if userAddSys.len > 0:
     # Check for this type's initialiser.
-    let sysNode = systemInfo[sys.int].instantiation
-    if currentNode.len == 0: addTemplates = true
+    let sysNode = id.instantiation(sys)
     addedCode.add(quote do:
       block:
         template curEntity: EntityRef {.used.} = `ent`
@@ -330,21 +354,24 @@ proc addUserSysCode*(currentNode: var NimNode, ent: NimNode, sys: SystemIndex, t
   if addedCode.len > 0:
     currentNode.add addedCode
 
-proc ownedUserInitEvents*(sys: SystemIndex, sysTupleVar, curComp: NimNode, typeId: ComponentTypeId, entity, value: NimNode): tuple[onAdd, onInit, onUpdate: NimNode] =
+proc ownedUserInitEvents*(id: EcsIdentity, sys: SystemIndex, sysTupleVar, curComp: NimNode, typeId: ComponentTypeId, entity, value: NimNode): tuple[onAdd, onInit, onUpdate: NimNode] =
   ## Whereas un-owned components handle their user initialisation
   ## events within the component creation procedure, owned components
   ## don't have init procedures and so need to invoke this inline.
-  template compInfo: auto = typeInfo[typeId.int]
   let
-    typeStr = compInfo.typeName
+    typeStr = id.typeName(typeId)
     lcTypeStr = typeStr.toLower
     typeField = ident lcTypeStr
-    ownedByThisSystem = compInfo.systemOwner == sys
+    ownedByThisSystem = id.systemOwner(typeId) == sys
+
+    onAddToEnt = id.onAddToEntCodeNode(typeId)
+    onInit = id.onInitCodeNode(typeId)
+    onInterceptInit = id.onInterceptValueInitCodeNode(typeId)
 
   let
     onAddCode =
-      if ownedByThisSystem and compInfo.onAddToEntCode.len > 0:
-        let userCode = compInfo.onAddToEntCode
+      if ownedByThisSystem and onAddToEnt.len > 0:
+        let userCode = onAddToEnt
         quote do:
           block:
             template curComponent: untyped {.used.} = `curComp`
@@ -353,8 +380,8 @@ proc ownedUserInitEvents*(sys: SystemIndex, sysTupleVar, curComp: NimNode, typeI
       else: newStmtList()
     
     userInitCode =
-      if ownedByThisSystem and compInfo.onInitCode.len > 0:
-        let code = compInfo.onInitCode
+      if ownedByThisSystem and onInit.len > 0:
+        let code = onInit
         quote do:
           block:
             template curEntity: untyped {.used.} = `entity`
@@ -364,27 +391,60 @@ proc ownedUserInitEvents*(sys: SystemIndex, sysTupleVar, curComp: NimNode, typeI
         newStmtList()
 
     updateCode =
-      if ownedByThisSystem and compInfo.onInterceptValueInitCode.len > 0:
+      if ownedByThisSystem and onInterceptInit.len > 0:
         # It's now the user's responsibility to call commit.
-        let code = compInfo.onInterceptValueInitCode
+        let code = onInterceptInit
         quote do:
           block:
             template curEntity: untyped {.used.} = `entity`
-            template curValue: untyped {.used.} = `value`
-            template commit(value: untyped) {.used.} =
+            template curValue: untyped = `value`
+            template commit(value: untyped) =
               `sysTupleVar`.`typeField` = value
             `code`
       else: newStmtList()
   
   (onAddCode, userInitCode, updateCode)
 
-proc updateOwnedComponentState*(typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
+proc userSysAdded*(id: EcsIdentity, sys: SystemIndex, row: NimNode): NimNode =
+  ## Invoke code defined in the system's `added:` section.
+  let
+    echoRunning = id.echoRunning(sys)
+    sysName = id.getSystemName(sys)
+    sysVar = id.instantiation(sys)
+  result = newStmtList()
+  if id.len_onAdded(sys) > 0:
+
+    let
+      doEcho =
+        if echoRunning != seNone:
+          quote do:
+            echo `sysName` & " adding entry"
+        else: newEmptyNode()
+
+      userAddedEvent = id.onAddedNode(sys)
+
+    result.add(quote do:
+      block:
+        let item {.inject, used.} = `sysVar`.groups[`row`].addr
+        template sys: untyped {.used.} = `sysVar`
+        template groupIndex: untyped {.used.} = `row`
+        `doEcho`
+        `userAddedEvent`
+    )
+
+  if id.len_onAddedCallback(sys) > 0:
+    let cbEvent = ident sysName.systemAddedCBName
+    result.add(quote do:
+      `cbEvent`(`sysVar`, `row`)
+    )
+
+proc updateOwnedComponentState*(id: EcsIdentity, typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
   ## Update state variables outside of entity and system storage.
   let
-    typeStr = typeInfo.typeName typeId
+    typeStr = id.typeName typeId
     aliveIdent = ident aliveStateInstanceName(typeStr)
     instanceIdent = ident instanceIdsName(typeStr)
-    compOpts = typeInfo[typeId.int].options
+    compOpts = id.getOptions(typeId)
 
   case compOpts.componentStorageFormat
   of cisSeq:
@@ -409,34 +469,10 @@ proc addToSystemTuple*(systemNode: NimNode, value: NimNode, sysOpts: ECSSysOptio
         `systemNode`.groups[`systemNode`.nextFreeIdx] = `value`
         `systemNode`.nextFreeIdx += 1
 
-proc sysInvokeAdded*(sys: SystemIndex, row: NimNode): NimNode =
-  ## Invoke code defined in the system's `added:` section.
-  let
-    echoRunning = systemInfo[sys.int].options.echoRunning
-    sysName = systemInfo[sys.int].systemName
-    sysVar = systemInfo[sys.int].instantiation
-  result = newStmtList()
-  if systemInfo[sys.int].onAdded.len > 0:
-    let
-      doEcho =
-        if echoRunning != seNone:
-          quote do:
-            echo `sysName` & " adding entry"
-        else: newEmptyNode()
-      userAddedEventCode = systemInfo[sys.int].onAdded
-    result.add(quote do:
-      block:
-        template item: untyped {.used.} = `sysVar`.groups[`row`]
-        template sys: untyped {.used.} = `sysVar`
-        `doEcho`
-        `userAddedEventCode`
-    )
-
-proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): tuple[sysUpdates, userEvents: NimNode, eventsExist: bool] =
+proc addSysTuple*(id: EcsIdentity, entity: NimNode, sys: SystemIndex, componentsPassed: seq[ComponentTypeId], componentValues: NimNode | seq[NimNode], postFix = instPostfix): tuple[sysUpdates, userEvents: NimNode, eventsExist: bool] =
   ## Assumes you have a generated variable that matches each field in the system tuple already defined.
-  let
-    sysOpts = systemInfo[sys.int].options
-    sysVar = systemInfo[sys.int].instantiation
+  ## Eg; a system using components `A` and `B` will have variables `a: AInstance` and `b: BInstance`.
+  let sysVar = id.instantiation(sys)
 
   # Generate system tuple assignment.
   var
@@ -445,65 +481,371 @@ proc genSystemUpdate*(entity: NimNode, sys: SystemIndex, componentsPassed: seq[C
     userSysAddCode = newStmtList()
 
   sysTuple.add nnkExprColonExpr.newTree(ident "entity", entity)
-  for fields in sys.systemTypesStrPair:
+  for fields in id.systemTypesStrPair(sys):
     let
       tupleFieldStr = fields.typeName.toLowerAscii()
       tupleFieldIdent = ident tupleFieldStr
       compSource = ident tupleFieldStr & postfix
-      compInfo = typeInfo[fields.id.int]
     
-    if compInfo.systemOwner == sys:
+    if id.systemOwner(fields.id) == sys:
       let compIdx = componentsPassed.find(fields.id)
-      assert compIdx >= 0, "Error: Cannot find owned field for " & compInfo.typeName & " within " & componentValues.repr
+      assert compIdx >= 0, "Error: Cannot find owned field for " & id.typeName(fields.id) & " within " & componentValues.repr
 
       # Owned components are directly assigned to the tuple from the parameter list.
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, componentValues[compIdx])
 
       let sysHigh = quote: `sysVar`.count
-      updateOwnedState.add fields.id.updateOwnedComponentState(sys, sysHigh)
+      updateOwnedState.add id.updateOwnedComponentState(fields.id, sys, sysHigh)
 
     else:
       sysTuple.add nnkExprColonExpr.newTree(tupleFieldIdent, compSource)
 
-    # Add user events.
-    userSysAddCode.addUserSysCode(entity, sys, fields.id, compSource)
-
-  # Add the tuple of components to the system groups list.
-  let updateGroup = sysVar.addToSystemTuple(sysTuple, sysOpts)
+    # Add user events for this component being added to the system.
+    id.addUserCompAddToSys(userSysAddCode, entity, sys, fields.id, compSource)
 
   let
+    # Get code to add the tuple of components to the system groups list.
+    updateGroup = addToSystemTuple(sysVar, sysTuple, id.getOptions(sys))
+
+    # Code for updating the system index.
     entIdIdent = quote do: `entity`.entityId
     row = quote do: `sysVar`.high
-    updateIndex = sysVar.indexWrite(entIdIdent, row, sysOpts)
-    userAddedEvent = sys.sysInvokeAdded(row)
+    updateIndex = sysVar.indexWrite(entIdIdent, row, id.indexFormat(sys))
+
+    userAddedEvents = id.userSysAdded(sys, row)
+    # userAddedCBEvents =
+    #   if id.len_onAddedCallback(sys) > 0:
+    #     let
+    #       sysName = id.getSystemName sys
+    #       cbName = ident systemAddedCBName(sysName)
+    #     quote do:
+    #       `cbName`(`sysVar`, `row`)
+    #   else:
+    #     newStmtList()
 
   result.sysUpdates = quote do:
     `updateOwnedState`
     `updateGroup`
     `updateIndex`
+
   result.userEvents = quote do:
     `userSysAddCode`
-    `userAddedEvent`
-  result.eventsExist = userAddedEvent.len > 0 or userSysAddCode.len > 0
+    `userAddedEvents`
+    #`userAddedCBEvents`
+
+  result.eventsExist = userAddedEvents.len > 0 or
+    userSysAddCode.len > 0
+
+#------------------
+# Removing components
+#------------------
+
+proc removeComponentRef*(entityId, index: NimNode, componentTypeId: int, componentStorageFormat: ECSCompStorage): NimNode = 
+  # Removes a component from entity storage.
+  # * Doesn't touch systems
+  # * Doesn't update the intset for hasComponent.
+
+  let remIdx =
+    if componentStorageFormat == csTable:
+      quote do: `componentTypeId`.ComponentTypeId
+    else:
+      newIntLitNode(componentTypeId)
+
+  case componentStorageFormat
+  of csTable:
+    # No error if key doesn't exist.
+    quote do:
+      entityData(`entityId`).componentRefs.del(`remIdx`)
+  of csArray:
+    quote do:
+      let curHigh = entityData(`entityId`).nextCompIdx - 1
+    
+      if `index` < curHigh:
+        # Swap last item with this one.
+        entityData(`entityId`).componentRefs[`index`] = entityData(`entityId`).componentRefs[curHigh]
+      # Cull length
+      entityData(`entityId`).nextCompIdx -= 1
+  of csSeq:
+    quote do:
+      # Cull length
+      entityData(`entityId`).componentRefs.del(`index`)
+
+proc removeSysReference*(id: EcsIdentity, systemIndex: SystemIndex, sys, sysRowExists, rowIdent, entIdIdent, entity: NimNode): NimNode =
+  ## Remove an entity's tuple from a system.
+  # - Does not update the entity's storage.
+  # - Does not add events.
+
+  let
+    topIdxIdent = ident "topIdx"
+    updatedRowEntIdent = ident "updatedRowEnt"
+    updatedEntId = newDotExpr(updatedRowEntIdent, ident "entityId")
+    # updates index with entity id to group row.
+    idxFmt = id.indexFormat(systemIndex)
+    setIndex = sys.indexWrite(updatedEntId, rowIdent, idxFmt)
+    entOpts = id.entityOptions
+    maxEntId = entityIdUpperBound(entOpts.entityStorageFormat)
+
+  let
+    trimGroup = 
+      case id.storageFormat(systemIndex)
+      of ssSeq:
+        quote do:
+          let `topIdxIdent` = `sys`.groups.len - 1
+
+          if `rowIdent` < `topIdxIdent`:
+
+            #for i, row in `sys`.groups:
+            #  assert row[0].entityId.int != 0
+
+            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
+            # Get entity that's been moved.
+            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`].entity
+            
+            assert `updatedRowEntIdent`.alive, "Internal error: Dead entity in system groups: id = " &
+              $`updatedRowEntIdent`.entityId.int &
+              ", current entity id upper bound = " & $`maxEntId`
+
+            # Update the index for the moved row
+            `setIndex`
+
+          assert `sys`.groups.len > 0, " System \"" & `sys`.name &
+            "\" has empty group but is scheduled to delete from row " &
+            $`rowIdent` & ". Top row is " & $`topIdxIdent`
+          `sys`.groups.setLen(`sys`.groups.len - 1)
+
+      of ssArray:
+        quote do:
+          let `topIdxIdent` = `sys`.nextFreeIdx - 1
+          if `rowIdent` < `topIdxIdent`:
+            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
+            # Get entity that's been moved.
+            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`][0]
+            # Update the index for the moved row
+            `setIndex`
+
+          `sys`.nextFreeIdx -= 1
+
+  let delIndex = sys.indexDel(entIdIdent, idxFmt)
+  let r = quote do:
+    if `sysRowExists`:
+      `delIndex`
+      `trimGroup`
+  r
+
+
+proc userRemoveFromEntity*(id: EcsIdentity, ent, compRef: NimNode, typeId: ComponentTypeId): NimNode =
+  # Remove events code by component.
+  let
+    isOwned = id.systemOwner(typeId) != InvalidSystemIndex
+    tyName = id.typeName(typeId)
+
+    onRemoveFromEnt = id.onRemoveFromEntCodeNode(typeId)
+    onRemoveCallback = id.onRemoveCallbackNode(typeId)
+  
+  var userEvents = newStmtList()
+
+  if not isOwned and onRemoveFromEnt.len > 0:
+    if onRemoveFromEnt.len > 0:
+      userEvents.add newBlockStmt(onRemoveFromEnt)
+
+  if onRemoveCallback.len > 0:
+    let
+      cbProcName = ident removeCallbackName(tyName)
+      tyInstance = ident instanceTypeName(tyName)
+    
+    userEvents.add(quote do:
+      `cbProcName`(`ent`, `tyInstance`(`compRef`.index)))
+
+  if userEvents.len > 0:
+    let tyInstance = ident instanceTypeName tyName
+    quote do:
+      block:
+        ## Current component being removed from entity.
+        template curComponent: untyped {.used.} = `tyInstance`(`compRef`.index)
+        `userEvents`
+  else:
+    newStmtList()
+
+
+proc userSysRemoved*(id: EcsIdentity, systemIndex: SystemIndex, sys, rowIdent, entIdIdent, entity: NimNode, sysOpts: ECSSysOptions): NimNode =
+  ## Add user events for being removed from system.
+  let
+    sysName = id.getSystemName(systemIndex)
+    assertItem =
+      if id.assertItem(systemIndex): quote do:
+        if `rowIdent` > `sys`.high:
+          assert false,
+            "'item' in " & `sys`.name & " is out of bounds. " &
+            "Use of 'item' after remove/delete affected this system?"
+      else:
+        newStmtList()
+
+    userAccessTmpls = quote do:
+      ## Access to the current row's entity.
+      template curEntity: untyped {.used.} = `sys`.groups[`rowIdent`].entity
+      ## Current system item.
+      template item: untyped {.used.} =
+        `assertItem`
+        `sys`.groups[`rowIdent`]
+      ## Currently updating system variable.
+      template sys: untyped {.used.} = `sys`
+      template curSystem: untyped {.used.} = `sys`
+      template groupIndex: untyped {.used.} = `rowIdent`
+
+  var userRemovedEvents = newStmtList()
+
+  if id.len_onRemoved(systemIndex) > 0:
+    # Add code defined in the system's `removed:` section.
+    let
+      doEcho =
+        if sysOpts.echoRunning != seNone:
+          quote do:
+            echo `sysName` & " removing entry event"
+        else:
+          newEmptyNode()
+
+      sysRemovedEvent = id.onRemovedNode(systemIndex)
+
+    userRemovedEvents.add(quote do:
+      block:
+        `doEcho`
+        `sysRemovedEvent`
+    )
+
+  if id.len_onRemovedCallback(systemIndex) > 0:
+    # Add code defined in the system's `removedCallback:` section.
+    let 
+      doEcho =
+        if sysOpts.echoRunning != seNone:
+          quote do:
+            echo `sysName` & " removing entry callback event"
+        else:
+          newEmptyNode()
+
+      sysRemovedEventCB =
+        if id.len_onRemovedCallback(systemIndex) > 0:
+          let eventProc = ident systemRemovedCBName(sysName)
+          quote do:
+            `eventProc`(`sys`, `rowIdent`)
+        else:
+          newStmtList()
+
+    userRemovedEvents.add(quote do:
+      block:
+        `doEcho`
+        `sysRemovedEventCB`
+    )
+  
+  # Call relevant events for components leaving the system.
+  for typeId in id.ecsSysRequirements(systemIndex):
+    let
+      typeName = id.typeName(typeId)
+      #instType = ident instanceTypeName(typeName)
+      fieldIdent = ident typeName.toLowerAscii()
+      
+      onRemoveAny = id.onRemoveAnySystemCodeNode(typeId)
+      onRemoveFromEntCode = id.onRemoveFromEntCodeNode(typeId)
+      onFinalisationCode = id.onFinalisationCodeNode(typeId)
+      userSysRemFrom = id.onRemoveFromCodeNode(systemIndex, typeId)
+
+      curCompTemplate =
+        quote do:
+          ## Component being removed from this system.
+          template curComponent: untyped {.used.} = `sys`.groups[`rowIdent`].`fieldIdent`
+
+    if userSysRemFrom.len > 0:
+      userRemovedEvents.add(quote do:
+        block:
+          `curCompTemplate`
+          `userSysRemFrom`
+      )
+
+    if onRemoveAny.len > 0:
+      let sysRem = onRemoveAny
+      if sysRem.len > 0:
+        userRemovedEvents.add(quote do:
+          block:
+            `curCompTemplate`
+            `sysRem`
+        )
+
+    if id.systemOwner(typeId) == systemIndex:
+      # This system owns the component.
+      # For owned components the entity removal event happens in-place
+      # as it will soon be destroyed.
+      if onRemoveFromEntCode.len > 0:
+        let compEvent = onRemoveFromEntCode
+        if compEvent != nil:
+          userRemovedEvents.add(quote do:
+            block:
+              `curCompTemplate`
+              `compEvent`
+          )
+      if onFinalisationCode.len > 0:
+        # Only owner systems are finalised here, non-owned components
+        # may be used outside of an entity and their finalisation is
+        # called within the component's delete proc.
+        let compEvent = onFinalisationCode
+        if compEvent != nil:
+          userRemovedEvents.add(quote do:
+            block:
+              `curCompTemplate`
+              `compEvent`
+          )
+
+  if userRemovedEvents.len > 0:
+    quote do:
+      `userAccessTmpls`
+      `userRemovedEvents`
+  else:
+    newStmtList()
 
 
 # Type utils
 
-iterator commaSeparate*[T: ComponentTypeId or SystemIndex](list: seq[T] or set[T]): string =
+iterator unsealedComponents*(id: EcsIdentity): ComponentTypeId =
+  let sealedComponents = id.ecsSealedComponents
+  for typeId in id.ecsComponentsToBeSealed:
+    if typeId notin sealedComponents:
+      yield typeId
+
+proc unsealedComponentCount*(id: EcsIdentity): int =
+  for typeId in id.unsealedComponents:
+    result += 1
+
+proc allUnsealedComponents*(id: EcsIdentity): seq[ComponentTypeId] =
+  for typeId in id.unsealedComponents:
+    result.add typeId
+
+iterator unsealedSystems*(id: EcsIdentity): SystemIndex =
+  let definedSystems = id.ecsSysDefined
+  for sysId in definedSystems:
+    if not id.sealed(sysId):
+      yield sysId
+
+proc allUnsealedSystems*(id: EcsIdentity): seq[SystemIndex] =
+  for sysId in id.unsealedSystems:
+    result.add sysId
+
+proc unsealedSystemCount*(id: EcsIdentity): int =
+  for sysId in id.unsealedSystems:
+    result += 1
+
+iterator commaSeparate*[T: ComponentTypeId or SystemIndex](id: EcsIdentity, list: seq[T] or set[T]): string =
   ## Common function to produce a string of comma separated ComponentTypeIds.
   var comma: bool
   for v in list:
     let str =
-      when T is ComponentTypeId: typeInfo.typeName v
-      else: systemInfo[v.int].systemName
+      when T is ComponentTypeId: id.typeName v
+      else: id.getSystemName v
     if comma: yield ", " & str
     else:
       comma = true
       yield str
 
-proc commaSeparate*[T: ComponentTypeId or SystemIndex](list: seq[T] or set[T]): string {.compileTime.} =
+proc commaSeparate*[T: ComponentTypeId or SystemIndex](id: EcsIdentity, list: seq[T] or set[T]): string {.compileTime.} =
   ## Common function to produce a string of comma separated ComponentTypeIds.
-  for s in list.commaSeparate: result &= s
+  for s in id.commaSeparate(list): result &= s
 
 iterator typeDefs*(body: NimNode): NimNode =
   ## Return the nnkTypeDef nodes in a body.
@@ -579,7 +921,7 @@ proc getFieldsFromTypeDef(typeDefNode: NimNode): tuple[typeName: string, fields:
         result.fields.add (field[i].baseName, fType)
 
   else:
-    echo "Unknown kind: " & $tyNode.kind
+    echo "getFieldsFromTypeDef: Unknown kind: " & $tyNode.kind
 
 proc getFields*(node: NimNode, typeName: string = ""): TypeFields =
   ## Process a node to extract typeDefs or tuple fields.
@@ -597,7 +939,7 @@ proc getFields*(node: NimNode, typeName: string = ""): TypeFields =
   of nnkTypeDef:
     return node.getFieldsFromTypeDef()
   else:
-    echo "Cannot process node: " & node.treerepr
+    echo "getFields: Cannot process node: " & node.treerepr
 
 proc extractNode(chkNode: NimNode): NimNode =
   let tyNode = chkNode[2]
@@ -739,7 +1081,8 @@ proc assignmentType*(valueNode: NimNode): NimNode =
   of nnkFloatLit..nnkFloat64Lit: ident "float"
   of nnkStrLit..nnkTripleStrLit: ident "string"
   else:
-    valueNode.getType()
+    nnkTypeOfExpr.newTree(valueNode)
+      
 
 import os
 
@@ -748,10 +1091,6 @@ const
   loggingOn* = false
   consistencyChecking* = false
   defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
-
-when defined(debugComponentGeneration):
-  ## Compile-time code generation logging data.
-  var logData* {.compileTime.}: seq[string]
 
 when loggingOn:
   const runtimeLogFilename = getProjectPath() / "component_runtime_log.txt"
@@ -772,65 +1111,92 @@ macro log*(params: varargs[untyped]): untyped =
       runtimeLogFile.writeLine(`s` & "\n")
     )
 
-template genLog*(params: varargs[string]) =
+#-------------------------------------------------------------------------
+# Compile time logging to macrocache to be written as run time file output
+#-------------------------------------------------------------------------
+
+proc genLog*(id: static[EcsIdentity], params: varargs[string]) {.compileTime.} =
   ## Allows macros to generate a log that is then written to file.
-  when defined(debugComponentGeneration):
+  when defined(ecsLogCode):
     var s = ""
     for item in params:
       s &= $item
-    logData.add s & "\n"
+    s &= "\n"
+    id.add_codeLog s
 
-macro startGenLog*(fileName: static[string]): untyped =
+macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
   ## Empties log file.
   result = newStmtList()
-  when defined(debugComponentGeneration):
-    let fn = newLit fileName    
+  when defined(ecsLogCode):
+    let fn = newLit fileName
     result = quote do:
       let f = `fn`.open(fmWrite)
       f.close
       echo "Cleared log file \"", `fn`, "\""
 
-macro flushGenLog*(fileName: static[string]): untyped =
+proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
   ## Write log to file.
   ## Because we cannot `import c` at compile time and write the log then,
   ## we build the code to statically write the log at run time...
-  ## This means a lot of text stored in your program exe before it's
-  ## written to the actual log file, so is hidden behind the onerously
-  ## long `-d:debugComponentGeneration` flag.
+  ## This means a lot of text stored in your program exe before its
+  ## written to the actual log file at run time start up.
+  ## To activate the code log pass `-d:ecsLogCode` flag when compiling.
   result = newStmtList()
-  when defined(debugComponentGeneration):
-    let fn = newLit fileName
-    
-    # `$logData` doesn't convert `\n` to EOL so we add by line at compile time.
+  when defined(ecsLogCode):
     var logText = ""
-    for line in logData:
-      logText &= line
-    let text = newLit logText
-
-    # Generate *runtime* file output of static log string.
-    result = quote do:
-      let
-        f = `fn`.open(fmAppend)
-        total = `text`.len
-      try:
-        f.write(`text`)
-      finally:
-        f.close
-      echo "Added to log at ", `fn`, ": ", total, " characters written "
+    let
+      fn = newLit fileName
+      log = id.codeLog()
+      start = id.codeLogStart()
+      newLogItems = log[start .. ^1]
     
-    logData.setLen 0
+    if newLogItems.len > 0:
+      for line in newLogItems:
+        logText &= line
+      let text = newLit logText
 
-proc flushGenLog*() =
-  flushGenLog(defaultGenLogFilename)
+      # Update new log start index.
+      id.set_codeLogStart id.len_codeLog()
 
-proc startGenLog*() =
-  flushGenLog(defaultGenLogFilename)
+      echo "Recording log from line " & $start & " to " &
+        $newLogItems.len & ", " & $logText.len & " bytes"
 
-proc genInfixes*(clauses: seq[NimNode], connector: string): NimNode =
+      # Generate *runtime* file output of static log string.
+      result.add(quote do:
+        let
+          f = `fn`.open(fmAppend)
+          total = `text`.len
+        try:
+          f.write(`text`)
+        finally:
+          f.close
+        
+        echo "Appended to ECS generation log '", `fn`, "': ", total, " characters written"
+      )
+
+template genLog*(params: varargs[string]) =
+  genLog(defaultIdentity, params)
+
+template startGenLog*(fileName: static[string]): untyped =
+  startGenLog(defaultIdentity, fileName)
+
+template startGenLog*() =
+  startGenLog(defaultGenLogFilename)
+
+#---------------
+# Type utilities
+#---------------
+
+proc genInfixes*(clauses: seq[NimNode] | HashSet[NimNode], connector: string): NimNode =
   ## Creates a tree of infix clauses to match the clauses list.
-  var parent = clauses[0]
-  for i in 1 ..< clauses.len:
-    parent = infix(parent, connector, clauses[i])
+  assert clauses.len > 0
+
+  var parent = newEmptyNode()
+  for c in clauses:
+    if parent.kind == nnkEmpty:
+      parent = c
+    else:
+      parent = infix(parent, connector, c)
   parent
 
 proc genTypeClass*(name: string, public: bool, nodeList: openarray[NimNode]): NimNode =
@@ -851,7 +1217,6 @@ proc genTypeClass*(name: string, public: bool, nodeList: openarray[NimNode]): Ni
     tcn = newIdentNode(name)
   result = quote do:
     type `tcn` = `parent`
-  genLog "# Typeclass:\n", result.repr
 
 proc fill*[T](val: var T, node: NimNode) =
   ## Will try to fill the fields of `val` with equivalent fields in `node`.
@@ -879,7 +1244,9 @@ proc fill*[T](val: var T, node: NimNode) =
           else:
             error "Unhandled type for fill: " & $curVal.kind
 
-# System relationships
+#-------------------------
+# System ownership mapping
+#-------------------------
 
 proc toSeq*[T](v: HashSet[T]): seq[T] =
   result.setLen v.len
@@ -888,7 +1255,7 @@ proc toSeq*[T](v: HashSet[T]): seq[T] =
     result[i] = item
     i += 1
 
-proc dependentOwners*(id: ComponentTypeId): seq[SystemIndex] =
+proc calcDependentOwners*(id: EcsIdentity, typeId: ComponentTypeId): seq[SystemIndex] =
   ## Returns owner systems that have dependent owned components
   ## in a chain from this component.
   ## 
@@ -920,18 +1287,18 @@ proc dependentOwners*(id: ComponentTypeId): seq[SystemIndex] =
 
   proc queueDependents(sys: SystemIndex) =
     # Add any systems directly referencing owned components of `sys`.
-    for component in systemInfo[sys.int].ownedComponents:
+    for component in id.ecsOwnedComponents(sys):
       if component notin visitedComps:
         visitedComps.incl component
 
-        for linkedSys in typeInfo[component.int].systems:
+        for linkedSys in id.systems(component):
           if linkedSys notin queuedSystems:
             queuedSystems.incl linkedSys
             systemsToVisit.addLast linkedSys
 
-  let owner = typeInfo[id.int].systemOwner
+  let owner = id.systemOwner(typeId)
   # Only owned components require graph traversal.
-  if owner != InvalidSystemIndex and typeInfo[id.int].systems.len > 0:
+  if owner != InvalidSystemIndex and id.len_systems(typeId) > 0:
     owner.queueDependents
 
     while systemsToVisit.len > 0:
@@ -939,5 +1306,5 @@ proc dependentOwners*(id: ComponentTypeId): seq[SystemIndex] =
       resultSystems.incl sys
       sys.queueDependents
 
-  let systemsUsingSourceType = typeInfo[id.int].systems.toHashSet
+  let systemsUsingSourceType = id.systems(typeId).toHashSet
   toSeq(resultSystems - systemsUsingSourceType)

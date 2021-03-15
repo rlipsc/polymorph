@@ -52,8 +52,6 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
       sys.deletedCount = 0
       sys.removedCount = 0
     all:
-      # We perform removal after damage application, but before expansion has occurred.
-      # This ensures that every instance of a radius gets damage applied.
       if sys.counter mod testDeleteMods[0] == 0:
         sys.deletedCount.inc
         deleteEntity()
@@ -236,7 +234,7 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
 
       proc expectedIterations(c: int): int =
         ## Models the number of iterations a system takes
-        ## to delete all it's entities, given a set pattern.
+        ## to delete all its entities, given a set pattern.
         var
           x = c
           i: int

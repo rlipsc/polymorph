@@ -1,5 +1,5 @@
 import polymorph, types
 
-defineSystem("incValue", [Value, IncValue])
-defineSystem("addValue", [Value, AddValue])
+id.defineSystem("incValue", [Value, IncValue])
+id.defineSystem("addValue", [Value, AddValue])
 

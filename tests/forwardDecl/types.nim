@@ -1,8 +1,11 @@
 import polymorph
 
-const maxEnts* = 10_000
+const
+  maxEnts* = 10_000
 
-registerComponents(maxEnts):
+const id* = newEcsIdentity("fwdDecl")
+
+id.registerComponents(ECSCompOptions()):
   type
     Value* = object
       amount*: int

@@ -14,37 +14,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+import macros, ecsstatedb
 
-proc debugMsg*(prefix, msg: string) =
-  ## Report the string `s` along with the line number and proc it was invoked outside of Polymorph.
-  let entries = getStackTraceEntries()
+when defined(ecsLogDetails):
+  from strutils import capitalizeAscii
 
-  const
-    sourcePath = currentSourcePath()
-    sourceRoot = sourcePath.parentDir.parentDir.splitPath[0]
+proc startOperation*(id: EcsIdentity, op: string) {.compileTime.} = 
 
-  # Find first stack line outside of the current source directory.
-  var stackIdx: int
-  for idx in countDown(entries.high, 0):
+  id.set_ecsCurrentOperation op
+
+  when defined(ecsLogDetails):
     let
-      fn = $entries[idx].filename
-      dir = fn.parentDir.splitPath[1]
-    if dir[0..min(dir.high, sourceRoot.high)] != sourceRoot:
-      stackIdx = idx
-      break
-  let
-    stack = entries[stackIdx]
-    fnStr = $(stack.filename)
-    fn = fnStr.extractFilename 
-    debugPrefix = prefix & ": [" & fn & " in " & $stack.procname & ", line: " & $stack.line & "]: "
-  debugEcho debugPrefix & msg
+      curOp = id.ecsCurrentOperation()
+      curIndent = id.ecsCurrentOperationIndent()
+      newIndent = curIndent & "  "
+    id.set_ecsCurrentOperationIndent newIndent
+    debugEcho curIndent & "[ ", capitalizeAscii(curOp) & " ]"
 
-template debugPerformance*(msg: string) =
-  when defined(debugSystemPerformance):
-    debugEcho "Performance: ", msg
+proc endOperation*(id: EcsIdentity) {.compileTime.} = 
 
-template debugPerformanceAtLine*(msg: string) =
-  when defined(debugSystemPerformance):
-    debugMsg "Performance", msg
+  when defined(ecsLogDetails):
+    let
+      curOp = id.ecsCurrentOperation()
+      curIndent = id.ecsCurrentOperationIndent()
+      newIndent =
+        if curIndent.len > 2:
+          curIndent[2..^1]
+        else:
+          ""
+    id.set_ecsCurrentOperationIndent newIndent
+
+  id.set_ecsCurrentOperation ""
+
+template debugPerformance*(id: EcsIdentity, msg: string) =
+  when defined(ecsPerformanceHints):
+    debugEcho "Performance: " & id.ecsCurrentOperationIndent() & msg
+
+proc ecsOperation*(id: EcsIdentity, opName: string, code: NimNode): NimNode =
+  quote do:
+    static: startOperation(EcsIdentity(`id`), `opName`)
+    `code`
+    static: endOperation(EcsIdentity(`id`))
+
+template ecsBuildOperation*(id: EcsIdentity, opName: string, code: untyped): untyped =
+  startOperation(id, opName)
+  code
+  endOperation(id)
 

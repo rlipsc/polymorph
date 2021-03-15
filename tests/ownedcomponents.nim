@@ -39,7 +39,7 @@ defineSystemOwner("fullyOwned", [A, B, C, D], [A, B, C, D], sysOpts)
 defineSystem(     "refToOwned1", [A, B, C, D], sysOpts )
 defineSystem(     "refToOwned2", [A, B], sysOpts )
 # Combining ownership.
-# This system overlaps owned [C, D] from `fullyOwned` with it's own
+# This system overlaps owned [C, D] from `fullyOwned` with its own
 # owned components.
 defineSystemOwner("partiallyOwned", [C, D, E, F], [E, F], sysOpts)
 # Standard system for balance.
