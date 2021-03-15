@@ -18,7 +18,6 @@
   Everything in this module is exported to the user.
 ]#
 
-
 # ECS generation options and types.
 type
   ECSCompStorage* = enum csSeq, csArray, csTable
@@ -28,11 +27,11 @@ type
   ECSErrorResponses* = object
     ## Note that with cdRaise, the component list is searched for duplicates each
     ## time a component is added, even with release/danger.
-    duplicates*: ECSErrorResponse # TODO
-    entityOverflow*: ECSErrorResponse
-    caseComponent*: ECSErrorResponse
-    caseSystem*: ECSErrorResponse
-    incompleteOwned*: ECSErrorResponse
+    errDuplicates*: ECSErrorResponse  # TODO
+    errEntityOverflow*: ECSErrorResponse
+    errCaseComponent*: ECSErrorResponse
+    errCaseSystem*: ECSErrorResponse  # TODO
+    errIncompleteOwned*: ECSErrorResponse
 
   ECSEntityOptions* = object
     ## Controls the maximum amount of entities to be instantiated at any one time.
@@ -58,18 +57,18 @@ type
     ## adding often checked/fetched components first, so finding them can return
     ## earlier.
     ## Component lists defined as a table will probably find the set unnecessary.
-    ## Note that using hasComponent often can imply the need for a new system with
-    ## that component which will remove this cost.
+    ## Note that using hasComponent often can imply the need for a new system
+    ## incorporating these components.
     # TODO: Add ability to mark components as priority for inserting them at the
     # start of an entity's list rather than the end.
     useSet*: bool
     errors*: ECSErrorResponses
 
-
   # Component storage options
-  ECSAccessMethod* = enum amDotOp, amFieldTemplates
+  ECSAccessMethod* = enum amDotOp
   ECSCompItemStorage* = enum cisSeq, cisArray
   ECSCompRecyclerFormat* = enum crfArray, crfSeq
+  ECSCompInvalidAccess* = enum iaIgnore, iaAssert
   ECSCompOptions* = object
     ## The prefix added to init constructors, eg for "init"; `initMyComp`.
     initPrefix*: string
@@ -89,6 +88,8 @@ type
     clearAfterDelete*: bool
     ## Declare the component arrays as {.threadVar.}
     useThreadVar*: bool
+    ##
+    invalidAccess*: ECSCompInvalidAccess
 
   # System storage options
   ECSSysStorage* = enum ssSeq, ssArray
@@ -109,6 +110,8 @@ type
     useThreadVar*: bool
     ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
     echoRunning*: ECSSysEcho
+    ## Add asserts to check `item` is within bounds.
+    assertItem*: bool
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect
@@ -174,10 +177,11 @@ const
   defaultSystemOptions* = dynamicSizeSystem()
 
 # Base Polymorph types.
+
 type
   # Base type for all ids.
   IdBaseType* = int32
-  ## Used to look up systems in allSystemsNode
+  ## Index representing a system.
   SystemIndex* = distinct int
 
   EntityId* = distinct IdBaseType
@@ -207,10 +211,10 @@ type
   ## transforming the type at compile time to an index into the storage array that contains the
   ## component.
   ## For run-time operations on component ids, use `caseComponent` and pass the ComponentTypeId
-  ComponentIndex* = distinct int32
+  ComponentIndex* = distinct IdBaseType
   ## Instance count, incremented when the slot is used.
   ## This is used to protect against referencing a deleted component with the same slot index.
-  ComponentGeneration* = distinct int32
+  ComponentGeneration* = distinct IdBaseType
   ## Allows reference to particular instances of a component.
   ## Component references are how indexes/keys to different components are stored, passed about, and fetched.
   ## Not to be confused with the reference type `Component`.
@@ -226,10 +230,9 @@ type
 const
   InvalidComponent* = 0.ComponentTypeId
   InvalidComponentIndex* = 0.ComponentIndex
-  InvalidComponentInstance* = 0.ComponentGeneration
   InvalidComponentGeneration* = 0.ComponentGeneration
-  InvalidComponentRef*: ComponentRef = (InvalidComponent, InvalidComponentIndex, InvalidComponentInstance)
-  InvalidSystemIndex* = SystemIndex(-1)
+  InvalidComponentRef*: ComponentRef = (InvalidComponent, InvalidComponentIndex, InvalidComponentGeneration)
+  InvalidSystemIndex* = SystemIndex(0)
   
   ## An EntityId of zero indicates uninitialised data
   NO_ENTITY* = 0.EntityId
@@ -244,6 +247,8 @@ const
 func `==`*(s1, s2: SystemIndex): bool {.inline.} = s1.int == s2.int
 
 func `==`*(c1, c2: ComponentTypeId): bool = c1.int == c2.int
+func `==`*(i1, i2: ComponentIndex): bool = i1.int == i2.int
+func `==`*(g1, g2: ComponentGeneration): bool = g1.int == g2.int
 
 ## Entities start at 1 so a zero EntityId is invalid or not found
 func `==`*(e1, e2: EntityId): bool {.inline.} = e1.IdBaseType == e2.IdBaseType
@@ -252,6 +257,8 @@ func `==`*(e1, e2: EntityRef): bool {.inline.} =
 template valid*(entityId: EntityId): bool = entityId != NO_ENTITY
 template valid*(entity: EntityRef): bool = entity != NO_ENTITY_REF
 
+# Construction.
+
 type
   ## Constructor called on first create.
   ConstructorProc* = proc (entity: EntityRef, component: Component, master: EntityRef): seq[Component]
@@ -259,6 +266,8 @@ type
   PostConstructorProc* = proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
   ## Constructor called when `clone` is invoked.
   CloneConstructorProc* = proc (entity: EntityRef, component: ComponentRef): seq[Component]
+
+# Fragmentation analysis.
 
 import stats
 

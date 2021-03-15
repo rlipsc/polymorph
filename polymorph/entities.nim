@@ -14,17 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, sharedtypes, private/[utils, ecsstateinfo]
+import macros, sharedtypes, private/[utils, ecsstatedb]
 
-proc genComponentSet: NimNode =
+proc genComponentSet(id: EcsIdentity): NimNode =
   ## Generate an enum that covers all of the components seen so far.
   var items = nnkEnumTy.newTree()
   items.add newEmptyNode()
   items.add(ident "ceInvalid")
-  for tId in ecsComponentsToBeSealed:
+  
+  for tId in id.unsealedComponents:
     items.add(
       nnkEnumFieldDef.newTree(
-        ident "ce" & typeInfo.typeName tId,
+        ident "ce" & id.typeName tId,
         newIntLitNode(tId.int)
       )
     )
@@ -40,8 +41,9 @@ proc recyclerType(options: ECSEntityOptions): NimNode =
     let maxEnts = options.maxEntities
     quote do: array[0..`maxEnts`, EntityId]
 
-proc makeEntityItems*(options: ECSEntityOptions): NimNode =
+proc makeEntityItems*(id: EcsIdentity): NimNode =
   ## Create the type that holds data per entity and supporting entity utilities.
+  let options = id.entityOptions
   if options.maxEntities == 0:
     if options.entityStorageFormat in [esArray, esPtrArray]:
       error "Entity generation: maxEntities cannot be zero when using a fixed size storage format type such as " & $options.entityStorageFormat
@@ -50,7 +52,6 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
     if options.recyclerFormat == rfArray:
       error "Entity generation: maxEntities cannot be zero when using a fixed size recycler format type such as " & $options.recyclerFormat
 
-  echo "=== Entity generation options ===\n", options.repr
   let
     entityStorageType = entityStorageTypeName()
     entityStorageItemType = entityStorageItemTypeName()
@@ -77,7 +78,7 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
       of esPtrArray:
         quote do:
           `initParamName`.entityComponents = cast[`entityStorageContainerName`](alloc0(sizeOf(`entityStorageContainerName`)))
-    componentSet = genComponentSet()
+    componentSet = id.genComponentSet()
     setType = ident enumName()
     recycler = recyclerType(options)
 
@@ -98,7 +99,7 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
         # You can use them to update component data via entity if needed.
         # Do not modify the list though, as this will put systems out of sync.
         # whether the entity is 'alive'.
-        setup: bool
+        setup*: bool
         # instance is incremented each time a new entity is generated,
         # this allow testing to ensure the entityId you're referring to 
         # hasn't been deleted and recreated at this index.
@@ -122,6 +123,7 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
       `entCompInit`
       `initParamName`.nextEntityId = FIRST_ENTITY_ID
 
+  # Extend storage type fields.
   var
     storageItemsFields = result.recList(entityStorageItemType)
     storageFields = result.recList(entityStorageType)
@@ -150,4 +152,3 @@ proc makeEntityItems*(options: ECSEntityOptions): NimNode =
   of csTable:
     storageItemsFields.add genField(componentRefsStr, true, quote do: Table[ComponentTypeId, ComponentRef])
 
-  genLog "# Entity Items:", result.repr
