@@ -773,7 +773,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           const identity = EcsIdentity(`id`)
           identity.set_onRemovedSource InvalidSystemIndex
           endOperation(identity)
-      sysVar = id.instantiation(sysIndex)
     const
       msgSealed = "This ECS has been sealed with makeEcs() and system '$1' events cannot be changed"
       msgSealedAdded = msgSealed % "added"

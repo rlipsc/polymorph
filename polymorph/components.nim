@@ -222,7 +222,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
       pragma.expectKind nnkPragma
       if pragma.len > 0:
         for i in 0 ..< pragma.len:
-          if pragma[i].strVal == notComponentStr:
+          if pragma[i].kind == nnkIdent and pragma[i].strVal == notComponentStr:
             notComponent = i
             break
 
