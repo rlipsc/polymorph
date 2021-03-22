@@ -24,6 +24,7 @@ export
   onAddCallback, onRemoveCallback,
   onAdd, onRemove, onInit, onInterceptUpdate, onUpdate,
   onSystemAdd, onSystemAddTo, onSystemRemove, onSystemRemoveFrom,
+  onEntityChange,
   ecsstatedb
 
 proc makeEntityState(options: ECSEntityOptions): NimNode =
@@ -1625,9 +1626,16 @@ proc genRunProc(id: EcsIdentity, name: string): NimNode =
 
   #  
   var sysCalls = newStmtList()
+
+  when defined(ecsLog) or defined(ecsLogDetails):
+    echo "Wrapper proc `" & name & "()` execution order:"
+  
   for system in currentCommits:
     let sysName = id.getSystemName(system)
     sysCalls.add nnkCall.newTree(ident doProcName(sysName))
+    
+    when defined(ecsLog) or defined(ecsLogDetails):
+      echo "  " & sysName
 
   result = quote do:
     proc `procName`* =

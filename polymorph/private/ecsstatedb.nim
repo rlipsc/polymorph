@@ -631,6 +631,12 @@ genGlobalState(string, ["ecsCurrentOperationSource"])
 genGlobalListStates(NimNode, ["onEcsBuiltCode"])
 
 #--------------------
+# Events for entities
+#--------------------
+
+genGlobalListStates(NimNode, ["onEntityStateChange"])
+
+#--------------------
 # Root objects <-> DB
 #--------------------
 

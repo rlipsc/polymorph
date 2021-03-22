@@ -301,6 +301,86 @@ macro onSystemRemoveFrom*(id: static[EcsIdentity], typeToUse: typedesc, systemNa
 macro onSystemRemoveFrom*(typeToUse: typedesc, systemName: static[string], actions: untyped): untyped =
   defaultIdentity.setupOnSystemRemoveFrom(typeToUse, systemName, actions)
 
+
+proc addEntityStateChange(id: EcsIdentity, actions: NimNode) =
+  id.add_onEntityStateChange newBlockStmt(actions)
+
+macro onEntityChangeId*(id: static[EcsIdentity], actions: untyped): untyped =
+  ## This event is called for an entity when components are added or
+  ## removed.
+  ## 
+  ## The following component changes are distinguished:
+  ##   newEntityWith, add, construct, clone, remove, and delete
+  ##
+  ## Within the event you have access to the following injected variables:
+  ##  - `entity`: The current entity the state change applies to.
+  ##  - `state`: The `EntityChangeEvent` enum value representing the state
+  ##    change.
+  ##  - `types`: A list of `ComponentTypeId` for each component involved.
+  ## 
+  ## Each invocation of `onEntityChange` appends `actions` to the output.
+  ## 
+  ## For states that add components, this event occurs after the
+  ## components have been added.
+  ##
+  ## For states that remove components, this event occurs before the
+  ## components have been removed.
+  ## 
+  ## Example use (uses strutils):
+  ## 
+  ##    onEntityChange:
+  ##      # Output the details of the entity's state change.
+  ##      let str = "Entity " & $entity.entityId.int & " changed state: " & $state & " "
+  ##      echo str, "[", types.join ", ", "]"
+  ##
+  ##      # Get the current components on the entity.
+  ##      var compStrs: seq[string]
+  ##      for c in entity.components:
+  ##        compStrs.add $c.typeId
+  ##          
+  ##      let indent = ' '.repeat(str.len)
+  ##      echo indent, "[", compStrs.join(", "), "]"
+  ## 
+  id.addEntityStateChange actions
+
+macro onEntityChange*(actions: untyped): untyped =
+  ## This event is called for an entity when components are added or
+  ## removed.
+  ## 
+  ## The following component changes are distinguished:
+  ##   newEntityWith, add, construct, clone, remove, and delete
+  ##
+  ## Within the event you have access to the following injected variables:
+  ##  - `entity`: The current entity the state change applies to.
+  ##  - `state`: The `EntityChangeEvent` enum value representing the state
+  ##    change.
+  ##  - `types`: A list of `ComponentTypeId` for each component involved.
+  ## 
+  ## Each invocation of `onEntityChange` appends `actions` to the output.
+  ## 
+  ## For states that add components, this event occurs after the
+  ## components have been added.
+  ##
+  ## For states that remove components, this event occurs before the
+  ## components have been removed.
+  ## 
+  ## Example use (uses strutils):
+  ## 
+  ##    onEntityChange:
+  ##      # Output the details of the entity's state change.
+  ##      let str = "Entity " & $entity.entityId.int & " changed state: " & $state & " "
+  ##      echo str, "[", types.join ", ", "]"
+  ##
+  ##      # Get the current components on the entity.
+  ##      var compStrs: seq[string]
+  ##      for c in entity.components:
+  ##        compStrs.add $c.typeId
+  ##          
+  ##      let indent = ' '.repeat(str.len)
+  ##      echo indent, "[", compStrs.join(", "), "]"
+  ## 
+  defaultIdentity.addEntityStateChange actions
+
 #--------------
 # State changes
 #--------------
@@ -435,7 +515,9 @@ proc doNewEntityWith(id: EcsIdentity, componentList: NimNode): NimNode {.compile
     error "Owned component(s) [" & id.commaSeparate(ownedComps) &
       "] need their owner systems completed with component(s): [" & id.commaSeparate(missingComps) & "]"
 
-  let opStr =  "newEntityWith: " & id.commaSeparate(compIds)
+  let
+    stateChangeEvent = id.userStateChange(entity, eceNewEntityWith, compIds)
+    opStr =  "newEntityWith: " & id.commaSeparate(compIds)
   statements.add(quote do:
     {.line.}:
       template curEntity: EntityRef {.used.} = `entity`
@@ -443,6 +525,7 @@ proc doNewEntityWith(id: EcsIdentity, componentList: NimNode): NimNode {.compile
       `addToEntity`
       `userCompAddCode`
       `userAddedEvents`
+      `stateChangeEvent`
       static: endOperation(EcsIdentity(`id`))
       `entity`
   )
@@ -897,6 +980,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): 
   inner.add addOwned(id, entity, componentInfo)
   inner.add addToEntityList(id, entity, componentInfo.passed)
   inner.add addConditionalSystems(id, entity, componentInfo)
+  inner.add id.userStateChange(entity, eceAddComponents, componentInfo.passed)
   
   # Build return tuple.
   var returnType = nnkPar.newTree()
@@ -1211,6 +1295,7 @@ proc makeRemoveComponentDirect*(id: EcsIdentity): NimNode =
     let
       cacheId = quote do: EcsIdentity(`id`)
       opStr = "removeComponent: " & typeName
+      userStateChangeEvent = id.userStateChange(entityIdent, eceRemoveComponents, @[typeId])
 
     result.add(quote do:
       proc `doRemoveName`(`entityIdent`: EntityRef) =
@@ -1219,6 +1304,9 @@ proc makeRemoveComponentDirect*(id: EcsIdentity): NimNode =
         let `entityIdIdent` = `entityIdent`.entityId
 
         if entityData(`entityIdIdent`).setup:
+
+          `userStateChangeEvent`
+
           ## Access to currently updating entity.
           template curEntity: untyped {.used.} = `entityIdent`
           # RowIdent is used by updateSystems.
@@ -1477,13 +1565,18 @@ proc makeDelete*(id: EcsIdentity): NimNode =
       else:
         newStmtList()
 
-  let cacheId = quote do: EcsIdentity(`id`)
+  let
+    cacheId = quote do: EcsIdentity(`id`)
+    userStateChangeEvent = id.userStateChange(ent, eceDelete)    
 
   result = quote do:
     proc doDelete(`ent`: EntityRef) =
       static: startOperation(`cacheId`, "delete")
 
       if not `ent`.alive: return
+      
+      `userStateChangeEvent`
+
       let `entIdIdent` = `ent`.entityId
       if entityData(`entIdIdent`).setup:
         var `rowIdent`: int

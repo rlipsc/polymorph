@@ -190,6 +190,12 @@ type
   EntityRef* = tuple[entityId: EntityId, instance: EntityInstance]
   Entities* = seq[EntityRef]
 
+  EntityChangeEvent* = enum
+    eceNoChange,
+    eceNewEntityWith, eceAddComponents,
+    eceConstruct, eceClone,
+    eceRemoveComponents, eceDelete
+
   # This ideally needs to be redefined as the set size is.
   # stored value as the minimum set size and type cast to it everywhere from
   # user provided ComponentTypeIds.

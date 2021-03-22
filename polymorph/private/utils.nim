@@ -438,6 +438,43 @@ proc userSysAdded*(id: EcsIdentity, sys: SystemIndex, row: NimNode): NimNode =
       `cbEvent`(`sysVar`, `row`)
     )
 
+proc userStateChange*(id: EcsIdentity, entity: NimNode,
+    state: EntityChangeEvent, cList: seq[ComponentTypeId] = @[]): NimNode =
+  let
+    stateChangeEvent = id.onEntityStateChangeNode()
+    ent = ident "entity"
+    st = ident "state"
+    types = ident "types"
+    tIds =
+      if cList.len > 0:
+        # Distinct type isn't preserved through `quote` so we have to
+        # add type casts to get back to ComponentTypeId.
+        var compIds = nnkBracket.newTree
+        for c in cList:
+          compIds.add newDotExpr(newLit c.int, ident "ComponentTypeId")
+        
+        quote do: `compIds`
+
+      else:
+        quote do:
+          var compIds = newSeq[ComponentTypeId](`entity`.componentCount)
+          var i: int
+          for c in `entity`:
+            compIds[i] = c.typeId
+            i.inc
+          compIds
+  if stateChangeEvent.len > 0:
+    quote do:
+      block:
+        const
+          `st` {.inject, used.}: EntityChangeEvent = `state`.EntityChangeEvent
+        let
+          `ent` {.inject, used.}: EntityRef = `entity`
+          `types` {.inject, used.} = `tIds`
+        `stateChangeEvent`
+  else:
+    newStmtList()
+
 proc updateOwnedComponentState*(id: EcsIdentity, typeId: ComponentTypeId, system: SystemIndex, row: NimNode): NimNode =
   ## Update state variables outside of entity and system storage.
   let

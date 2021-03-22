@@ -304,6 +304,10 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     if typeId.int > highCompId:
       highCompId = typeId.int
 
+  let
+    userConstructStateChangeEvent = id.userStateChange(res, eceConstruct)
+    userCloneStateChangeEvent = id.userStateChange(res, eceClone)
+
   result = quote do:
     var
       # Note: As zero is an invalid component, a component count of eg 5 indicates valid indices of 0..5, not 0..4.
@@ -396,6 +400,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       for `compIndexInfo` in `types`.pairs:
         `constructCase`
       `userConstructEvents`
+      `userConstructStateChangeEvent`
       static: endOperation(EcsIdentity(`id`))
 
     proc construct*(`construction`: ConstructionTemplate): seq[EntityRef] =
@@ -509,4 +514,5 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       for `compIndexInfo` in `types`.pairs:
         `cloneCase`
       `userCloneEvents`
+      `userCloneStateChangeEvent`
       static: endOperation(EcsIdentity(`id`))
