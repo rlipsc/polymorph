@@ -175,6 +175,11 @@ const
   defaultComponentOptions* = dynamicSizeComponents()
   defaultEntityOptions* = dynamicSizeEntities()
   defaultSystemOptions* = dynamicSizeSystem()
+  
+  # Save some keystrokes.
+  defaultCompOpts* = defaultComponentOptions
+  defaultEntOpts* = defaultEntityOptions
+  defaultSysOpts* = defaultSystemOptions
 
 # Base Polymorph types.
 
