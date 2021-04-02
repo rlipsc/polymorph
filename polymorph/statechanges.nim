@@ -326,20 +326,11 @@ macro onEntityChangeId*(id: static[EcsIdentity], actions: untyped): untyped =
   ## For states that remove components, this event occurs before the
   ## components have been removed.
   ## 
-  ## Example use (uses strutils):
+  ## Example use:
   ## 
   ##    onEntityChange:
   ##      # Output the details of the entity's state change.
-  ##      let str = "Entity " & $entity.entityId.int & " changed state: " & $state & " "
-  ##      echo str, "[", types.join ", ", "]"
-  ##
-  ##      # Get the current components on the entity.
-  ##      var compStrs: seq[string]
-  ##      for c in entity.components:
-  ##        compStrs.add $c.typeId
-  ##          
-  ##      let indent = ' '.repeat(str.len)
-  ##      echo indent, "[", compStrs.join(", "), "]"
+  ##      echo "Change: ", entity.entityId.int, ": ", state, ": ", types
   ## 
   id.addEntityStateChange actions
 
@@ -364,20 +355,11 @@ macro onEntityChange*(actions: untyped): untyped =
   ## For states that remove components, this event occurs before the
   ## components have been removed.
   ## 
-  ## Example use (uses strutils):
+  ## Example use:
   ## 
   ##    onEntityChange:
   ##      # Output the details of the entity's state change.
-  ##      let str = "Entity " & $entity.entityId.int & " changed state: " & $state & " "
-  ##      echo str, "[", types.join ", ", "]"
-  ##
-  ##      # Get the current components on the entity.
-  ##      var compStrs: seq[string]
-  ##      for c in entity.components:
-  ##        compStrs.add $c.typeId
-  ##          
-  ##      let indent = ' '.repeat(str.len)
-  ##      echo indent, "[", compStrs.join(", "), "]"
+  ##      echo "Change: ", entity.entityId.int, ": ", state, ": ", types
   ## 
   defaultIdentity.addEntityStateChange actions
 
