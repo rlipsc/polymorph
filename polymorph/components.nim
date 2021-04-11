@@ -35,15 +35,6 @@ proc addComponentTypeId(id: EcsIdentity, typeNameStr: string): ComponentTypeId {
   
   genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
 
-proc typeStringToId*(id: EcsIdentity, n: string): ComponentTypeId {.compiletime.} =
-  ## Returns an index for a type string, if found.
-  # TODO: String based checks of types with the same name will return the same ComponentTypeId.
-  # Might want to store type trees themselves and match on that.
-  assert(n != "Component", "Not enough type info to create id: Receiving type `Component`, expected sub-class of Component or a registered component type")
-  var r = id.findCompId(n)
-  assert r.int != -1, "Cannot find type \"" & n & "\" in known component types: " & id.commaSeparate(id.allComponentsSeq)
-  r
-
 ## Checks against invalid component (for example uninitialised data).
 ## This does not check to see if the component is alive in the system, only that it is semantically valid.
 ## Used for example to check that fetchComponent has found its value.
@@ -831,6 +822,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       when component is `allRefCompsTc`:
         const cRange = `identity`.typeIdRange()
         if component.typeId.int notin cRange.a.int .. cRange.b.int:
+          # Attempt to determine the typeId.
           var copy = component
           copy.fTypeId = component.typeId()
           system.add items, copy

@@ -33,35 +33,6 @@ macro componentToSysRequirements*(id: static[EcsIdentity], varName: untyped): un
   result = quote do:
     const `varName` = `res`
 
-proc findType(compNode: NimNode): string =
-  ## Expects a typed node and tries to extract the type name.
-  case compNode.kind
-  of nnkObjConstr:
-    # Defined inline
-    compNode.expectMinLen 1
-
-    if compNode[0].kind == nnkDotExpr:
-      compNode[0][1].strVal
-    else:
-      compNode[0].strVal
-  of nnkSym:
-    let tyImpl = compNode.getTypeInst()
-    tyImpl.repr
-  of nnkCall:
-    let caller = compNode[0].getImpl()
-    caller.expectKind nnkProcDef
-    let callerTypeStr = $caller[3][0]
-    callerTypeStr
-  else:
-    $(compNode.getTypeInst())
-
-proc componentListToSet(id: EcsIdentity, componentIds: seq[ComponentTypeId], setType: NimNode): NimNode =
-  # Add to entity set in one go.
-  result = nnkCurly.newTree()
-  # Add the exists flags, cast to the components enum
-  for ty in componentIds:
-    result.add ident "ce" & id.typeName(ty)
-
 #---------------
 # User event API
 #---------------
@@ -1090,7 +1061,7 @@ proc makeAddComponents*(id: EcsIdentity): NimNode =
         updateComponents(entity, components)
   )
 
-proc makeRemoveComponentDirect*(id: EcsIdentity): NimNode =
+proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): NimNode =
   #[
     Important note!
     If you call removeComponent whilst in a system using that component, the current `item` will change!
@@ -1098,239 +1069,248 @@ proc makeRemoveComponentDirect*(id: EcsIdentity): NimNode =
     This happens because `entity.removeComponent` and `entity.delete` remove items from systems by swapping
     the item with the last one in the list and reducing the list length.
   ]#
+  var types = id.toTypeList(componentList)
+
   let
     index = ident "index"
-    entityIdent = ident "entity"
     entityIdIdent = ident "entityId"
     componentLen = componentRefsLen(entityIdIdent, id.entityOptions)
     alive = ident "alive" # Late bind for this template
     rowIdent = ident "row"
+    foundComp = ident "found"
+    # System indexes that use the component being removed
+    removeIdxIdent = ident "compIdx"
+    compsDeleted = ident "compsDeleted"
 
   result = newStmtList()
 
-  for typeId in id.unsealedComponents:
+  var
+    updateSystems = newStmtList()
+    userUpdates = newStmtList()
+    findSysCode = newStmtList()
+    foundDecl = nnkVarSection.newTree()
+    componentsToRemove: HashSet[ComponentTypeId]
+    relevantSystems: HashSet[SystemIndex]
+    setOp = newStmtList()
+    removeRef = newStmtList()
+    # TODO: Could use the system ground truth to determine the number of components we need to
+    # remove from the component list.
+    # ie; `if aFound: numComponentsToRemove += 1` etc.
+    # This would mean we wouldn't keep searching the component list for, say, owned components
+    # as we know how many to look for, especially as we've already determined whether the system
+    # is populated.
+    numComponentsToRemove = types.len
+    compIdx: int
 
-    let
-      typeName = id.typeName typeId
-      tyDelete = ident deleteInstanceName()
-
-      compTypedesc = nnkBracketExpr.newTree(ident "typedesc", ident typeName)
-      # System indexes that use the component being removed
-      relevantSystems = id.linked(typeId)
-      removeIdxIdent = ident "compIdx"
-      foundComp = ident "found"
-
-    var
-      updateSystems = newStmtList()
-      userUpdates = newStmtList()
-      findSysCode = newStmtList()
-      foundDecl = nnkVarSection.newTree()
-      componentsToRemove: HashSet[ComponentTypeId]
-      # TODO: Could use the system ground truth to determine the number of components we need to
-      # remove from the component list.
-      # ie; `if aFound: numComponentsToRemove += 1` etc.
-      # This would mean we wouldn't keep searching the component list for, say, owned components
-      # as we know how many to look for, especially as we've already determined whether the system
-      # is populated.
-      numComponentsToRemove = 1
-
-    # Always remove parameter component.
+  for typeId in types:
+    # Always remove parameter components.
     componentsToRemove.incl typeId
+    for sys in id.linked(typeId):
+      relevantSystems.incl sys
+
+  # Process involved systems.
+  for systemIndex in relevantSystems:
     
-    # Gather components that will be affected.
-    for systemIndex in relevantSystems:
-      
-      # We must remove all references to every relevant system here,
-      # as we're removing a required component for the system to run.
-      let
-        sysOpts = id.getOptions(systemIndex)
-        sysName = id.getSystemName systemIndex
-        sysIdent = ident systemVarName(sysName)
-        foundSys = ident sysName.toLower & "Found"
-        foundSysRow = ident sysName.toLower & "FoundRow"
-
-      # Set up variables for populating system find state.
-      foundDecl.add newIdentDefs(foundSys, ident "bool")
-      foundDecl.add newIdentDefs(foundSysRow, ident "int")
-
-      # Add a check to see if the entity is in this system.
-      let
-        sysNode = id.instantiation systemIndex
-
-        tryGetIndex = sysNode.indexTryGet(
-          entityIdIdent,
-          rowIdent,
-          id.indexFormat(systemIndex))
-    
-      findSysCode.add(quote do:
-        if `tryGetIndex`:
-          `foundSys` = true
-          `foundSysRow` = `rowIdent`
-        )
-      
-      # Add code to remove the system row.
-      updateSystems.add(removeSysReference(id, systemIndex, sysIdent, foundSys, foundSysRow, entityIdIdent, entityIdent))
-
-      # When removing a component that's also part of an owned system, we must also remove any owned components
-      # for that system, since we are effectively invalidating the owned component's storage.
-      for ownedComp in id.ecsOwnedComponents(systemIndex):
-        if ownedComp != typeId:
-          # Increment search counter to include owned components.
-          if ownedComp notin componentsToRemove:
-            numComponentsToRemove += 1
-            componentsToRemove.incl ownedComp
-
-      # Add event handlers triggered on removal from a system.
-      let userSysRemove = id.userSysRemoved(systemIndex, sysIdent, foundSysRow, entityIdIdent, entityIdent, sysOpts)
-      if userSysRemove.len > 0:
-        userUpdates.add(quote do:
-          if `foundSys`:
-            `userSysRemove`
-        )
-
-    var removeRefCore = newStmtList()
+    # We must remove all references to every relevant system here,
+    # as we're removing a required component for the system to run.
     let
-      compsDeleted = ident "compsDeleted"
-      delCompCount = newLit numComponentsToRemove
+      sysOpts = id.getOptions(systemIndex)
+      sysName = id.getSystemName systemIndex
+      sysIdent = ident systemVarName(sysName)
+      foundSys = ident sysName.toLower & "Found"
+      foundSysRow = ident sysName.toLower & "FoundRow"
+
+    # Set up variables for populating system find state.
+    foundDecl.add newIdentDefs(foundSys, ident "bool")
+    foundDecl.add newIdentDefs(foundSysRow, ident "int")
+
+    # Add a check to see if the entity is in this system.
+    let
+      sysNode = id.instantiation systemIndex
+
+      tryGetIndex = sysNode.indexTryGet(
+        entityIdIdent,
+        rowIdent,
+        id.indexFormat(systemIndex))
+  
+    findSysCode.add(quote do:
+      if `tryGetIndex`:
+        `foundSys` = true
+        `foundSysRow` = `rowIdent`
+      )
     
-    var compIdx = 0
+    # Add code to remove the system row.
+    updateSystems.add(removeSysReference(id, systemIndex, sysIdent, foundSys, foundSysRow, entityIdIdent, entity))
 
-    # Build code to remove the selected components.
-    for delComp in componentsToRemove:
-      let
-        typeName = id.typeName delComp
-        delInstanceType = ident instanceTypeName(typeName)
-        isOwned = id.systemOwner(delComp) != InvalidSystemIndex
-        eventsRemoveFromEntity = userRemoveFromEntity(id, entityIdent, foundComp, delComp)
+    # When removing a component from the system that owns it, we must
+    # also remove the other components the system owns as well, as their
+    # storage is being invalidated
+    for ownedComp in id.ecsOwnedComponents(systemIndex):
+      # Increment search counter to include owned components.
+      if ownedComp notin componentsToRemove:
+        componentsToRemove.incl ownedComp
+        numComponentsToRemove += 1
+        types.add ownedComp
 
-      let
-        deleteInstance =
-          if not isOwned:
-            quote do:
-              `tyDelete`(`delInstanceType`(`foundComp`.index))
-          else:
-            # Owner systems perform deletion events in the system pass.
-            newStmtList()
+    # Add event handlers triggered on removal from a system.
+    let userSysRemove = id.userSysRemoved(systemIndex, sysIdent, foundSysRow, entityIdIdent, entity, sysOpts)
+    if userSysRemove.len > 0:
+      userUpdates.add(quote do:
+        if `foundSys`:
+          `userSysRemove`
+      )
 
-        removeCompFromEntity = removeComponentRef(entityIdIdent, removeIdxIdent, delComp.int, id.componentStorageFormat)
+  # Total components to remove, including linked owned components.
+  let delCompCount = newLit numComponentsToRemove
 
-        updateOwnedAliveState =
-          if isOwned:
-            let aliveIdent = ident aliveStateInstanceName(typeName)
-            quote do:
-              `aliveIdent`[`foundComp`.index.int] = false
-          else:
-            newStmtList()
+  for delComp in componentsToRemove:
 
-        coreDelete = quote do:
-          `eventsRemoveFromEntity`
-          `deleteInstance`
-          `removeCompFromEntity`
-          `updateOwnedAliveState`
-      
-      case id.componentStorageFormat
-      of csTable:
-        removeRefCore.add(quote do:
-          `foundComp` = entityData(`entityIdIdent`).componentRefs.getOrDefault(`delComp`.ComponentTypeId)
-          if `foundComp`.typeId == `delComp`.ComponentTypeId:
-            `coreDelete`
-          )
-      of csSeq, csArray:
-        # TODO: Replace if statements with case when looping components.
-        removeRefCore.add(quote do:
-          if `foundComp`.typeId == `delComp`.ComponentTypeId:
-            `coreDelete`
-            `compsDeleted` = `compsDeleted` + 1
-            if `compsDeleted` == `delCompCount`:
-              break
-            `removeIdxIdent` = `removeIdxIdent` - 1
-            continue
+    let
+      typeName = id.typeName delComp
+      delInstanceType = ident instanceTypeName(typeName)
+      isOwned = id.systemOwner(delComp) != InvalidSystemIndex
+      eventsRemoveFromEntity = userRemoveFromEntity(id, entity, foundComp, delComp)
+
+      deleteInstance =
+        if not isOwned:
+          let tyDelete = ident deleteInstanceName()
+          quote do:
+            `tyDelete`(`delInstanceType`(`foundComp`.index))
+        else:
+          # Owner systems perform deletion events in the system pass.
+          newStmtList()
+
+      removeCompFromEntity = removeComponentRef(entityIdIdent, removeIdxIdent, delComp.int, id.componentStorageFormat)
+
+      updateOwnedAliveState =
+        if isOwned:
+          let aliveIdent = ident aliveStateInstanceName(typeName)
+          quote do:
+            `aliveIdent`[`foundComp`.index.int] = false
+        else:
+          newStmtList()
+
+      coreDelete = quote do:
+        `eventsRemoveFromEntity`
+        `deleteInstance`
+        `removeCompFromEntity`
+        `updateOwnedAliveState`
+    
+    case id.componentStorageFormat
+    of csTable:
+      removeRef.add(quote do:
+        `foundComp` = entityData(`entityIdIdent`).componentRefs.getOrDefault(`delComp`.ComponentTypeId)
+        if `foundComp`.typeId == `delComp`.ComponentTypeId:
+          `coreDelete`
         )
-      compIdx += 1
-
-    let removeRef =
-      case id.componentStorageFormat
-      of csTable:
-        quote do:
-          var `foundComp`: ComponentRef
-          `removeRefCore`
-      of csSeq, csArray:
-        quote do:
-          var
-            `foundComp`: ComponentRef
-            `removeIdxIdent` = `componentLen` - 1
-            `compsDeleted` = 0
-          while `removeIdxIdent` >= 0:
-            `foundComp` = entityData(`entityIdIdent`).componentRefs[`removeIdxIdent`]
-            `removeRefCore`
-            `removeIdxIdent` = `removeIdxIdent` - 1
+    of csSeq, csArray:
+      # TODO: Replace if statements with case when looping components.
+      removeRef.add(quote do:
+        if `foundComp`.typeId == `delComp`.ComponentTypeId:
+          `coreDelete`
+          `compsDeleted` = `compsDeleted` + 1
+          if `compsDeleted` == `delCompCount`:
+            break
+          `removeIdxIdent` = `removeIdxIdent` - 1
+          continue
+      )
+    compIdx += 1
 
     let
       setVal = ident "ce" & typeName
-      setOp = 
-        if id.useSet:
-          entSetExcl(entityIdIdent, setVal)
-        else:
-          newStmtList()
-      doRemoveName = ident "doRemove" & typeName
+    if id.useSet:
+      setOp.add(entSetExcl(entityIdIdent, setVal))
 
-    let
-      cacheId = quote do: EcsIdentity(`id`)
-      opStr = "removeComponent: " & typeName
-      userStateChangeEvent = id.userStateChange(entityIdent, eceRemoveComponents, @[typeId])
+  let
+    cacheId = quote do: EcsIdentity(`id`)
+    opStr = "removeComponents: " & id.commaSeparate(types)
+    relevantSystemsSeq = relevantSystems.toSeq
 
-    result.add(quote do:
-      proc `doRemoveName`(`entityIdent`: EntityRef) =
-        static: startOperation(`cacheId`, `opStr`)
-        assert `entityIdent`.`alive`
-        let `entityIdIdent` = `entityIdent`.entityId
+  var userStateChangeEvents = newStmtList()
+  
+  for typeId in types:
+    userStateChangeEvents.add id.userStateChange(entity, eceRemoveComponents, @[typeId])
 
-        if entityData(`entityIdIdent`).setup:
+  #let entStorage = ident entityStorageVarName()
 
-          `userStateChangeEvent`
+  let perfHint =
+    when defined(ecsPerformanceHints):
+      let paramStr = id.commaSeparate(types)
+      quote do:
+        startOperation(EcsIdentity(`id`), "Remove components: " & `paramStr`)
+    else:
+      newStmtList()
 
-          ## Access to currently updating entity.
-          template curEntity: untyped {.used.} = `entityIdent`
-          # RowIdent is used by updateSystems.
-          var `rowIdent` {.used.}: int
-          `foundDecl`
-          `findSysCode`
-          `userUpdates`
-          `removeRef`
-          # Remove this entity from all relevant systems.
-          `updateSystems`
-          # Update set if required.
-          `setOp`
-        static: endOperation(`cacheId`)
-            
-      template removeComponent*(`entityIdent`: EntityRef, compType: `compTypedesc`) =
-        ## Remove the component.
-        static:
-          if `cacheId`.inSystemAll and `cacheId`.inSystemIndex in `relevantSystems`:
-            # Calling removeComponent from within a system that uses the component.
-            # We don't know if its the current row's entity or some other entity.
-            `cacheId`.set_sysRemoveAffectedThisSystem true
-        {.line.}:
-          `doRemoveName`(`entityIdent`)
-
-      template remove*(`entityIdent`: EntityRef, compType: `compTypedesc`) =
-        ## Remove the component.
-        removeComponent(`entityIdent`, compType)
-
-    )
-
-  # List remove.
+  # Output final code.
   result.add(quote do:
+    block:
+      static:
+        `perfHint`
+
+        if `cacheId`.inSystemAll and `cacheId`.inSystemIndex in `relevantSystemsSeq`:
+          # Calling removeComponent from within a system that uses the component.
+          # We don't know if its the current row's entity or some other entity.
+          `cacheId`.set_sysRemoveAffectedThisSystem true
+        static: startOperation(`cacheId`, `opStr`)
+
+      assert `entity`.`alive`
+      let `entityIdIdent` = `entity`.entityId
+
+      if entityData(`entityIdIdent`).setup:
+
+        `userStateChangeEvents`
+
+        ## Access to currently updating entity.
+        template curEntity: untyped {.used.} = `entity`
+
+        var
+          # RowIdent is used by updateSystems.
+          `rowIdent` {.used.}: int
+          `foundComp`: ComponentRef
+          `removeIdxIdent` = `componentLen` - 1
+          `compsDeleted` = 0
+        `foundDecl`
+        `findSysCode`
+        `userUpdates`
+        while `removeIdxIdent` >= 0:
+          `foundComp` = entityData(`entityIdIdent`).componentRefs[`removeIdxIdent`]
+          `removeRef`
+          `removeIdxIdent` = `removeIdxIdent` - 1
+        # Remove this entity from all relevant systems.
+        `updateSystems`
+        # Update set if required.
+        `setOp`
+      static: endOperation(`cacheId`)
+  )
+
+  genLog "\n# macro removeComponents(" & id.commaSeparate(types) & "):\n", result.repr
+
+
+proc makeRemoveComponents*(id: EcsIdentity): NimNode =
+  let
+    componentList = ident "componentList"
+    entity = ident "entity"
+    identity = quote do: EcsIdentity(`id`)
+
+  result = quote do:
+    macro removeComponents*(`entity`: EntityRef, `componentList`: varargs[typed]): untyped =
+      ## Remove components from an entity.
+      doRemoveComponents(`identity`, `entity`, `componentList`)
+    
+    macro remove*(`entity`: EntityRef, `componentList`: varargs[typed]): untyped =
+      ## Remove a component from an entity.
+      doRemoveComponents(`identity`, `entity`, `componentList`)
+
+    macro removeComponent*(`entity`: EntityRef, component: typed) =
+      ## Remove a component from an entity.
+      doRemoveComponents(`identity`, `entity`, component)
+
     template removeComponents*(entity: EntityRef, compList: ComponentList) =
-      ## Remove a list of components
+      ## Remove a run time list of components from the entity.
       for c in compList:
         assert c.typeId != InvalidComponent
         caseComponent c.typeId:
           removeComponent(entity, componentType())
-
-    template remove*(entity: EntityRef, compList: ComponentList) =
-      removeComponents(entity, compList)
-  )
 
 proc clearAllEntComponentRefs(entityId: NimNode, componentStorageFormat: ECSCompStorage): NimNode =
   case componentStorageFormat

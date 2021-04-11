@@ -840,34 +840,6 @@ proc userSysRemoved*(id: EcsIdentity, systemIndex: SystemIndex, sys, rowIdent, e
 
 # Type utils
 
-iterator unsealedComponents*(id: EcsIdentity): ComponentTypeId =
-  let sealedComponents = id.ecsSealedComponents
-  for typeId in id.ecsComponentsToBeSealed:
-    if typeId notin sealedComponents:
-      yield typeId
-
-proc unsealedComponentCount*(id: EcsIdentity): int =
-  for typeId in id.unsealedComponents:
-    result += 1
-
-proc allUnsealedComponents*(id: EcsIdentity): seq[ComponentTypeId] =
-  for typeId in id.unsealedComponents:
-    result.add typeId
-
-iterator unsealedSystems*(id: EcsIdentity): SystemIndex =
-  let definedSystems = id.ecsSysDefined
-  for sysId in definedSystems:
-    if not id.sealed(sysId):
-      yield sysId
-
-proc allUnsealedSystems*(id: EcsIdentity): seq[SystemIndex] =
-  for sysId in id.unsealedSystems:
-    result.add sysId
-
-proc unsealedSystemCount*(id: EcsIdentity): int =
-  for sysId in id.unsealedSystems:
-    result += 1
-
 iterator commaSeparate*[T: ComponentTypeId or SystemIndex](id: EcsIdentity, list: seq[T] or set[T]): string =
   ## Common function to produce a string of comma separated ComponentTypeIds.
   var comma: bool
@@ -884,6 +856,35 @@ proc commaSeparate*[T: ComponentTypeId or SystemIndex](id: EcsIdentity, list: se
   ## Common function to produce a string of comma separated ComponentTypeIds.
   for s in id.commaSeparate(list): result &= s
 
+iterator unsealedComponents*(id: EcsIdentity): ComponentTypeId =
+  let sealedComponents = id.ecsSealedComponents
+  for typeId in id.ecsComponentsToBeSealed:
+    if typeId notin sealedComponents:
+      yield typeId
+
+proc unsealedComponentCount*(id: EcsIdentity): int =
+  for typeId in id.unsealedComponents:
+    result += 1
+
+proc allUnsealedComponents*(id: EcsIdentity): seq[ComponentTypeId] =
+  for typeId in id.unsealedComponents:
+    result.add typeId
+
+iterator unsealedSystems*(id: EcsIdentity): SystemIndex =
+  ## Returns system indexes in the order of commit.
+  let definedSystems = id.ecsSysDefined
+  for sysId in definedSystems:
+    if not id.sealed(sysId):
+      yield sysId
+
+proc allUnsealedSystems*(id: EcsIdentity): seq[SystemIndex] =
+  for sysId in id.unsealedSystems:
+    result.add sysId
+
+proc unsealedSystemCount*(id: EcsIdentity): int =
+  for sysId in id.unsealedSystems:
+    result += 1
+
 iterator typeDefs*(body: NimNode): NimNode =
   ## Return the nnkTypeDef nodes in a body.
   for item in body:
@@ -892,6 +893,79 @@ iterator typeDefs*(body: NimNode): NimNode =
         if def.kind == nnkTypeDef:
           yield def
 
+proc findType*(compNode: NimNode): string =
+  ## Expects a typed node and tries to extract the type name.
+  ## Note: converts typedesc[Type] to Type.
+  result = case compNode.kind
+    of nnkObjConstr:
+      # Defined inline
+      compNode.expectMinLen 1
+
+      if compNode[0].kind == nnkDotExpr:
+        compNode[0][1].strVal
+      else:
+        compNode[0].strVal
+    of nnkSym:
+      let tyInst = compNode.getTypeInst()
+      if tyInst.kind == nnkBracketExpr and tyInst[0].kind == nnkSym and
+          tyInst[0].strVal.toLowerAscii == "typedesc":
+        # Extract T from typedesc[T].
+        tyInst[1].expectKind nnkSym
+        tyInst[1].strVal
+      else:
+        tyInst.repr
+    of nnkCall:
+      let caller = compNode[0].getImpl()
+      caller.expectKind nnkProcDef
+      let callerTypeStr = $caller[3][0]
+      callerTypeStr
+    else:
+      $(compNode.getTypeInst())
+
+proc componentListToSet*(id: EcsIdentity, componentIds: seq[ComponentTypeId], setType: NimNode): NimNode =
+  # Add to entity set in one go.
+  result = nnkCurly.newTree()
+  # Add the exists flags, cast to the components enum
+  for ty in componentIds:
+    result.add ident "ce" & id.typeName(ty)
+
+proc typeStringToId*(id: EcsIdentity, n: string): ComponentTypeId {.compiletime.} =
+  ## Returns an index for a type string, if found.
+  # TODO: String based checks of types with the same name will return the same ComponentTypeId.
+  # Might want to store type trees themselves and match on that.
+  assert(n != "Component", "Not enough type information to create id: Receiving type `Component`, expected sub-class of Component or a registered component type")
+  var r = id.findCompId(n)
+  assert r.int != -1, "Cannot find type \"" & n & "\" in known component types: " & id.commaSeparate(id.allComponentsSeq)
+  r
+
+proc toTypeList*(id: EcsIdentity, componentList: NimNode): seq[ComponentTypeId] =
+  ## Convert a list of nodes, such as from varargs[untyped], to a list of type ids.
+
+  template process(compNode: NimNode, i: int) =
+    let tyName = compNode.findType
+    if tyName == "":
+      error "Cannot find the type '" & compNode.repr & "' in identity \"" & id.string & "\""
+    let typeId = id.typeStringToId(tyName)
+
+    if typeId == InvalidComponent:
+      error "Cannot resolve type id for '" & tyName & "'"
+    
+    if typeId in result:
+      error "Passed more than one component of type " & tyName
+    
+    result[i] = typeId
+
+  if componentList.kind == nnkIdent or componentList.kind == nnkSym:
+    result.setLen 1
+    componentList.process(0)
+  else:
+    result.setLen componentList.len
+    for i, node in componentList:
+
+      node.process(i)
+
+  assert result.len > 0
+  
 type FieldList* = seq[tuple[fieldNode, typeNode: NimNode]]
 
 proc toIdent(nn: NimNode): NimNode =

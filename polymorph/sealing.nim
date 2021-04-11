@@ -43,7 +43,7 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
 
   result = quote do:
     # State definition
-    var `ecStateVarIdent`: `storageType`
+    var `ecStateVarIdent`*: `storageType`
     `initEntityStorageType`(`ecStateVarIdent`)
 
     # Quick access to the entity's object without implying a copy
@@ -1003,6 +1003,7 @@ proc makeListSystem(id: EcsIdentity): NimNode =
     innards = newStmtList()
     entIdent = ident "entity"
   innards.add(quote do: `res` = "")
+  
   for sysId in id.unsealedSystems:
     let
       options = id.getOptions sysId
@@ -1263,7 +1264,7 @@ proc sealStateChanges(id: EcsIdentity): NimNode =
   result.add makeDelete(id)
   result.add makeNewEntityWith(id)
   result.add makeAddComponents(id)
-  result.add makeRemoveComponentDirect(id)
+  result.add makeRemoveComponents(id)
 
 proc sealRuntimeDebugging(id: EcsIdentity): NimNode =
   result = newStmtList()
@@ -1475,6 +1476,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   ## * Systems are updated when components are added or removed.
   ## 
   ## To create the system execution procedures, use `commitSystems`.
+  
   when defined(ecsLog) and not defined(ecsLogDetails):
     echo "Building ECS \"" & id.string & "\"..."
 
@@ -1699,7 +1701,7 @@ macro commitSystems*(id: static[EcsIdentity], procName: static[string]): untyped
     var outputStr = noBodies[0]
     for i in 1 ..< noBodies.len:
       outputStr &= ", " & noBodies[i]
-    let noBodyStr = "Systems are defined that do not have bodies: " & `outputStr`
+    let noBodyStr = "Systems are defined that don't have bodies: " & `outputStr`
     result.add(quote do:
       {.hint: `noBodyStr`.}
     )

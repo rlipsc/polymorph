@@ -542,8 +542,8 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       # Check the components given to makeSystem match defineSystem.
       template errMsg =
         error "Components passed to makeSystem \"" & name &
-          "\" [" & componentTypes.repr &
-          "] in conflict with previous definition in defineSystem: [" &
+          "\" " & componentTypes.repr &
+          " in conflict with previous definition in defineSystem: [" &
           id.commaSeparate(expectedTypes) & "]"
       
       if componentTypes.len != expectedTypes.len:
