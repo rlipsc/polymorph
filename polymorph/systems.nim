@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, strutils, strformat, components, sequtils, times, sharedtypes,
+import macros, strutils, strformat, sequtils, times, sharedtypes,
   private/[ecsstatedb, utils, debugging], tables
 import random
 
@@ -1015,6 +1015,11 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       else:
         quote do:
           var `idx`: int
+    undefinedItemMsg = "Cannot access 'item' here as the current row is undefined " &
+      "until the next iteration, due to a previous removal of components " &
+      "or deletion of entities within this system iteration. Use the injected " &
+      "'entity' variable or make a note of data in 'item' before " &
+      "removing components or deleting entities."
 
     staticInit = quote do:
       `cacheId`.set_inSystem  true
@@ -1068,6 +1073,14 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     assertCheck = getAssertItem(assertItem, sys, idx)
 
+    strictCatch =
+      if defined(ecsStrict):
+        quote do:
+          static:
+            when `cacheId`.sysRemoveAffectedThisSystem:
+              error `undefinedItemMsg`
+      else: newStmtList()
+
     allCore = quote do:
       static:
         `staticInit`
@@ -1086,6 +1099,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
           ## Current system item being processed.
           template item: `typeIdent` {.used.} =
+            `strictCatch`
             `assertCheck`
             `sys`.groups[`idx`]
 
