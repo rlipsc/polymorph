@@ -842,15 +842,19 @@ macro cl*(items: varargs[untyped]): untyped =
   ## 
   ## Requires components to be registered.
   result = newStmtList()
-  let res = genSym(nskVar, "cl")
+  let
+    res = genSym(nskVar, "cl")
+    length = newLit items.len
   result.add(quote do:
-    var `res`: ComponentList
+    var `res` = newSeqOfCap[Component](`length`)
   )
 
   for item in items:
     result.add(quote do:
       add(`res`, `item`)
-      assert `res`[^1].typeId.int != 0, "Add type id failed"
+      
+      assert `res`[^1].typeId.int != InvalidComponent.int,
+        "Add type id failed"
     )
   result.add(res)
 
