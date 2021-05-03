@@ -308,24 +308,53 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     userConstructStateChangeEvent = id.userStateChange(res, eceConstruct)
     userCloneStateChangeEvent = id.userStateChange(res, eceClone)
 
+    # Names of the arrays holding the different construction callbacks.
+    manualConstruct = ident "manualConstruct"
+    postConstruct = ident "postConstruct"
+    cloneConstruct = ident "cloneConstruct"
+
+    postConstruction =
+      case entOpts.componentStorageFormat
+      of csSeq, csArray:
+        quote do:
+          var compIdx: int
+          while compIdx < `entCompCount`:
+            let
+              compRef = entityData(`entId`).componentRefs[compIdx]
+              tId = compRef.typeId
+              pc = `postConstruct`[tId.int]
+            if pc != nil:
+              # Callback passes this entity and the fully constructed result array.
+              pc(`entity`, compRef, `res`)
+            compIdx += 1
+      of csTable:
+        quote do:
+          for compRef in `entity`:
+            let
+              tId = compRef.typeId
+              pc = `postConstruct`[tId.int]
+            if pc != nil:
+              # Callback passes this entity and the fully constructed result array.
+              pc(`entity`, compRef, `res`)
+
   result = quote do:
     var
       # Note: As zero is an invalid component, a component count of eg 5 indicates valid indices of 0..5, not 0..4.
-      manualConstruct: array[`lowCompId`..`highCompId`, ConstructorProc]
+      `manualConstruct`: array[`lowCompId`..`highCompId`, ConstructorProc]
       # Post constructors are called after an entity template has been constructed.
-      postConstruct: array[`lowCompId`..`highCompId`, PostConstructorProc]
+      `postConstruct`: array[`lowCompId`..`highCompId`, PostConstructorProc]
       # Clone constructors allow custom handling of components by type when `clone` is called on an entity.
-      cloneConstruct: array[`lowCompId`..`highCompId`, CloneConstructorProc]
+      `cloneConstruct`: array[`lowCompId`..`highCompId`, CloneConstructorProc]
 
     # Do not rely on the order a callback is invoked when constructing templates
 
-    proc registerConstructor*(`typeId`: ComponentTypeId, `callback`: ConstructorProc) = manualConstruct[`typeId`.int] = `callback`
+    proc registerConstructor*(`typeId`: ComponentTypeId, `callback`: ConstructorProc) = `manualConstruct`[`typeId`.int] = `callback`
     template registerConstructor*(t: typedesc[`tcIdent`], `callback`: ConstructorProc) = registerConstructor(t.typeId, `callback`)
 
-    proc registerPostConstructor*(`typeId`: ComponentTypeId, `callback`: PostConstructorProc) = postConstruct[`typeId`.int] = `callback`
+    proc registerPostConstructor*(`typeId`: ComponentTypeId, `callback`: PostConstructorProc) = `postConstruct`[`typeId`.int] = `callback`
     template registerPostConstructor*(t: typedesc[`tcIdent`], `callback`: PostConstructorProc) = registerPostConstructor(t.typeId, `callback`)
 
-    proc registerCloneConstructor*(`typeId`: ComponentTypeId, `callback`: CloneConstructorProc) = cloneConstruct[`typeId`.int] = `callback`
+    proc registerCloneConstructor*(`typeId`: ComponentTypeId, `callback`: CloneConstructorProc) = `cloneConstruct`[`typeId`.int] = `callback`
     template registerCloneConstructor*(t: typedesc[`tcIdent`], `callback`: CloneConstructorProc) = registerCloneConstructor(t.typeId, `callback`)
 
     proc construct*(`cList`: ComponentList, `master`: EntityRef = NO_ENTITY_REF): EntityRef =
@@ -356,7 +385,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
         # Index and unowned component generation.
         caseComponent compRef.typeId:
           # trigger construction callback if present
-          let cb = manualConstruct[compRef.typeId.int]
+          let cb = `manualConstruct`[compRef.typeId.int]
           if cb != nil:
             # The callback is responsible for adding reference(s) from the source entity.
             # Callbacks may add multiple sets of components or none at all.
@@ -431,17 +460,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
         var `iterVar`: int
         while `iterVar` < `res`.len:
           let `entity` = `res`[`iterVar`]
-          var compIdx: int
-          while compIdx < `entCompCount`:
-            let
-              compRef = entityData(`entity`.entityId).componentRefs[compIdx]
-              tId = compRef.typeId
-              pc = postConstruct[tId.int]
-            if pc != nil:
-              # Callback passes this entity and the fully constructed result array.
-              pc(`entity`, compRef, `res`)
-            compIdx += 1
-              
+          `postConstruction`
           `iterVar` += 1
 
     proc toTemplate*(`entity`: EntityRef): seq[Component] =
@@ -478,7 +497,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
         # Index and unowned component generation.
         caseComponent compRef.typeId:
           # trigger construction callback if present
-          let cb = cloneConstruct[compRef.typeId.int]
+          let cb = `cloneConstruct`[compRef.typeId.int]
           if cb != nil:
             # The callback is responsible for adding reference(s) from the source entity.
             # Callbacks may add multiple sets of components or none at all.
