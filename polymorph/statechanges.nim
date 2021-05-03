@@ -784,9 +784,8 @@ proc addConditionalSystems(id: EcsIdentity, entity: NimNode, compInfo: Component
         typeStr = id.typeName typeId
         typeField = ident typeStr.toLower & instPostfix
 
-      if typeId in compInfo.lookFor or typeId in compInfo.passed:
-        if typeId notin compInfo.passed:
-          checkSystem.add(quote do: `typeField`.valid)
+      if typeId in compInfo.lookFor:
+        checkSystem.add(quote do: `typeField`.valid)
 
     if checkSystem.len > 0:
       let
