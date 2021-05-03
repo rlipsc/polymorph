@@ -18,20 +18,18 @@ import macros, strutils, typetraits, ../sharedtypes, tables, ecsstatedb
 import debugging, tables, deques, sequtils, sets, macrocache
 export debugging
 
-#[
-  This module covers shared internal tools and utilities used to build
-  the ECS code.
-  
-  *This module is not exported to the user*.
-  
-  Topics:
-  
-  - Procs used to generate consistent field and type names.
-  - Structural generation through various levels of abstraction.
-  - Building user event calls.
-  - Compile time utilities for inspecting and building types.
-  - Walking system ownership graphs to find dependencies.
-]#
+## This module covers shared internal tools and utilities used to build
+## the ECS code.
+## 
+## *This module is not exported to the user*.
+## 
+## Topics:
+## 
+## - Procs used to generate consistent field and type names.
+## - Structural generation through various levels of abstraction.
+## - Building user event calls.
+## - Compile time utilities for inspecting and building types.
+## - Walking system ownership graphs to find dependencies.
 
 proc findSystemIndex*(id: EcsIdentity, name: string): tuple[found: bool, index: SystemIndex] {.compileTime.} =
   result[1] = id.findSysIdx(name)
@@ -51,50 +49,76 @@ type
 
 # Type names derived from user types
 
-# Instance distinct type name
-proc instanceTypeName*(tyName: string): string = tyName & "Instance"
-# Instantiation instance distinct type
-proc generationTypeName*(tyName: string): string = tyName & "Generation"
-# Reference container type name
-proc refTypeName*(tyName: string): string = tyName & "Ref"
-# Initialiser proc name for instance reference types, takes arguments to set fields
-proc refInitName*(prefix, s: string): string = ($prefix & s).toLowerAscii()
+proc instanceTypeName*(tyName: string): string =
+  ## Instance distinct type name
+  tyName & "Instance"
+
+proc generationTypeName*(tyName: string): string =
+  ## Instantiation instance distinct type
+  tyName & "Generation"
+
+proc refTypeName*(tyName: string): string =
+  ## Reference container type name
+  tyName & "Ref"
+
+proc refInitName*(prefix, s: string): string =
+  ## Initialiser proc name for instance reference types, takes arguments to set fields
+  ($prefix & s).toLowerAscii()
 
 # Initialisation/deleting components
 
-# Initialiser proc name for instance of type, takes arguments to set fields
-proc instanceInitName*(prefix, s: string): string = prefix & s
-# Allocate function for a component slot for this type
-proc createInstanceName*(s: string): string = "gen" & s
-# Clear function for component slot for this type
-proc deleteInstanceName*: string = "delete"
+proc instanceInitName*(prefix, s: string): string =
+  ## Initialiser proc name for instance of type, takes arguments to set fields
+  prefix & s
+
+proc createInstanceName*(s: string): string =
+  ## Allocate function for a component slot for this type
+  "gen" & s
+
+proc deleteInstanceName*: string =
+  ## Clear function for component slot for this type
+  "delete"
 
 # Storage field names
 
-## Type name for entity storage
-proc entityStorageTypeName*: string = "EntityStorage"
+proc entityStorageTypeName*: string =
+  ## Type name for entity storage
+  "EntityStorage"
 proc entityStorageItemTypeName*: string = "EntityComponentItem"
-# This is the name of the storage variable generated from a particular prefix.
-proc entityStorageVarName*: string = "entityStorage"
+
+proc entityStorageVarName*: string =
+  ## This is the name of the storage variable generated from a particular prefix.
+  "entityStorage"
 proc initEntityStorageTypeName*: string = "initEntityStorage"
 proc finaliseEntityStorageTypeName*: string = "finaliseEntityStorage" # TODO
 proc entityStorageContainerTypeName*: string = "EntityStorageItems"
-# Name of enum type used for sets of components.
-proc enumName*: string = "ComponentsEnum"
+
+proc enumName*: string =
+  ## Name of enum type used for sets of components.
+  "ComponentsEnum"
 proc recyclerArrayLen*: string = "recycleLen"
 
-## Name of the storage field for this component type
-proc storageFieldName*(typeName: string): string = "storage" & typeName
-## Name of the instance ids by component index for this type
-proc instanceIdsName*(typeName: string): string = typeName.toLowerAscii & "InstanceIds"
-## Name of the array of alive state by component index for this type
-proc aliveStateInstanceName*(typeName: string): string = typeName.toLowerAscii() & "Alive"
-## Name of the seq for free instances indexes for this type
-proc freeInstancesName*(typeName: string): string = typeName.toLowerAscii() & "FreeIndexes"
-## Next instance slot for this type
-proc nextInstanceName*(typeName: string): string = typeName.toLowerAscii() & "NextIndex"
+proc storageFieldName*(typeName: string): string =
+  ## Name of the storage field for this component type
+  "storage" & typeName
 
-## System names
+proc instanceIdsName*(typeName: string): string =
+  ## Name of the instance ids by component index for this type
+  typeName.toLowerAscii & "InstanceIds"
+
+proc aliveStateInstanceName*(typeName: string): string =
+  ## Name of the array of alive state by component index for this type
+  typeName.toLowerAscii() & "Alive"
+
+proc freeInstancesName*(typeName: string): string =
+  ## Name of the seq for free instances indexes for this type
+  typeName.toLowerAscii() & "FreeIndexes"
+
+proc nextInstanceName*(typeName: string): string =
+  ## Next instance slot for this type
+  typeName.toLowerAscii() & "NextIndex"
+
+# System names
 
 proc systemTypeName*(name: string): string = name.capitalizeAscii() & "System"
 proc systemInitName*(name: string): string = "init" & name.capitalizeAscii() & "System"
@@ -117,12 +141,17 @@ func systemStr*(name: string): string = name & " (" & systemVarName(name) & ")"
 
 # Type classes that cover component types. These are useful for parameter constraint.
 
-## The name of the type class that covers all component types.
-proc typeClassName*: string = "ComponentTypeClass"
-## The name of the type class that covers all the ref types.
-proc refTypeClassName*: string = "ComponentRefTypeClass"
-## The name of the type class that covers all the distinct int types.
-proc instanceTypeClassName*: string = "ComponentIndexTypeClass"
+proc typeClassName*: string =
+  ## The name of the type class that covers all component types.
+  "ComponentTypeClass"
+
+proc refTypeClassName*: string =
+  ## The name of the type class that covers all the ref types.
+  "ComponentRefTypeClass"
+
+proc instanceTypeClassName*: string =
+  ## The name of the type class that covers all the distinct int types.
+  "ComponentIndexTypeClass"
 
 #-------------
 # Entity utils

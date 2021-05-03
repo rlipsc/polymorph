@@ -1078,7 +1078,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
     alive = ident "alive" # Late bind for this template
     rowIdent = ident "row"
     foundComp = ident "found"
-    # System indexes that use the component being removed
+    # System indexes that use the component being removed.
     removeIdxIdent = ident "compIdx"
     compsDeleted = ident "compsDeleted"
 

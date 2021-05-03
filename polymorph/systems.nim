@@ -646,32 +646,32 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     type SysEventOp = enum seAdded = "onAdded", seRemoved = "onRemoved"
 
     proc checkEventCycle(op: SysEventOp): NimNode =
-      ## Inline system events can add/remove components, which may
-      ## trigger one or more other inline system events.
-      ## 
-      ## Since these events are inlined at compile-time during a state
-      ## change, cycles can form when they're expanded.
-      ## 
-      ## This applies even though you may be performing state changes
-      ## on *separate* entities that will never create an event cycle
-      ## at run time, because within the compile time context each
-      ## state changes must include code for all *potential* changes,
-      ## and this can combinatoric explode with multi-component changes
-      ## more than a few levels deep.
-      ## 
-      ## Of particular note, `construct` must statically expand all
-      ## possible inline events for every component in the identity.
-      ## 
-      ## System events such as "onAdded" and "onRemoved" are therefore
-      ## checked to halt compilation when nested state changes try to
-      ## invoke the same event for the same system again.
-      ## 
-      ## To avoid the possibility of compile time cycles within system
-      ## events, use `onAddedCallback` and `onRemoveCallback`.
-      ## 
-      ## Future work: it may be possible to isolate state change
-      ## branches by inserting ident tracking code using the
-      ## macrocache to make this check more lenient.
+      # Inline system events can add/remove components, which may
+      # trigger one or more other inline system events.
+      # 
+      # Since these events are inlined at compile-time during a state
+      # change, cycles can form when they're expanded.
+      # 
+      # This applies even though you may be performing state changes
+      # on *separate* entities that will never create an event cycle
+      # at run time, because within the compile time context each
+      # state changes must include code for all *potential* changes,
+      # and this can combinatoric explode with multi-component changes
+      # more than a few levels deep.
+      # 
+      # Of particular note, `construct` must statically expand all
+      # possible inline events for every component in the identity.
+      # 
+      # System events such as "onAdded" and "onRemoved" are therefore
+      # checked to halt compilation when nested state changes try to
+      # invoke the same event for the same system again.
+      # 
+      # To avoid the possibility of compile time cycles within system
+      # events, use `onAddedCallback` and `onRemoveCallback`.
+      # 
+      # Future work: it may be possible to isolate state change
+      # branches by inserting ident tracking code using the
+      # macrocache to make this check more lenient.
       
       let
         # Build access idents for onAdded and onRemoved.

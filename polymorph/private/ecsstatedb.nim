@@ -39,22 +39,21 @@
 ## 
 ## Example:
 ## 
-## ```
-## genGlobalState(string, ["lastFoo"])
-## genListStates(SystemIndex, string, ["foo"])
+## .. code-block:: nim
+##   genGlobalState(string, ["lastFoo"])
+##   genListStates(SystemIndex, string, ["foo"])
 ##
-## const myId = newEcsIdentity("MyId")
-## 
-## static:
-##   let system1 = 1.SystemIndex
-##   for i in 0 ..< 5:
-##     let value = $i
-##     myId.add_foo(system1, value)
-##     myId.set_lastFoo(value)
-## 
-##   echo myId.foo(system1), " last: ", myId.lastFoo
-##   # @["0", "1", "2", "3", "4"] last: 4
-## ```
+##   const myId = newEcsIdentity("MyId")
+##
+##   static:
+##     let system1 = 1.SystemIndex
+##     for i in 0 ..< 5:
+##       let value = $i
+##       myId.add_foo(system1, value)
+##       myId.set_lastFoo(value)
+##
+##     echo myId.foo(system1), " last: ", myId.lastFoo
+##     # @["0", "1", "2", "3", "4"] last: 4
 
 import macrocache, macros, ../sharedtypes, strutils
 

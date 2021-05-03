@@ -855,15 +855,16 @@ macro cl*(items: varargs[untyped]): untyped =
   result.add(res)
 
 macro registerComponents*(id: static[EcsIdentity], options: static[ECSCompOptions], body: untyped): untyped =
-  ## Registers typedefs in `body` as components for use in an ECS.
+  ## Registers the root type declarations in `body` as components for use in an ECS.
   ## 
-  ## ```
-  ## myId.registerComponents(myOptions):
-  ##   type
-  ##     Component1* = object
-  ##       value: int
-  ##     Component2* = object
-  ## ```
+  ## Adds the components to the identity specified by `id`.
+  ## 
+  ## .. code-block:: nim
+  ##   registerComponents(myOptions):
+  ##     type
+  ##       Component1* = object
+  ##         value: int
+  ##       Component2* = object
   ## 
   ## For each type the following is generated:
   ## 
@@ -873,23 +874,22 @@ macro registerComponents*(id: static[EcsIdentity], options: static[ECSCompOption
   ##   - A static `typeId` template to associate the type and its
   ##     container type with a unique `ComponentTypeId`.
   ## 
-  ##   - An instance type that provides direct access to a component
+  ##   - An `instance` type that provides direct access to a particular component instance
   ##     attached to an entity.
   ## 
   ##   - An initialiser macro for creating ref containers with the
   ##     `typeId` set for you.
   ## 
-  ## The contents of `body` is passed through unaltered after the
-  ## above has been defined so you can create components that reference
-  ## instances:
-  ## ```
-  ## myId.registerComponents(myOptions):
-  ##   type
-  ##     Comp1* = object
-  ##       comp2: Comp2Instance
-  ##     Comp2* = object
-  ##       comp1: Comp1Instance
-  ## ```
+  ## The contents of `body` is appended to the result after the
+  ## above has been defined, allowing components that reference instances:
+  ## 
+  ## .. code-block:: nim
+  ##   registerComponents(myOptions):
+  ##     type
+  ##       Comp1* = object
+  ##         comp2: Comp2Instance
+  ##       Comp2* = object
+  ##         comp1: Comp1Instance
   id.doRegisterComponents(options, body)
 
 macro registerComponentsFromFile*(id: EcsIdentity, compOpts: ECSCompOptions, filename: static[string]): untyped =
@@ -901,16 +901,16 @@ macro registerComponentsFromFile*(id: EcsIdentity, compOpts: ECSCompOptions, fil
     registerComponents(`id`, `compOpts`, `types`)
 
 template registerComponents*(compOpts: ECSCompOptions, body: untyped): untyped =
-  ## Registers typedefs in `body` as components for use in an ECS using
-  ## the `defaultIdentity`.
+  ## Registers the root type declarations in `body` as components for use in an ECS.
   ## 
-  ## ```
-  ## registerComponents(myOptions):
-  ##   type
-  ##     Component1* = object
-  ##       value: int
-  ##     Component2* = object
-  ## ```
+  ## Adds the components to `defaultIdentity`.
+  ## 
+  ## .. code-block:: nim
+  ##   registerComponents(myOptions):
+  ##     type
+  ##       Component1* = object
+  ##         value: int
+  ##       Component2* = object
   ## 
   ## For each type the following is generated:
   ## 
@@ -920,23 +920,23 @@ template registerComponents*(compOpts: ECSCompOptions, body: untyped): untyped =
   ##   - A static `typeId` template to associate the type and its
   ##     container type with a unique `ComponentTypeId`.
   ## 
-  ##   - An instance type that provides direct access to a component
+  ##   - An `instance` type that provides direct access to a particular component instance
   ##     attached to an entity.
   ## 
   ##   - An initialiser macro for creating ref containers with the
   ##     `typeId` set for you.
   ## 
-  ## The contents of `body` is passed through unaltered after the
-  ## above has been defined so you can create components that reference
-  ## instances:
-  ## ```
-  ## registerComponents(myOptions):
-  ##   type
-  ##     Comp1* = object
-  ##       comp2: Comp2Instance
-  ##     Comp2* = object
-  ##       comp1: Comp1Instance
-  ## ```
+  ## The contents of `body` is appended to the result after the
+  ## above has been defined, allowing components that reference instances:
+  ## 
+  ## .. code-block:: nim
+  ##   registerComponents(myOptions):
+  ##     type
+  ##       Comp1* = object
+  ##         comp2: Comp2Instance
+  ##       Comp2* = object
+  ##         comp1: Comp1Instance
+ 
   defaultIdentity.registerComponents(compOpts, body)
 
 proc genForAllComponents(id: EcsIdentity, typeId: ComponentTypeId, actions: NimNode): NimNode =
@@ -962,8 +962,8 @@ template forAllComponents*(id: static[EcsIdentity], typeVal: typedesc, actions: 
   id.forAllComponents(typeVal.typeId, actions)
 
 macro forAllComponentTypes*(id: static[EcsIdentity], actions: untyped): untyped =
-  ## Perform `actions` for every component type currently defined.
-  ## Type iteration does not include InvalidComponent.
+  ## Perform `actions` for every component type currently defined,
+  ## not including InvalidComponent.
   result = newStmtList()
   for typeId in id.allComponentsSeq:
     result.add id.genForAllComponents(typeId, actions)

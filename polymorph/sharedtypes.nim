@@ -14,9 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#[
-  Everything in this module is exported to the user.
-]#
+## This module contains the user accessible shared types used in the library.
 
 # ECS generation options and types.
 type
@@ -34,35 +32,29 @@ type
     errIncompleteOwned*: ECSErrorResponse
 
   ECSEntityOptions* = object
-    ## Controls the maximum amount of entities to be instantiated at any one time.
-    ## This is ignored for dynamically sized storage such as seq and Table.
-    maxEntities*: Natural
-    ## Choose format of component list in entity items.
-    componentStorageFormat*: ECSCompStorage
-    ## Choose between stack allocated or heap allocated array.
-    entityStorageFormat*: ECSEntityItemStorage
-    ## Only applies to csArray storage format.
-    maxComponentsPerEnt*: Natural
-    ## Array access should be much faster, but takes up more space.
-    recyclerFormat*: ECSRecyclerFormat
-    ## Use a set for hasComponent.
-    ## Note: sets can dramatically increase entity header size with a lot of components,
-    ## as each `8` components defined will double the size of the set in bytes.
-    ## Operations like creating, adding or removing are also slightly slower with
-    ## a set due to the additional update work (~5% depending on component count).
-    ## The advantage of using a set is that it allows an O(1) response for `hasComponent`
-    ## when also using seq/array component lists.
-    ## If you have seq/array component lists and don't want the extra memory burden
-    ## of sets, you can ameliorate the O(N) cost of iteration for hasComponent by
-    ## adding often checked/fetched components first, so finding them can return
-    ## earlier.
-    ## Component lists defined as a table will probably find the set unnecessary.
-    ## Note that using hasComponent often can imply the need for a new system
-    ## incorporating these components.
+    ## Controls code generation for entities.
+    maxEntities*: Natural ## Controls the maximum amount of entities for fixed size formats (ignored for esSeq).
+    componentStorageFormat*: ECSCompStorage     ## Choose format of component list in entity items.
+    entityStorageFormat*: ECSEntityItemStorage  ## Choose between stack allocated or heap allocated array.
+    maxComponentsPerEnt*: Natural       ## Only applies to csArray storage format.
+    recyclerFormat*: ECSRecyclerFormat  ## Array access should be much faster, but takes up more space.
+    # Note: sets can dramatically increase entity header size with a lot of components,
+    # as each `8` components defined will double the size of the set in bytes.
+    # Operations like creating, adding or removing are also slightly slower with
+    # a set due to the additional update work (~5% depending on component count).
+    # The advantage of using a set is that it allows an O(1) response for `hasComponent`
+    # when also using seq/array component lists.
+    # If you have seq/array component lists and don't want the extra memory burden
+    # of sets, you can ameliorate the O(N) cost of iteration for hasComponent by
+    # adding often checked/fetched components first, so finding them can return
+    # earlier.
+    # Component lists defined as a table will probably find the set unnecessary.
+    # Note that using hasComponent often can imply the need for a new system
+    # incorporating these components.
     # TODO: Add ability to mark components as priority for inserting them at the
     # start of an entity's list rather than the end.
-    useSet*: bool
-    errors*: ECSErrorResponses
+    useSet*: bool ## Use a set for hasComponent.
+    errors*: ECSErrorResponses  # Control how errors are generated.
 
   # Component storage options
   ECSAccessMethod* = enum amDotOp
