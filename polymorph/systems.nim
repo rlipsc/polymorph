@@ -206,7 +206,7 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
       template self: untyped {.used.} = `initParam`
 
       `initIndex`
-      `initParam`.streamRate = 10 # Default items to process per frame when using `stream:`.
+      `initParam`.streamRate = 1  # Default items to process per frame when using `stream:`.
       `initParam`.requirements = `reqsConst`
       `initParam`.systemName = `sysName`
       `fieldInits`
