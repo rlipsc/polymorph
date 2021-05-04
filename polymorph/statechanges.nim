@@ -708,7 +708,7 @@ proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo):
         ofBranch.add ofStmts
         fetchCase.add ofBranch
 
-      fetchCase.add nnkElse.newTree(newStmtList(quote do: discard))
+      fetchCase.add nnkElse.newTree(quote do: discard)
       fetch.add(quote do:
         for `fetchCompIdent` in entityData(`entity`.entityId).componentRefs:
           `fetchCase`
@@ -950,11 +950,10 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): 
 
   inner.add returnType
 
-  result =
-    quote do:
-      block:
-        assert `entity`.alive, "Adding to a dead entity"
-        `inner`
+  result = quote do:
+    block:
+      assert `entity`.alive, "Adding to a dead entity"
+      `inner`
 
   genLog "\n# macro addComponents(" & id.commaSeparate(componentInfo.passed) & "):\n", result.repr
 
@@ -1071,6 +1070,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
   var types = id.toTypeList(componentList)
 
   let
+    componentStorageFormat = id.componentStorageFormat
     index = ident "index"
     entityIdIdent = ident "entityId"
     componentLen = componentRefsLen(entityIdIdent, id.entityOptions)
@@ -1091,13 +1091,28 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
     componentsToRemove: HashSet[ComponentTypeId]
     relevantSystems: HashSet[SystemIndex]
     setOp = newStmtList()
-    removeRef = newStmtList()
-    # TODO: Could use the system ground truth to determine the number of components we need to
-    # remove from the component list.
-    # ie; `if aFound: numComponentsToRemove += 1` etc.
-    # This would mean we wouldn't keep searching the component list for, say, owned components
-    # as we know how many to look for, especially as we've already determined whether the system
-    # is populated.
+
+    # Set up the remove operation.
+    (removeRef, caseStmt) =
+      case componentStorageFormat
+      of csTable:
+        # Table storages fetch components and check each one individually,
+        # it doesn't need a case statement.
+        (newStmtList(), newStmtList())
+      of csSeq, csArray:
+        # Prelude the current component to use within a case statement,
+        # and set up the case statement itself with the typeId of the
+        # current component as the discriminator.
+        (
+          newStmtList(quote do:
+            `foundComp` = entityData(`entityIdIdent`).componentRefs[`removeIdxIdent`]
+          ),
+          nnkCaseStmt.newTree(
+            newDotExpr(foundComp, ident "typeId")
+          )
+        )
+
+    # The number of components may be extended if owner systems are affected.
     numComponentsToRemove = types.len
     compIdx: int
 
@@ -1195,24 +1210,29 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
         `removeCompFromEntity`
         `updateOwnedAliveState`
     
-    case id.componentStorageFormat
+    case componentStorageFormat
     of csTable:
+      # Add a fetch and check for this component.
+      # There's no possibility of an early exit, as only required
+      # components are checked.
       removeRef.add(quote do:
         `foundComp` = entityData(`entityIdIdent`).componentRefs.getOrDefault(`delComp`.ComponentTypeId)
         if `foundComp`.typeId == `delComp`.ComponentTypeId:
           `coreDelete`
         )
     of csSeq, csArray:
-      # TODO: Replace if statements with case when looping components.
-      removeRef.add(quote do:
-        if `foundComp`.typeId == `delComp`.ComponentTypeId:
-          `coreDelete`
-          `compsDeleted` = `compsDeleted` + 1
-          if `compsDeleted` == `delCompCount`:
-            break
-          `removeIdxIdent` = `removeIdxIdent` - 1
-          continue
+      # Append the case statement for this component.
+      # If we've hit our target number of components we can break early,
+      # as no duplicate component types are allowed.
+      var ofBranch = nnkOfBranch.newTree()
+      ofBranch.add newDotExpr(newLit(delComp.int), ident "ComponentTypeId")
+      ofBranch.add(quote do:
+        `coreDelete`
+        `compsDeleted` = `compsDeleted` + 1
+        if `compsDeleted` == `delCompCount`:
+          break
       )
+      caseStmt.add ofBranch
     compIdx += 1
 
     let
@@ -1239,6 +1259,14 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
         startOperation(EcsIdentity(`id`), "Remove components: " & `paramStr`)
     else:
       newStmtList()
+
+  case componentStorageFormat
+  of csSeq, csArray:
+    # Finish off the case statement and add to the remove code.
+    caseStmt.add nnkElse.newTree(quote do: discard)
+    removeRef.add caseStmt
+  else:
+    discard
 
   # Output final code.
   result.add(quote do:
@@ -1272,7 +1300,6 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
         `findSysCode`
         `userUpdates`
         while `removeIdxIdent` >= 0:
-          `foundComp` = entityData(`entityIdIdent`).componentRefs[`removeIdxIdent`]
           `removeRef`
           `removeIdxIdent` = `removeIdxIdent` - 1
         # Remove this entity from all relevant systems.
@@ -1475,8 +1502,8 @@ proc makeDelete*(id: EcsIdentity): NimNode =
       ofNodeUser.add newStmtList(userBody)
       caseStmtUserCode.add(ofNodeUser)
 
-  caseStmtRemove.add nnkElse.newTree(newStmtList(quote do: discard))
-  caseStmtUserCode.add nnkElse.newTree(newStmtList(quote do: discard))
+  caseStmtRemove.add nnkElse.newTree(quote do: discard)
+  caseStmtUserCode.add nnkElse.newTree(quote do: discard)
   
   updateSystems.add caseStmtRemove
 

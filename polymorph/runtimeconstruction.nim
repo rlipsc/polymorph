@@ -242,7 +242,7 @@ proc buildConstructionCaseStmt(id: EcsIdentity, entity: NimNode, cloning: bool):
       ofBranch.add ofStmts
       compCase.add ofBranch
 
-  compCase.add nnkElse.newTree(newStmtList(quote do: discard))
+  compCase.add nnkElse.newTree(quote do: discard)
 
   var decls = nnkVarSection.newTree()
   for node in userCodeBoolDecls.values:
