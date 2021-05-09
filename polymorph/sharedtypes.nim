@@ -80,7 +80,7 @@ type
     clearAfterDelete*: bool
     ## Declare the component arrays as {.threadVar.}
     useThreadVar*: bool
-    ##
+    ## Allow inserting assert checks for each instance field access.
     invalidAccess*: ECSCompInvalidAccess
 
   # System storage options
@@ -104,6 +104,9 @@ type
     echoRunning*: ECSSysEcho
     ## Add asserts to check `item` is within bounds.
     assertItem*: bool
+    ## Maintains the execution order when items are removed from groups.
+    ## This changes deletion from an O(1) to an O(N) operation.
+    orderedRemove*: bool
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect

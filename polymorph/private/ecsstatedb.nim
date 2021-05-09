@@ -547,6 +547,7 @@ genItemState(SystemIndex, ECSSysIndexFormat, ["indexFormat"])
 genItemState(SystemIndex, ECSSysTimings, ["timings"])
 genItemState(SystemIndex, ECSSysEcho, ["echoRunning"])
 genItemState(SystemIndex, bool, ["assertItem"])
+genItemState(SystemIndex, bool, ["orderedRemove"])
 
 # Current build info
 genGlobalListStates(ComponentTypeId, [
@@ -946,6 +947,7 @@ proc setOptions*(id: EcsIdentity, sysId: SystemIndex, opts: ECSSysOptions) =
   id.set_useThreadVar(sysId, opts.useThreadVar)
   id.set_echoRunning(sysId, opts.echoRunning)
   id.set_assertItem(sysId, opts.assertItem)
+  id.set_orderedRemove(sysId, opts.orderedRemove)
 
 proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.maxEntities = id.maxEntities(sysId)
@@ -955,3 +957,4 @@ proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.useThreadVar = id.useThreadVar(sysId)
   result.echoRunning = id.echoRunning(sysId)
   result.assertItem = id.assertItem(sysId)
+  result.orderedRemove = id.orderedRemove(sysId)

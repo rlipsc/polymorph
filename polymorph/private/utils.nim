@@ -642,54 +642,90 @@ proc removeSysReference*(id: EcsIdentity, systemIndex: SystemIndex, sys, sysRowE
   # - Does not add events.
 
   let
-    topIdxIdent = ident "topIdx"
+    systemStorageFormat = id.storageFormat systemIndex
+    maintainOrder = id.orderedRemove systemIndex
+
     updatedRowEntIdent = ident "updatedRowEnt"
-    updatedEntId = newDotExpr(updatedRowEntIdent, ident "entityId")
-    # updates index with entity id to group row.
-    idxFmt = id.indexFormat(systemIndex)
-    setIndex = sys.indexWrite(updatedEntId, rowIdent, idxFmt)
+    updatedEntId = newDotExpr(updatedRowEntIdent, ident "entityId") # Equivalent to `updatedRowEntIdent.entityId`.
+
+    # When systems can be reordered removal is an O(1) operation, and
+    # only needs one row to update, so we can use the supplied `rowIdent`.
+    # When order is maintained, all rows after `rowIdent` must be shuffled,
+    # so we need a unique variable ident to pass to `setIndex`.
+    newRow =
+      if maintainOrder: ident "newRow"
+      else: rowIdent
+    
+    idxFmt = id.indexFormat(systemIndex)                            # Get index codegen options.
+    setIndex = sys.indexWrite(updatedEntId, newRow, idxFmt)       # Updates the row index for `updatedEntId` with `updatedEntId`.
+    
     entOpts = id.entityOptions
-    maxEntId = entityIdUpperBound(entOpts.entityStorageFormat)
+    maxEntId = entityIdUpperBound(entOpts.entityStorageFormat)      # The code to return the highest EntityId.
 
   let
+    topIdxIdent = ident "topIdx"
+
     trimGroup = 
-      case id.storageFormat(systemIndex)
+      case systemStorageFormat
       of ssSeq:
-        quote do:
-          let `topIdxIdent` = `sys`.groups.len - 1
+        if maintainOrder:
+          quote do:
+            `sys`.groups.delete `rowIdent`
 
-          if `rowIdent` < `topIdxIdent`:
-
-            #for i, row in `sys`.groups:
-            #  assert row[0].entityId.int != 0
-
-            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
-            # Get entity that's been moved.
-            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`].entity
+            for `newRow` in `rowIdent` ..< `sys`.groups.len:
             
-            assert `updatedRowEntIdent`.alive, "Internal error: Dead entity in system groups: id = " &
-              $`updatedRowEntIdent`.entityId.int &
-              ", current entity id upper bound = " & $`maxEntId`
+              let `updatedRowEntIdent` = `sys`.groups[`newRow`].entity
+              # Update the index to `newRow`.
+              `setIndex`
 
-            # Update the index for the moved row
-            `setIndex`
+        else:
+          quote do:
+            let `topIdxIdent` = `sys`.groups.high
 
-          assert `sys`.groups.len > 0, " System \"" & `sys`.name &
-            "\" has empty group but is scheduled to delete from row " &
-            $`rowIdent` & ". Top row is " & $`topIdxIdent`
-          `sys`.groups.setLen(`sys`.groups.len - 1)
+            if `rowIdent` < `topIdxIdent`:
+              `sys`.groups[`rowIdent`] = move `sys`.groups[`topIdxIdent`]
+              
+              let `updatedRowEntIdent` = `sys`.groups[`rowIdent`].entity
+              
+              assert `updatedRowEntIdent`.alive, "Internal error: Dead entity in system groups: id = " &
+                $`updatedRowEntIdent`.entityId.int &
+                ", current entity id upper bound = " & $`maxEntId`
+
+              # Update the index to `newRow` (which equals `rowIdent`).
+              `setIndex`
+
+            assert `sys`.groups.len > 0, " System \"" & `sys`.name &
+              "\" has empty group but is scheduled to delete from row " &
+              $`rowIdent` & ". Top row is " & $`topIdxIdent`
+            `sys`.groups.setLen(`sys`.groups.len - 1)
 
       of ssArray:
-        quote do:
-          let `topIdxIdent` = `sys`.nextFreeIdx - 1
-          if `rowIdent` < `topIdxIdent`:
-            `sys`.groups[`rowIdent`] = `sys`.groups[`topIdxIdent`]
-            # Get entity that's been moved.
-            let `updatedRowEntIdent` = `sys`.groups[`rowIdent`][0]
-            # Update the index for the moved row
-            `setIndex`
+        if maintainOrder:
+          quote do:
+            let `topIdxIdent` = `sys`.groups.high
+            for `newRow` in `rowIdent` ..< `topIdxIdent`:
 
-          `sys`.nextFreeIdx -= 1
+              `sys`.groups[`newRow`] = move `sys`.groups[`newRow` + 1]
+
+              let `updatedRowEntIdent` = `sys`.groups[`newRow`].entity
+              # Update the index to `newRow`.
+              `setIndex`
+  
+            `sys`.nextFreeIdx -= 1
+  
+        else:
+          quote do:
+            # Manual `del` for groups.
+            let `topIdxIdent` = `sys`.nextFreeIdx - 1
+            if `rowIdent` < `topIdxIdent`:
+
+              `sys`.groups[`rowIdent`] = move `sys`.groups[`topIdxIdent`]
+
+              let `updatedRowEntIdent` = `sys`.groups[`rowIdent`].entity
+              # Update the index to `newRow` (which equals `rowIdent`).
+              `setIndex`
+
+            `sys`.nextFreeIdx -= 1
 
   let delIndex = sys.indexDel(entIdIdent, idxFmt)
   let r = quote do:
