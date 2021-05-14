@@ -853,6 +853,13 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
           component(i).fragmentation =
             (c.backwardsJumps + c.forwardJumps).float / systemItems.float
 
+    proc summary*(analysis: SystemAnalysis): string =
+      ## List the fragmentation for each component in the analysis system.
+      result = analysis.name & ":"
+      for component in analysis.components:
+        result &= "\n  " & component.name & ": " &
+          formatFloat(component.fragmentation * 100.0, ffDecimal, 3) & "%"
+
     proc `strOp`*(analysis: SystemAnalysis): string =
       ## Outputs a string detailing a system analysis.
       ## 
@@ -908,7 +915,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
 
         for c in analysis.components:
 
-          proc dataStr(data: RunningStat): string =
+          func dataStr(data: RunningStat): string =
 
             func eqTol(a, b: float, tol = 0.001): bool = abs(a - b) < tol
             
@@ -933,9 +940,9 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
                   (if data.mean != 0.0:
                     numStr(data.standardDeviation / data.mean)
                   else:
-                    "inf"
+                    "N/A"
                   ) & "\n"
-               ) &
+              ) &
 
               indent & "Variance: " & $data.variance.numStr & "\n" &
               
@@ -955,6 +962,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
                 elif data.skewness > 0: "Outliers trend forwards"
                 else: ""
               ) & "\n"
+
           let
             jt = c.jumpThreshold.float
             n = c.allData.n
