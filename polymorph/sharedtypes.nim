@@ -34,7 +34,7 @@ type
   ECSEntityOptions* = object
     ## Controls code generation for entities.
     maxEntities*: Natural ## Controls the maximum amount of entities for fixed size formats (ignored for esSeq).
-    componentStorageFormat*: ECSCompStorage     ## Choose format of component list in entity items.
+    componentStorageFormat*: ECSCompStorage     ## Choose the format of component list in entity items.
     entityStorageFormat*: ECSEntityItemStorage  ## Choose between stack allocated or heap allocated array.
     maxComponentsPerEnt*: Natural       ## Only applies to csArray storage format.
     recyclerFormat*: ECSRecyclerFormat  ## Array access should be much faster, but takes up more space.
@@ -70,15 +70,14 @@ type
     maxComponents*: Natural
     ## Underlying storage format for components.
     componentStorageFormat*: ECSCompItemStorage
-    ## Controls generating `.` access (which on undeclared variables will show the matching `.` for all component types),
-    ## or generating templates for get and set for all top-level fields in each component.
+    ## Controls accessing fields through instances. This currently only offers dot operator access.
     accessMethod*: ECSAccessMethod
     ## Underlying storage format the recycler uses to keep track of deleted component indexes.
     ## TODO. Not currently functional.
     recyclerFormat*: ECSCompRecyclerFormat
     ## Zeros memory of component after deletion.
     clearAfterDelete*: bool
-    ## Declare the component arrays as {.threadVar.}
+    ## Declare the component arrays as {.threadVar.}.
     useThreadVar*: bool
     ## Allow inserting assert checks for each instance field access.
     invalidAccess*: ECSCompInvalidAccess
@@ -93,16 +92,21 @@ type
     maxEntities*: int
     ## Underlying storage format for the system groups.
     storageFormat*: ECSSysStorage
-    ## sifArray = constant time deletes, uses maxEnts * ~8 bytes per system, uses stack space. Recommended.
-    ## sifTable = performance degrades with entity count, adaptive memory use.
+    ## sifArray = constant time deletes, uses `maxEntities` * ~8 bytes per system, uses stack space.
+    ## Recommended for performance applications.
+    ## 
+    ## sifAllocatedSeq = heap allocated storage, initialised to `maxEntities`.
+    ## Useful for large amounts of entities where stack space is at a premium.
+    ## 
+    ## sifTable = adaptive memory use, but requires reallocated when extended.
     indexFormat*: ECSSysIndexFormat
     ## Generate timing code.
     timings*: ECSSysTimings
-    ## Declare systems as {.threadVar.}
+    ## Declare systems as {.threadVar.}.
     useThreadVar*: bool
     ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
     echoRunning*: ECSSysEcho
-    ## Add asserts to check `item` is within bounds.
+    ## Add asserts to check the system `item` is within bounds.
     assertItem*: bool
     ## Maintains the execution order when items are removed from groups.
     ## This changes deletion from an O(1) to an O(N) operation.
