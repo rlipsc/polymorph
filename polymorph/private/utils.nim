@@ -1304,11 +1304,15 @@ macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
   ## Empties log file.
   result = newStmtList()
   when defined(ecsLogCode):
-    let fn = newLit fileName
+    let
+      fn = newLit fileName
+      preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
+      prelude = staticRead(`preludeFn`)
     result = quote do:
       let f = `fn`.open(fmWrite)
+      f.write `prelude`
       f.close
-      echo "Cleared log file \"", `fn`, "\""
+      echo "Started file \"", `fn`, "\""  
 
 proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
   ## Write log to file.

@@ -120,17 +120,13 @@ proc makeInstanceCompInit(prefix, tyName: string, typeId: int): NimNode =
   result = quote do:
     macro `initInstance`*(args: varargs[untyped]): untyped =
       `initComment`
-      # Create value object that stores the component data and pass assignments from parameters.
-      # Code produced is essentially 
-      
       var
         stmts = newStmtList()
         newComp = genSym(nskLet, "newComp")
 
-      # generate new component instance for this type:
-      # (This is defined below after storage has been instantiated)
-      # eg;
-      #   let newComp = `initProc`()
+      # Generate new component instance for this type, eg:
+      # let
+      #   newComp = `initProc`()
       stmts.add(
         nnkLetSection.newTree(
           nnkIdentDefs.newTree(
@@ -562,8 +558,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
             quote do:
               `lcTypeIdent`[`instParam`.int] = `valueParam`
 
-      # Dot overload to access the fields of the component in the storage list via the index.
-      # Two approaches, via dot operators or building access templates for every field in this component (not recursive).
       case options.accessMethod
       of amDotOp:
         # We only need two dot operators, one for reading and one for writing to cover all the fields in this instance.
@@ -645,7 +639,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         of cisSeq:
           quote do:
             # We don't need nextIdxIdent as this is naturally managed by seq.len
-            # TODO: Store the 2nd highest value when deleting a component to avoid wasted space.
+            # TODO: Store the delete list ordered by value to allow efficient compaction.
             if `delIdx` == `lcTypeIdent`.high:
               let newLen = max(1, `lcTypeIdent`.len - 1)
               `lcTypeIdent`.setLen(newLen)
@@ -656,7 +650,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
               # We need to reserve index zero for invalid component.
               # The free list is full, everything is free so we can reset the list.
               `freeIdxIdent`.setLen(0)
-              # TODO: Update other lists?
             else:
               # Add to free indexes.
               `freeIdxIdent`.add `delIdx`.`instanceTypeIdent`
@@ -701,6 +694,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
           else:
             newEmptyNode()
         
+        # Find and set up a component slot.
         rawCreate = quote do:
           var r: `instanceTypeIdent`
           if `freeIdxLen` > 0:

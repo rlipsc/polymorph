@@ -466,20 +466,6 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       invalidStr = newLit "<Invalid " & instTypeName & ">"
       deletedPrefix = newLit "<Deleted " & instTypeName
 
-    result.add(quote do:
-      proc `strOp`*(val: `instType`): string =
-        if val.valid:
-          try:
-            `res` = val.access.repr
-          except:
-            `res` = "<Error accessing>\n"
-        else:
-          if val.int == InvalidComponentIndex.int:
-            `res` = `invalidStr`
-          else:
-            `res` = `deletedPrefix` & " (index: " & $val.int & ")>"
-      )
-
     componentCount += 1
 
   let
@@ -494,16 +480,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     proc `strOp`*[T: `tc`](val: T): string =
       ## Generic `$` for component indexes.
       if val.valid:
-        try:
-          for field, value in val.access.fieldPairs:
-            when value isnot `tc`:
-              `res` &= field & ": " & value.repr
-            else:
-              `res` &= field & ": " & val.access.repr
-            
-            if `res`[^1] != '\n': `res` &= '\n'
-        except:
-          `res` = "<Error accessing " & $T & ": " & getCurrentExceptionMsg() & ">"
+        `res` = $val.access
       else:
         if val.int == InvalidComponentIndex.int:
           `res` = "<Invalid " & $T & ">"
@@ -527,9 +504,9 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
         if showData:
           `res` &= ":\n"
           try:
-            `res` &= `strOp`(componentInstanceType()(componentRef.index.int))
+            `res` &= componentInstanceType()(componentRef.index.int).access.repr
           except:
-            `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & `strOp`(componentInstanceType().componentCount) & ")>\n"
+            `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & $(componentInstanceType().componentCount).int & ")>\n"
 
     proc `strOp`*(componentRef: ComponentRef, showData: bool = true): string = componentRef.toString(showData)
 
@@ -539,7 +516,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       caseComponent comp.typeId:
         result &= `compName`()
         if showData:
-          result &= ":\n" & $componentRefType()(comp).value.repr & "\n"
+          result &= ":\n" & componentRefType()(comp).value.repr & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
@@ -547,12 +524,11 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       ## `$` for listing construction templates.
       let maxIdx = componentList.high
       for i, item in componentList:
-        caseComponent item.typeId:
-          let s = componentRefType()(item).toString(showData)
-          if i < maxIdx and not showData:
-            result &= s & ", "
-          else:
-            result &= s
+        let s = item.toString(showData)
+        if i < maxIdx and not showData:
+          result &= s & ", "
+        else:
+          result &= s
     
     proc `strOp`*(componentList: ComponentList): string = componentList.toString
 
@@ -1048,7 +1024,8 @@ proc makeListSystem(id: EcsIdentity): NimNode =
 proc doStartLog(id: EcsIdentity): NimNode =
   if not id.logInitialised:
     id.set_logInitialised true
-    quote do: startGenLog(`defaultGenLogFilename`)
+    quote do:
+      startGenLog(`defaultGenLogFilename`)
   else:
     newStmtList()
 
@@ -1082,18 +1059,19 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       tyInstanceIds = newIdentNode instanceIdsName(tyStr)
       sysOwner = id.systemOwner(component)
       sysIdx = newDotExpr(newLit sysOwner.int, ident "SystemIndex")
+      isOwned = sysOwner != InvalidSystemIndex
     var
       accessOwningSystem = newStmtList()
-      isOwnedComponent: NimNode
+      isOwnedLit: NimNode
     
-    if sysOwner != InvalidSystemIndex:
-      isOwnedComponent = newLit true
+    if isOwned:
+      isOwnedLit = newLit true
       let sysOwner = id.instantiation sysOwner
       accessOwningSystem.add(quote do:
         template owningSystem: untyped {.used.} = `sysOwner`
       )
     else:
-      isOwnedComponent = newLit false
+      isOwnedLit = newLit false
 
     # Following templates are available for use within the case statement.
     # These aren't compiled in unless the invoker uses them.
@@ -1102,7 +1080,6 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       template componentName: untyped {.used.} = `tyStr`
       template componentType: untyped {.used.} = `ty`
       template componentRefType: untyped {.used.} = `tyRef`
-      template componentInit: untyped {.used.} = `tyInit`
       template componentRefInit: untyped {.used.} = `tyRefInit`
       template componentDel(index: `tyInstance`): untyped {.used.} = `tyDel`(index)
       template componentAlive: untyped {.used.} = `aliveStateIdent`
@@ -1111,7 +1088,7 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       # Component data is similar to `access` but provides the whole array.
       # Eg; `echo componentData[myComponentRef.index.int].repr`
       template componentData: untyped {.used.} = `storageFieldIdent`
-      template isOwned: bool {.used.} = `isOwnedComponent`
+      template isOwned: bool {.used.} = `isOwnedLit`
       template owningSystemIndex: SystemIndex {.used.} = `sysIdx`
       `accessOwningSystem`
       `actions`
@@ -1667,16 +1644,16 @@ proc genRunProc(id: EcsIdentity, name: string): NimNode =
   # Set the starting point to take for the next set of commits.
   id.set_systemOrderStart commitOrder.len
 
-proc doCommitSystems(id: EcsIdentity, wrapperProc: NimNode): NimNode =
+proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
   result = newStmtList()
 
   let
     procName =
-      case wrapperProc.kind
-      of nnkStrLit, nnkIdent: wrapperProc.strVal
-      of nnkSym: $wrapperProc
+      case wrapperName.kind
+      of nnkStrLit, nnkIdent: wrapperName.strVal
+      of nnkSym: $wrapperName
       else:
-        error "Cannot process kind " & $wrapperProc.kind & " for 'procName'"
+        error "Cannot process kind " & $wrapperName.kind & " for 'procName'"
         ""
       
     commitHeader = "for \"" & id.string & "\""
@@ -1692,6 +1669,7 @@ proc doCommitSystems(id: EcsIdentity, wrapperProc: NimNode): NimNode =
   id.startOperation "Commit systems " & commitHeader
   
   var committedBodies = id.ecsSysBodiesAdded
+
   for sys in id.ecsSysUncommitted:
     if sys notin committedBodies:
       let definition = id.definition sys
