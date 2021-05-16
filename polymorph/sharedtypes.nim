@@ -59,7 +59,7 @@ type
   # Component storage options
   ECSAccessMethod* = enum amDotOp
   ECSCompItemStorage* = enum cisSeq, cisArray
-  ECSCompRecyclerFormat* = enum crfArray, crfSeq
+  ECSCompRecyclerFormat* = enum crfSeq, crfArray
   ECSCompInvalidAccess* = enum iaIgnore, iaAssert
   ECSCompOptions* = object
     ## The prefix added to init constructors, eg for "init"; `initMyComp`.
