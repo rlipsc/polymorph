@@ -504,7 +504,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
         if showData:
           `res` &= ":\n"
           try:
-            `res` &= componentInstanceType()(componentRef.index.int).access.repr
+            `res` &= `strOp`(componentInstanceType()(componentRef.index.int).access)
           except:
             `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & $(componentInstanceType().componentCount).int & ")>\n"
 
@@ -516,7 +516,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       caseComponent comp.typeId:
         result &= `compName`()
         if showData:
-          result &= ":\n" & componentRefType()(comp).value.repr & "\n"
+          result &= ":\n" & componentRefType()(comp).toString(showData) & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
@@ -631,7 +631,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
       if entity.alive:
         let entityId = entity.entityId
         for compRef in entityId.components:
-          let compDesc = `strOp`(compRef, showData)
+          let compDesc = toString(compRef, showData)
           var
             owned: bool
             genMax: int
