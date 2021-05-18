@@ -1535,6 +1535,9 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   id.ecsBuildOperation "run time construction":
     result.add makeRuntimeConstruction(id)
 
+  # User code to run after everything's defined.
+  result.add id.onEcsBuiltCodeNode
+
   id.ecsBuildOperation "user component event callbacks":
     for typeId in unsealedComponents:
 
@@ -1565,9 +1568,6 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   # Flag systems as generated.
   for sys in unsealedSystems:
     id.set_sealed sys, true
-
-  # User code to run after everything's defined.
-  result.add id.onEcsBuiltCodeNode
 
   when defined(ecsLogCode):
     id.ecsBuildOperation "Generate makeEcs() log":
