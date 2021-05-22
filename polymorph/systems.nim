@@ -518,6 +518,42 @@ proc getAssertItem(assertItem: bool, sys, itemIdx: NimNode, rowIdx: NimNode = ni
   else:
     newStmtList()
 
+macro removeComponents*(sys: object, types: varargs[typed]) =
+  ## Remove the components in `types` from all entities in this system.
+  
+  # This macro builds a `removeComponents` with `types` and executes it
+  # for each entity in the system, from the last entity backwards to the
+  # first.
+  let entity = ident "entity"
+  var `removeInner` = nnkCall.newTree(ident "remove", entity)
+  
+  for ty in types:
+    case ty.kind
+    of nnkSym:
+      `removeInner`.add ty
+    of nnkHiddenStdConv:
+      ty.expectMinLen 2
+      ty[1].expectKind nnkBracket
+      for compTy in ty[1]:
+        `removeInner`.add compTy
+    else:
+      `removeInner`.add ty
+
+  quote do:
+    for i in countDown(`sys`.count - 1, 0):
+      let `entity` = `sys`.groups[i].entity
+      `removeInner`
+
+template remove*(sys: object, types: varargs[typed]) =
+  ## Remove the components in `types` from all entities in this system.
+  removeComponents(sys, types)
+
+template clear*(sys: object) =
+  ## Remove all entities in this system.
+  if `sys`.count > 0:
+    for i in countDown(`sys`.count - 1, 0):
+      `sys`.groups[i].entity.delete
+
 proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, extraFields: NimNode, systemBody: NimNode, ownedFields: NimNode): NimNode =
   ## Create the system proc to 'tick' the system.
 
@@ -629,19 +665,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       verb = $item[0]
       code = item[1]
       tcn = ident typeClassName()
-
-    let clearSystemTemplates = quote do:
-
-      template removeComponents(ty: typedesc[`tcn`]) {.used.} =
-        ## Remove the component `ty` from all entities in this system.
-        for i in countDown(`sys`.count - 1, 0):
-          `sys`.groups[i].entity.removeComponent ty
-
-      template removeEntities {.used.} =
-        ## Remove the component `ty` from all entities in this system.
-        if `sys`.count > 0:
-          for i in countDown(`sys`.count - 1, 0):
-            `sys`.groups[i].entity.delete
 
     type SysEventOp = enum seAdded = "onAdded", seRemoved = "onRemoved"
 
@@ -793,8 +816,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         allBody = code
 
       of $sbFinish:
-        if finishBody.len == 0:
-          finishBody.add clearSystemTemplates
         item[1].expectKind nnkStmtList
         finishBody.add(code)
 
