@@ -988,7 +988,10 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         `core`
         let endTime = cpuTime()
         `sys`.timePerGroupRun = endTime - startTime
-        `sys`.timePerGroupItem = `sys`.timePerGroupRun / `sys`.count.float
+        if `sys`.count > 0:
+          `sys`.timePerGroupItem = `sys`.timePerGroupRun / `sys`.count.float
+        else:
+          `sys`.timePerGroupItem = 0.0
         # Note that the min/max timers are user handled with `system.resetMinMax`.
         `sys`.updateTimings()
         # record last tick time
