@@ -16,7 +16,7 @@
   - [Committing systems](#committing-systems)
   - [System anatomy](#system-anatomy)
     - [Adding or removing components during `all` and `stream` blocks](#adding-or-removing-components-during-all-and-stream-blocks)
-    - [`finish` utilities](#finish-utilities)
+  - [System utilities](#system-utilities)
 - [Working with entities](#working-with-entities)
   - [Creating entities](#creating-entities)
   - [Adding components to existing entities](#adding-components-to-existing-entities)
@@ -53,7 +53,7 @@
 
 # Project overview
 
-Polymorph lets you build sets of data types, and efficiently dispatch program logic over subsets of these types.
+Polymorph lets you build sets of data types and efficiently dispatch program logic for subsets of these types.
 
 This pattern is known as [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system), or *ECS* for short, where a set of types is an **entity**, a data type is a **component**, and program logic running over these types is called a **system**.
 
@@ -73,7 +73,7 @@ The output is statically dispatched with a sequential flow, optimised to each sy
 ```nim
 import polymorph
 
-# Create component data types.
+# Define components types.
 registerComponents(defaultCompOpts):
   type
     Position = object
@@ -81,29 +81,29 @@ registerComponents(defaultCompOpts):
     Velocity = object
       x, y: int
 
-# Define code to run when both Position and Velocity are present.
+# Define logic to operate on a set of components.
 makeSystem("move", [Position, Velocity]):
   all:
-    # `item` allows access to components for this row.
     item.position.x += item.velocity.x
     item.position.y += item.velocity.y
 
-# Generate the ECS API.
+# Generate the ECS interface.
 makeEcs()
 
-# Deposit system code, wrapping execution in a proc named "run".
+# Output defined systems, executed with a proc named `run`.
 commitSystems("run")
 
-# Create an entity that uses "move".
-let movingEntity = newEntityWith(
-  Position(x: 1, y: 1),
-  Velocity(x: 2, y: -1),
-)
+# Create an entity to use the "move" system.
+let
+  movingEntity = newEntityWith(
+    Position(x: 1, y: 1),
+    Velocity(x: 2, y: -1),
+  )
 
-# Execute the defined systems once.
+# Run "move" once.
 run()
 
-# Verify the updated position.
+# Check the new component values.
 let pos = movingEntity.fetch Position
 assert pos.x == 3 and pos.y == 0
 ```
@@ -116,11 +116,9 @@ This is an alternate focus from many ECS implementations which run over componen
 
 ## Compile time focus
 
-Adding and removing components is performed by macros which generate a minimised delta update for systems using the static types involved. These system state changes do the absolute minimum run time work your design allows.
+Adding and removing components is performed by macros which generate minimised delta updates for system lists, based on the static types involved. These system state changes do the minimum run time work the design allows for.
 
 Functionality such as building entities from blueprints, cloning entities, and debugging utilities are also fully generated from your types and system design at compile time.
-
-Essentially, the ECS interface pivots into sets of list operations.
 
 ### Compile time optimisation
 
@@ -555,27 +553,28 @@ To see information about which systems are affected, compile with `-d:ecsPerform
 >
 > To check for this at run time, set `assertItem = true` in the `EcsSysOptions` object passed to `makeSystem`/`defineSystem`.
 
-### `finish` utilities
+## System utilities
 
-The `finish` block includes some extra functionality for removing all entities or all components of a particular type from a system. These do not incur the above checks, as no iteration is taking place.
+You can perform remove operations on systems as a whole with the following two operations:
 
-- `removeEntities`: Removes all entities in the system.
-- `removeComponents <component type>`: Removes all components of a particular type from the entities in the system.
+- `removeEntities`: will delete all entities in the given system.
 
-> **NOTE:** When you remove components that a system uses, the entities are removed from that system.
->
-> This means the following doesn't work:
->
-> ```nim
-> makeSystem("oops", [Comp1, Comp2]):
->   finish:
->     # As well as removing Comp1, all entities are removed from this
->     # system, as this system is no longer satisfied.
->     removeComponents Comp1
-> 
->     # The system is empty - no work is done.
->     removeComponents Comp2
-> ```
+  ```nim
+  mySystem.removeEntities
+  ```
+
+- `remove`/`removeComponents`: removes one or more components from all entities in the given system.
+
+  ```nim
+  mySystem.remove Comp1, Comp2, Comp3
+  ```
+
+Within system blocks you can use the `sys` template to refer to the current system:
+
+```nim
+makeSystem("removeComp1", Comp1):
+  finish: sys.remove Comp1
+```
 
 # Working with entities
 
