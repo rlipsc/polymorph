@@ -755,7 +755,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
                 # Trim current chain before the last known starting point.
                 activeChain = curChain[chainIdx .. max(chainIdx, curChain.high)]
               
-              when defined(ecsPerformanceHints):
+              when defined(ecsLogDetails):
                 const potentialChain = activeChain & curSys
                 debugPerformance(identity, `opStr` & " event chain: " & identity.commaSeparate(potentialChain))
 
