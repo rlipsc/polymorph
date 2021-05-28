@@ -40,6 +40,7 @@
     - [EcsSysOptions fields](#ecssysoptions-fields)
   - [EcsEntityOptions](#ecsentityoptions)
     - [EcsEntityOptions fields](#ecsentityoptions-fields)
+- [Compile switches](#compile-switches)
 - [Performance considerations](#performance-considerations)
   - [Memory access patterns](#memory-access-patterns)
   - [Fragmentation analysis](#fragmentation-analysis)
@@ -90,7 +91,7 @@ makeSystem("move", [Position, Velocity]):
 # Generate the ECS interface.
 makeEcs()
 
-# Output defined systems, executed with a proc named `run`.
+# Output the "move" system, executed with a proc named `run`.
 commitSystems("run")
 
 # Create an entity to use the "move" system.
@@ -981,6 +982,42 @@ When passed to `makeEcs`, this object controls how entities are generated at com
   - `errEntityOverflow`: control how exceeding the maximum number of entities is reported.
   - `errCaseComponent`: control how invalid component types in `caseComponent` is reported.
   - `errIncompleteOwned`: control what happens when owned components passed to `addComponent` do not fully satisfy their owner system.
+
+# Compile switches
+
+- `-d:ecsLog`: use this switch to `echo` the ECS generation process.
+  
+  This includes:
+    - component generation information,
+    - system generation information,
+    - the system execution order in the wrapper proc created by `commitSystems`.
+
+- `-d:ecsLogDetails`: this expands on `ecsLog` and includes:
+  - the ECS compile options used for systems and components,
+  - details about each stage of the compile process by identity,
+  - the creation for `delete`, `construct`, and `clone`,
+  - operations such as `newEntityWith`, `addComponents` and `removeComponents`,
+  - events triggered within operations,
+  - event chains within system `onAdded`/`onRemoved` events.
+
+- `-d:ecsPerformanceHints`: displays compile time information for tuning memory access patterns.
+  This includes:
+    - read/write component instance field access within a system; when there are many field accesses, it may be worth considering a read/update/write pattern and use `access` and/or `update`,
+    - use of remove/delete in a system that has incurred an iteration checks,
+
+- `-d:ecsLogCode`: outputs the generated code from `registerComponents`, `makeEcs`, and `commitSystems`, along with any ECS operations performed up to this point to a log file for inspection. This can be useful for low level debugging or performance reasons, or just to understand the raw logic generated from the ECS design.
+
+  Useful things in the code log:
+  - storage variables and access machinery for components and systems,
+  - the output of `macro` operations such as `newEntityWith`, `addComponents`, and `removeComponents`,
+  - `proc` operations such `construct`, `clone`, and `delete`,
+  - how events are expanded within operations in the design.
+  
+  Note that any generated code *after* the above operations has to be manually 'flushed' with `flushGenLog()`. The log will then include subsequent operations.
+
+  > **Important note**: as Nim doesn't currently allow you to output to files at compile time, the log is generated at compile time but written at ***run time***. In other words, using this switch will bulk your output executable and write a static string at program startup.
+  
+  The log file is named `ecs_code_log.nim` and will be placed in the same path as the executable when run. This file isn't actually runnable as it doesn't include the full program context, and the `.nim` extension is just a hint for editors to use syntax highlighting.
 
 # Performance considerations
 
