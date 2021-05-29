@@ -54,20 +54,20 @@
 
 # Project overview
 
-Polymorph lets you build sets of data types and efficiently dispatch program logic for subsets of these types.
+This library lets you build sets of data types and efficiently dispatch program logic over subsets of these types.
 
 This pattern is known as [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system), or *ECS* for short, where a set of types is an **entity**, a data type is a **component**, and program logic running over these types is called a **system**.
 
-All operations, such as adding/removing components and creating/deleting entities, are generated at compile time based on the types involved and your system requirements.
+Polymorph is system oriented and generates the logic for ECS operations at compile time as pared down system state changes.
 
 The output is statically dispatched with a sequential flow, optimised to each system/component design.
 
 ## Project goals
 
 - Manage complexity with declarative dispatch and run time composition.
+- Scalable, low boilerplate platform for composing data oriented designs.
 - No runtime, zero system iteration overhead.
 - Leverage static typing and metaprogramming to elide run time work.
-- Scalable, low boilerplate platform for composing data oriented designs.
 
 ## Example code
 
@@ -139,10 +139,11 @@ Adding and removing multiple components at once is also minimised at compile tim
 
 ## Polymers companion library
 
-The [**Polymers**](https://github.com/rlipsc/polymers/) library provides components and systems for a various tasks including:
+The [**Polymers**](https://github.com/rlipsc/polymers/) library provides components and systems for various tasks:
 
   - `Console`: reading keyboard and mouse events, writing text with normalised (-1, 1) coordinates.
   - `Database`: performing queries with ODBC.
+  - `Networking`: components for socket TCP/IP (Windows IOCP), HTTP processing, serving webpages, and JSON RPC over HTTP.
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
   - `Physics`: interact with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
 
@@ -558,10 +559,10 @@ To see information about which systems are affected, compile with `-d:ecsPerform
 
 You can perform remove operations on systems as a whole with the following two operations:
 
-- `removeEntities`: will delete all entities in the given system.
+- `clear`: will delete all entities in the given system.
 
   ```nim
-  mySystem.removeEntities
+  mySystem.clear
   ```
 
 - `remove`/`removeComponents`: removes one or more components from all entities in the given system.
