@@ -516,7 +516,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       caseComponent comp.typeId:
         result &= `compName`()
         if showData:
-          result &= ":\n" & componentRefType()(comp).toString(showData) & "\n"
+          result &= ":\n" & $componentRefType()(comp).value & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
