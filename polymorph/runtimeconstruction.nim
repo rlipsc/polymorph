@@ -256,7 +256,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
   let
     cList = ident "componentList"
     construction = ident "construction"
-    master = ident "master"
+    context = ident "context"
     visited = ident "visited"
     types = ident "types"
     compIndexInfo = ident "curCompInfo"
@@ -357,17 +357,19 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     proc registerCloneConstructor*(`typeId`: ComponentTypeId, `callback`: CloneConstructorProc) = `cloneConstruct`[`typeId`.int] = `callback`
     template registerCloneConstructor*(t: typedesc[`tcIdent`], `callback`: CloneConstructorProc) = registerCloneConstructor(t.typeId, `callback`)
 
-    proc construct*(`cList`: ComponentList, `master`: EntityRef = NO_ENTITY_REF): EntityRef =
+    proc construct*(`cList`: ComponentList, `context`: EntityRef = NO_ENTITY_REF): EntityRef =
       ## Create a runtime entity from a list of components.
+      ## 
       ## The user may use `registerCallback` to control construction of particular types.
-      ## When called from a `ConstructionList`, `master` is set to the first entity constructed.
+      ## 
+      ## When called from a `ConstructionList`, `context` is set to the first entity constructed.
+      ## If no `context` is specified, the currently constructed entity is used.
 
       static: startOperation(EcsIdentity(`id`), "construct")
       `res` = newEntity()
-      # master defaults to the current entity if nothing specified
       let
-        masterRef = if `master`.entityId != NO_ENTITY:
-          `master`
+        contextEnt = if `context`.entityId != NO_ENTITY:
+          `context`
         else:
           `res`
       # Build an index to component list, which helps speed things
@@ -389,7 +391,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
           if cb != nil:
             # The callback is responsible for adding reference(s) from the source entity.
             # Callbacks may add multiple sets of components or none at all.
-            let compsAdded = cb(`res`, compRef, masterRef)
+            let compsAdded = cb(`res`, compRef, contextEnt)
             # We must now include manually added components to the index so
             # that systems are updated in the second stage below.
             # It is still possible to add owned components, and their
@@ -434,12 +436,12 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
 
     proc construct*(`construction`: ConstructionTemplate): seq[EntityRef] =
       ## Constructs multiple entities and returns their entity ids.
-      ## The first entity in the list is passed to the others as the "master".
+      ## The first entity in the list is passed to the others as the "context".
       ## This same entity is also passed to each individual component's constructor,
       ## this allows components to have some reference to their construction environment.
       ## For example, the first entity can contain a physics body component that others may
       ## reference.
-      ## No other structure is assumed, and the meaning of 'master' is defined by the user.
+      ## No other structure is assumed, and the meaning of 'context' is defined by the user.
       ## Components are constructed in order, calling manual construction code per type,
       ## then a second pass calls post construction procs with reference to the completed component
       ## lists.

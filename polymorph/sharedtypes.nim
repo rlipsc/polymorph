@@ -271,7 +271,7 @@ template valid*(entity: EntityRef): bool = entity != NO_ENTITY_REF
 
 type
   ## Constructor called on first create.
-  ConstructorProc* = proc (entity: EntityRef, component: Component, master: EntityRef): seq[Component]
+  ConstructorProc* = proc (entity: EntityRef, component: Component, context: EntityRef): seq[Component]
   ## Constructor called after all entities in a template have been constructed.
   PostConstructorProc* = proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
   ## Constructor called when `clone` is invoked.
