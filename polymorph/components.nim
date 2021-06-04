@@ -313,8 +313,7 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
       template containerType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instTypeNode`]): untyped = `refTypeNameIdent`
       ## Create a `ref` container from a user object.
       template makeContainer*(`tyParam`: `typeNameIdent`): `refTypeNameIdent` =
-        var container = `refTypeNameIdent`(fTypeId: `typeId`.ComponentTypeId, value: `tyParam`)
-        container
+        `refTypeNameIdent`(fTypeId: `typeId`.ComponentTypeId, value: `tyParam`)
       ## Create a `ref` container from an instance.
       template makeContainer*(`tyParam`: `instTypeNode`): `refTypeNameIdent` =
         `tyParam`.access.makeContainer()
