@@ -9,6 +9,7 @@
 - [Overview of building an ECS](#overview-of-building-an-ecs)
   - [After `makeEcs`](#after-makeecs)
 - [Defining components](#defining-components)
+  - [`registerComponents` generated types](#registercomponents-generated-types)
   - [Components and instance types](#components-and-instance-types)
   - [Instances in components](#instances-in-components)
 - [Defining systems](#defining-systems)
@@ -32,6 +33,8 @@
   - [Inline events, changing entities, and compile time cycles](#inline-events-changing-entities-and-compile-time-cycles)
   - [Change events](#change-events)
   - [`onEcsBuilt`](#onecsbuilt)
+  - [Construction and clone events](#construction-and-clone-events)
+    - [Construction events](#construction-events)
 - [Writing component libraries](#writing-component-libraries)
 - [Code generation options](#code-generation-options)
   - [EcsCompOptions](#ecscompoptions)
@@ -91,7 +94,7 @@ makeSystem("move", [Position, Velocity]):
 # Generate the ECS interface.
 makeEcs()
 
-# Output the "move" system, executed with a proc named `run`.
+# Output defined systems and choose name of execution proc.
 commitSystems("run")
 
 # Create an entity to use the "move" system.
@@ -101,7 +104,7 @@ let
     Velocity(x: 2, y: -1),
   )
 
-# Run "move" once.
+# Runs the "move" system once.
 run()
 
 # Check the new component values.
@@ -135,7 +138,7 @@ Adding and removing multiple components at once is also minimised at compile tim
 - ***No run time manager***: no query engine, no system iteration overhead. Always up to date systems.
 - ***Sequential code flow***: flatten run time composition, declarative code execution, and event hooks into a linear flow without needing callbacks or virtual calls.
 - ***Architecturally simple output***: outputs simple loops over lists in a set order. Aims to scale from stack only, low resource environments to cache efficient, high performance data processing.
-- ***Granular code generation control***: select between `array`, `seq` and `Table` backing data structures for individual components and systems, choose error handling mechanisms, removal strategies, and more - without changing your code.
+- ***Granular code generation control***: select between different data structures for each component and system, choose error handling mechanisms, system interval execution, indexing and removal strategies, and more - without changing any code.
 
 ## Polymers companion library
 
@@ -152,6 +155,7 @@ Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) fo
   - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/demos/particledemo.nim).
   - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/demos/particlelife.nim).
   - [An asteroids like 2D game](https://github.com/rlipsc/polymers/blob/master/demos/simplegame.nim).
+  - [A simple web server](https://github.com/rlipsc/polymers/blob/master/demos/simplewebsite.nim).
 
 # Overview of building an ECS
 
@@ -257,11 +261,17 @@ registerComponents(defaultCompOpts):
       data: Data
 ```
 
+## `registerComponents` generated types
+
+Each type passed to `registerComponents` creates two other types to support its use as a component:
+
+1) An instance type, generated with the `Instance` postfix. This is used to point to a specific component's data in storage.
+
+2) A container type, generated with the `Ref` postfix. This is inherited from the `Container` type, and allows `seq[Component]` with different component types for [`construct`](#constructing-entities-at-run-time) to build arbitrary entities.
+
 ## Components and instance types
 
-Component types passed to `registerComponents` also have a 'instance' type generated for them.
-
-These are `distinct` integers that reference values for that type, and are how components are generally represented within the ECS.
+Instance types are `distinct` integers that reference values for that type, and are how components are generally represented within the ECS.
 
 For example systems use instances by default, and `fetch` returns them. Any component attached to an entity can be represented by an instance.
 
@@ -271,6 +281,7 @@ Polymorph implements the dot accessors `.` and `.=` for instance types so that f
 
 ```nim
 import polymorph
+
 registerComponents(defaultCompOpts):
   type
     Foo = object
@@ -682,14 +693,27 @@ entity.delete
 
 # Constructing entities at run time
 
-`makeEcs` generates a `construct` procedures to allow you to build entities from lists of components. This is fairly efficient, as once the component list is parsed for types the entity is fully generated as a single operation, instead of building the entity with multiple `addComponent` operations.
+`makeEcs` generates a `construct` procedure that lets you build entities from lists of components.
 
-To allow different component types in a single list, `registerComponents` generates a `ref` container type for each component, descended from the `Component` object. These types are defined as the component type name postfixed with `Ref`, and an initialiser macro is provided to correctly initialise their internal `typeId`.
+This is fairly efficient, as the list is mapped for types then the entity is created in a single integrated operation much like `newEntityWith`. As such it can elide the speculation of multiple separate `addComponent` operations.
 
-For convenience, `seq[Component]` is aliased as `ComponentList`.
+To allow storing different component types in a single list, `registerComponents` generates a `ref` container type for each component, descended from the `Component` object.
 
-The provided `cl` macro lets you build a `ComponentList` with the original types or the generated `ref` container objects.
+These container types are defined as the component type name postfixed with `Ref`.
 
+The `construct` procedure then takes a `seq[Component]`, aliased as `ComponentList`, to build an entity.
+
+All container types have a `typeId` that must be initialised with the component's `ComponentTypeId` in order for `construct` to extract the value from the subtype. Containers with an uninitialised `typeId` will cause `construct` to fail at run time.
+
+The `makeContainer` template will correctly set up containers for individual components.
+
+```nim
+let mcContainer = MyComponent(data: 1234).makeContainer
+```
+
+The `cl` macro makes setting up a `ComponentList` more convenient.
+
+This macro lets you pass the original component types or `ref` container types, and ensures containers are correctly set up. Another advantage of `cl` is that it avoids over constraining the list type with single components - for example `@[MyComponentRef()]` is of type `seq[MyComponentRef]`, not the `seq[Component]` type that `construct` expects.
 
 ```nim
 import polymorph
@@ -829,6 +853,108 @@ ent.inc
 
 assert ent.fetch(Counter).value == 2
 ```
+
+## Construction and clone events
+
+These events allow you to intercept the construction and cloning of entities and edit, replace, ignore, or provide multiple components in response.
+
+Changing the component types being added is not possible with other events.
+
+To register these events, `makeEcs` must have been invoked, and as such they have full access to ECS operations.
+
+One use for these kind of events is for blueprinting run time only data such as external resources.
+One component type can be used to provide information for instantiation, and is replaced with a different component that represents initialised data. This can be useful for separating the concerns of systems.
+
+Another example is for meta-components. One component can contain information that adds one or more other components when passed to `construct`. Components can also create and manage sets of *entities* on construction as well.
+
+### Construction events
+
+- `registerConstructor` takes a component type and a proc of the form:
+  ```nim
+  proc (entity: EntityRef, component: Component, context: EntityRef): seq[Component]
+  ```
+  - `entity`: the current entity being constructed.
+
+  - `component`: the `Component` container supertype passed from the `ComponentList` being built.
+
+    To get the value stored within, type cast to the container subtype for the component you're hooking and access its `value` field.
+    
+    The component's container type is created by `registerComponents` as the component name with the `Ref` postfix, for example a `MyComponent` type would use `MyComponentRef(component).value`.
+
+  - `context`: the `construct` proc allows optionally passing this entity to provide input to construction events.
+
+    If no entity is provided, `context` will match the `entity` parameter.
+
+    When `construct` creates multiple entities from a `ConstructionTemplate`, the first entity built is always passed as `context` to these events. This allows you to define the context for multiple entities in the `ConstructionTemplate` itself.
+  
+  Components are added by appending to the `seq[Component]` result. It's possible to add any number of components to the result, as long as there aren't any repeated types. It's also valid to not add to the result and elide the component from the entity.
+
+  ```nim
+  registerComponents(defaultCompOpts):
+    type
+      Original = object
+        data: int
+      Replaced = object
+        data: int
+  
+  makeEcs()
+
+  # This event will replace the `Original` component type with `Replaced`
+  # during construction.
+  proc replaceOriginal(entity: EntityRef, component: Component, context: EntityRef): seq[Component] =
+    let original = OriginalRef(component).value
+    result.add Replaced(data: original.data)
+
+  registerConstructor Original, replaceOriginal
+
+  # Build an entity from a component list using the `Original` type.
+  let entity = Original(data: 1234).cl.construct
+
+  # Confirm the replaced component.
+  assert not entity.has(Original)
+  assert entity.has(Replaced)
+  assert entity.fetch(Replaced).data == 1234
+  ```
+  
+- `registerPostConstructor`: takes a component type and proc of the form:
+  ```nim
+  proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
+  ```
+  - `entity`: the entity being constructed.
+  - `component`: the component ref that's been assigned to the entity. To convert this to an instance to access it, type cast the index field with the component's instance type, which is the type postfixed with `Instance`. For example for `MyComponent`: `MyComponentInstance(component.index)`.
+  - `entities`: the list of entities that will be returned to the user.
+
+  These events are called after multiple entities are built by using `construct` with a `ConstructionTemplate`. The event allows work to be performed on the fully constructed sets of entities.
+  
+  It does not allow changing of components directly, but allows full manipulation of the entities themselves.
+
+  This can be useful to update components that keep track of other entities, or perform other multi-entity work.
+
+  ```nim
+  proc countEntities(entity: EntityRef, component: ComponentRef, entities: var Entities) =
+    echo "I counted: ", entities.len
+
+  registerPostConstructor MyOtherComponent, countEntities
+  ```
+
+- `registerCloneConstructor`: takes a component type and proc of the form:
+  ```nim
+  proc (entity: EntityRef, component: ComponentRef): seq[Component]
+  ```
+  - `entity`: the new cloned entity.
+  - `component`: the ***source*** component being cloned. This is a `ComponentRef`, to convert this to an instance to access it, type cast the index field with the component's instance type. For example: `MyComponentInstance(component.index)`.
+
+  Clone events allow you to transform components from entities built by `clone`. This can be useful when resources need to perform some extra work to be duplicated, or to deny duplication entirely.
+
+  ```nim
+  proc displayCloning(entity: EntityRef, component: ComponentRef): seq[Component] =
+    let instance = MyOtherComponentInstance(component.index)
+    echo "We're cloning MyOtherComponent: ", instance
+    # Create a copy of the original component.
+    result.add instance.makeContainer
+
+  registerCloneConstructor MyOtherComponent, displayCloning
+  ```
 
 # Writing component libraries
 
