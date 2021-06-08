@@ -284,40 +284,50 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   doAssert (not existingSysIndex.found) or
     (existingSysIndex.index notin id.ecsSystemsToBeSealed),
     "System \"" & sysName & "\" has already been defined"
+  
   doAssert componentTypes.len > 0, "Systems require at least one type to operate on but none have been provided (missing a defineSystem?)"
+  
   if sysOptions.indexFormat in [sifArray, sifAllocatedSeq] and sysOptions.maxEntities == 0:
-    error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using a fixed size type"
+    error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using the fixed size type " & $sysOptions.indexFormat
 
   var
     typeIdents: seq[NimNode]
     passedComponentIds: seq[ComponentTypeId]
 
   for item in componentTypes:
-    let typeId = id.typeStringToId($item)
+    let
+      typeId = id.typeStringToId($item)
+
     doAssert typeId notin id.ecsSealedComponents,
       "Component " & id.typeName(typeId) &
       " has already been sealed with makeEcs and cannot be extended to system \"" &
       sysName &
       "\". Use defineSystem to forward declare the system or place this makeSystem before makeEcs."
+
     typeIdents.add item
     passedComponentIds.add typeId
 
   # Process owned components.
-  var ownedComponentIds: seq[ComponentTypeId]
+  var
+    ownedComponentIds: seq[ComponentTypeId]
+
   for comp in ownedComponents:
-    let typeId = id.typeStringToId($comp)
-    
+    let
+      typeId = id.typeStringToId($comp)
+
     doAssert typeId.int != -1, "This type's id can't be found in registered components: " & $comp
+
     if typeId notin passedComponentIds:
       error "Asking to own component " & id.typeName(typeId) &
         " that is not part of system \"" & sysName &
         "\". System components are: " & id.commaSeparate(passedComponentIds)
-    
+
     ownedComponentIds.add typeId
 
   for typeId in passedComponentIds:
-    let curOwner = id.systemOwner typeId
-    
+    let
+      curOwner = id.systemOwner typeId
+
     if curOwner != InvalidSystemIndex and typeId in ownedComponentIds:
       error "Component " & id.typeName(typeId) & " is already owned by system \"" & id.getSystemName(curOwner) & "\"" 
 
@@ -333,32 +343,47 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   let inst = ident(systemVarName(typeName))
 
   # Create a new system index.
-  let sysIndex = id.addSystem sysName
+  let
+    sysIndex = id.addSystem sysName
+
   id.setOptions(sysIndex, sysOptions)
+
+  # Store variable ident for this system.
   id.set_Instantiation(sysIndex, inst)
+  
+  # Append to the commitSystems order.
+  id.add_systemOrder sysIndex
+
   assert id.len_ecsOwnedComponents(sysIndex) == 0
 
   for sys in ownedComponentIds:
     id.add_ecsOwnedComponents(sysIndex, sys)
 
   # Build tuple type of components for this system.
-  var elements = nnkTupleTy.newTree()
+  var
+    elements = nnkTupleTy.newTree()
+  
   # Add entity field.
   elements.add(nnkIdentDefs.newTree(ident("entity"), ident("EntityRef"), newEmptyNode()))
+  
   # Add component fields to the tuple.
   for typeId in passedComponentIds:
-    let tyName = id.typeName typeId
+    let
+      tyName = id.typeName typeId
+
     if typeId in ownedComponentIds:
-      
       # Owned component storage is the system itself.
+
       id.set_systemOwner typeId, sysIndex
       id.set_isOwned typeId, true
       
       elements.add(nnkIdentDefs.newTree(
         ident((tyName).toLowerAscii), ident(tyName), newEmptyNode())
       )
+
     else:
       # If not owned the component instance type is used.
+      
       elements.add(nnkIdentDefs.newTree(
         ident(tyName.toLowerAscii), ident(tyName.instanceTypeName()), newEmptyNode())
       )
@@ -392,6 +417,7 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
           (_, identDef) = parsePublicPragma(tyDef[0], valueType)
 
         extraFieldDefs.add(identDef)
+  
       of nnkAsgn:
         # Because it's invalid syntax to use `field: type = statement`
         # you can manually set the type using `field -> type = statement`
@@ -410,7 +436,10 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
         fieldSetup.add (ident, value)
         # Record the field def too.
         extraFieldDefs.add(identDef)
-      else: error "Unhandled kind for extra field in system \"" & sysName & "\", expected `field: type` or `field = value`, got:\n" & tyDef.treeRepr
+      else:
+        error "Unhandled kind for extra field in system \"" & sysName &
+          "\", expected `field: type` or `field = value`, got:\n" & tyDef.treeRepr
+
   # Generate the system type according to provided options.
   result.add makeSystemType(id, sysIndex, componentTypes, extraFieldDefs)
   result.add instantiateSystem(id, sysIndex, sysName, fieldSetup)
@@ -429,7 +458,6 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
       )
 
   id.add_ecsSystemsToBeSealed sysIndex
-  id.add_ecsSysUncommitted sysIndex
   id.add_ecsSysDefined sysIndex
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
@@ -471,9 +499,95 @@ template defineSystemOwner*(name: static[string], componentTypes: openarray[type
 template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options)
 
-#---------------------------
-# Generating the system proc
-#---------------------------
+# ----------------
+# Grouping systems
+# ----------------
+
+macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: openarray[string]): untyped =
+  ## Give a set of systems a group tag.
+  for systemName in systems:
+    let
+      nameStr = systemName.strVal
+      lookupSys = findSystemIndex(id, nameStr)
+
+    if lookupSys.found:
+      let
+        sys = lookupSys.index
+
+      # Add to list of systems for this group.
+      if sys notin id.groupSystems(group):
+        id.add_groupSystems(group, sys)
+
+      # Add the group to this system.
+      if group notin id.systemGroups(sys):
+        id.add_systemGroups(sys, group)
+
+    else:
+      error "Cannot find system \"" & nameStr & "\""
+
+template defineGroup*(group: static[string], systems: openarray[string]): untyped =
+  defaultIdentity.defineGroup(group, systems)
+
+macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): untyped =
+  result = newStmtList()
+
+  # TODO: Does most of the same work as commitSystem, refactor to a shared operation.
+
+  let
+    systems = id.groupSystems(group)
+    committed = id.ecsSysBodiesAdded
+  var
+    sysCalls = newStmtList()
+  const
+    logOrder = defined(ecsLog) or defined(ecsLogDetails)
+
+  if systems.len == 0:
+    error "No system bodies defined for group \"" & group & "\""
+  else:
+    for sys in systems:
+      let
+        definition = id.definition sys
+        sysName = id.getSystemName sys
+    
+      if definition.len > 0:
+
+        # Add system body proc.
+        if sys notin committed:
+          id.startOperation "Adding system proc for \"" & sysName & "\""
+
+          result.add definition
+          id.add_ecsSysBodiesAdded sys
+          
+          id.endOperation
+
+        # Call the proc in commitSystems.
+        if runProc.len > 0:
+          sysCalls.add nnkCall.newTree(ident doProcName(sysName))
+
+  if runProc.len > 0:
+
+    when logOrder:
+      echo "Wrapper proc `" & runProc & "()` execution order:"
+      if systems.len > 0:
+        for sys in systems:
+          echo "  ", id.getSystemName(sys)
+      else:
+        echo "  <No bodies found>"
+
+    let procIdent = ident runProc
+
+    result.add(quote do:
+      proc `procIdent`* =
+        `sysCalls`
+    )
+
+template commitGroup*(group, runProc: static[string]): untyped =
+  defaultIdentity.commitGroup(group, runProc)
+
+
+#-----------------
+# System utilities
+#-----------------
 
 template updateTimings*(sys: untyped): untyped =
   # per item
@@ -554,6 +668,10 @@ template clear*(sys: object) =
     for i in countDown(`sys`.count - 1, 0):
       `sys`.groups[i].entity.delete
 
+#---------------------------
+# Generating the system proc
+#---------------------------
+
 proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, extraFields: NimNode, systemBody: NimNode, ownedFields: NimNode): NimNode =
   ## Create the system proc to 'tick' the system.
 
@@ -600,26 +718,28 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     # This is an inline makeSystem.
     when defined(ecsLog) or defined(ecsLogDetails):
       echo "Defining body for system \"", name, "\" with types ", componentTypes.repr
+
     result.add createSysTuple(id, name, componentTypes, ownedFields, extraFields, options)
+
     sysIdxSearch = id.findSystemIndex(name)
     assert sysIdxSearch.found, "Internal error: cannot find system \"" & name & "\" after adding it"
 
   var
-    initBody = newStmtList()
-    startBody = newStmtList()
-    finishBody = newStmtList()
-    allBody = newStmtList()
+    initBodies = newStmtList()
+
+    startBodies = newStmtList()   
+    finishBodies = newStmtList()
+
+    # These blocks have separate processing units per block.
+    allBodies: seq[NimNode]
+    streamBodies: seq[NimNode]
+
     allWrapper = newStmtList()
-    streamBody = newStmtList()
     streamWrapper = newStmtList()
 
   let
     sysIndex = sysIdxSearch[1]
     options = id.getOptions sysIndex
-
-  # The sequence of generateSystem invocations.
-  # This is used by commitSystems to build the combined doProc.
-  id.add_systemOrder sysIndex
 
   if systemBody == nil:
     error "makeSystem needs a `body`"
@@ -805,19 +925,19 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
       of $sbInit:
         item[1].expectKind nnkStmtList
-        initBody.add(code)
+        initBodies.add(code)
         
       of $sbStart:
         item[1].expectKind nnkStmtList
-        startBody.add(code)
+        startBodies.add(code)
 
       of $sbAll:
         item[1].expectKind nnkStmtList
-        allBody = code
+        allBodies.add(code)
 
       of $sbFinish:
         item[1].expectKind nnkStmtList
-        finishBody.add(code)
+        finishBodies.add(code)
 
       of $sbAdded:
 
@@ -901,7 +1021,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
           streamAmount = item[1]
           item[2].expectKind nnkStmtList
-          streamBody = item[2]
+          streamBodies.add item[2]
 
         of nnkCommand:
           # Stream is followed by a command and parameter, eg `stream stochastic 10:`.
@@ -921,7 +1041,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           streamAmount = item[1][1]
 
           item[2].expectKind nnkStmtList
-          streamBody = item[2]
+          streamBodies.add item[2]
 
         of nnkIdent:
           # Stream is followed by an ident which could be a command or parameter.
@@ -938,20 +1058,20 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
             streamAmount = item[1]
 
           item[2].expectKind nnkStmtList
-          streamBody = item[2]
+          streamBodies.add item[2]
         else:
           # No stream parameters
           code.expectKind nnkStmtList
-          streamBody = code
+          streamBodies.add code
       else: error(&"makeSystem: Unknown verb \"{verb}\", expected {verbChoices}")
 
   var activeBlocks: set[SystemBlockKind]
 
-  if initBody.len > 0: activeBlocks.incl sbkInit
-  if startBody.len > 0: activeBlocks.incl sbkStart
-  if allBody.len > 0: activeBlocks.incl sbkAll
-  if streamBody.len > 0: activeBlocks.incl sbkStream
-  if finishBody.len > 0: activeBlocks.incl sbkFinish
+  if initBodies.len > 0: activeBlocks.incl sbkInit
+  if startBodies.len > 0: activeBlocks.incl sbkStart
+  if allBodies.len > 0: activeBlocks.incl sbkAll
+  if streamBodies.len > 0: activeBlocks.incl sbkStream
+  if finishBodies.len > 0: activeBlocks.incl sbkFinish
   if id.len_onAdded(sysIndex) > 0: activeBlocks.incl sbkAdded
   if id.len_onRemoved(sysIndex) > 0: activeBlocks.incl sbkRemoved
   if id.len_onAddedCallback(sysIndex) > 0: activeBlocks.incl sbkAddedCallback
@@ -1105,67 +1225,77 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
               error `undefinedItemMsg`
       else: newStmtList()
 
-    allCore = quote do:
+  var
+    allCore = newStmtList()
+
+  if allBodies.len > 0:
+    allCore.add(quote do:
       static:
-        `staticInit`
         `cacheId`.set_inSystemAll true
+      )
 
-      var `sysLen` = `sys`.count()
-      if `sysLen` > 0:
-        `defineIdx`
+    for allBody in allBodies:
 
-        while `idx` < `sysLen`:
-          ## The entity this row started execution with.
-          let
-            `rowEnt` {.used, inject.} = `sys`.groups[`idx`].entity
-            ## Read only index into `groups`.
-            `groupIndex` {.used, inject.} = `idx`
+      allCore.add(quote do:
+        block:
+          var `sysLen` = `sys`.count()
+          if `sysLen` > 0:
+            `defineIdx`
 
-          ## Current system item being processed.
-          template item: `typeIdent` {.used.} =
-            `strictCatch`
-            `assertCheck`
-            `sys`.groups[`idx`]
+            while `idx` < `sysLen`:
+              ## The entity this row started execution with.
+              let
+                `rowEnt` {.used, inject.} = `sys`.groups[`idx`].entity
+                ## Read only index into `groups`.
+                `groupIndex` {.used, inject.} = `idx`
 
-          template deleteEntity: untyped {.used.} =
-            ## Convenience shortcut for deleting just this row's entity.
-            # Although we know this delete only affects this row, we don't
-            # know that it definitely will (for example if the deleteEntity depends on a 
-            # condition). As such we still need to check the length each iteration.
-            static:
-              `cacheId`.set_inSystemDeleteRow true
-              `cacheId`.set_systemCalledDeleteEntity true
-            `rowEnt`.delete
-            static:
-              `cacheId`.set_inSystemDeleteRow false
+              ## Current system item being processed.
+              template item: `typeIdent` {.used.} =
+                `strictCatch`
+                `assertCheck`
+                `sys`.groups[`idx`]
 
-          # Inject the statements from `all:`
-          `allBody`
-          when `cacheId`.systemCalledDeleteEntity or
-            `cacheId`.systemCalledDelete or
-            `cacheId`.sysRemoveAffectedThisSystem:
-              `sysLen` = `sys`.count()
-              if `sysLen` > 0 and (`idx` < `sysLen` and `sys`.groups[`idx`].entity == `rowEnt`):
-                # This row wasn't deleted so move forward.
+              template deleteEntity: untyped {.used.} =
+                ## Convenience shortcut for deleting just this row's entity.
+                # Although we know this delete only affects this row, we don't
+                # know that it definitely will (for example if the deleteEntity depends on a 
+                # condition). As such we still need to check the length each iteration.
+                static:
+                  `cacheId`.set_inSystemDeleteRow true
+                  `cacheId`.set_systemCalledDeleteEntity true
+                `rowEnt`.delete
+                static:
+                  `cacheId`.set_inSystemDeleteRow false
+
+              # Inject the statements from `all:`
+              `allBody`
+              when `cacheId`.systemCalledDeleteEntity or
+                `cacheId`.systemCalledDelete or
+                `cacheId`.sysRemoveAffectedThisSystem:
+                  `sysLen` = `sys`.count()
+                  if `sysLen` > 0 and (`idx` < `sysLen` and `sys`.groups[`idx`].entity == `rowEnt`):
+                    # This row wasn't deleted so move forward.
+                    `idx` = `idx` + 1
+              else:
                 `idx` = `idx` + 1
-          else:
-            `idx` = `idx` + 1
-      
-      static:
-        `cacheId`.set_inSystemAll false
-        `staticTearDown`
+        )
+
+    allCore.add(quote do:
+        static:
+          `cacheId`.set_inSystemAll false
+      )
 
   id.set_sysCheckLengthPerIter false
 
   # Build the all items node.
   let timeWrapperAll = timeWrapper(allCore)
-  if allBody.len > 0:
+  if allBodies.len > 0:
     allWrapper.add(quote do:
       `timeWrapperAll`
     )
 
   ##
-  ## Streaming body
+  ## Streaming bodies
   ##
 
   # Use default stream rate if not provided.
@@ -1199,53 +1329,62 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           if not `finished`:
             `sys`.lastIndex = `randomValue`(`sys`.high)
 
-  let
-    streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)
-    # Streaming body.
-    streamCore = quote do:
-      # loop per entity in system
+  let streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)
+  var streamCore = newStmtList()
 
-      # Note that streaming bodies always check the length each iteration so
-      # there's no need to modify generation when a delete is called.
+  if streamBodies.len > 0:
+    streamCore.add(quote do:
       static:
-        `staticInit`
         `cacheId`.set_inSystemStream  true
+    )
 
-      var
-        `sysLen` = `sys`.count()
-        `processed`: int
-        `finished` = `sysLen` == 0
-      `defineIdx` # TODO: Ensure owner streaming starts at index 1.
-      `initFirstRun`
-      while `finished` == false:
-        let
-          ## Current index into `groups`.
-          `groupIndex` {.used, inject.} = `sys`.lastIndex
-          ## The entity this row started execution with.
-          `rowEnt` {.used, inject.} = `sys`.groups[`groupIndex`].entity
-        ## Current system item being processed.
-        template item: `typeIdent` {.used.} =
-          `streamAssertCheck`
-          `sys`.groups[`groupIndex`]
-        template deleteEntity: untyped {.used.} =
-          ## Convenience shortcut for deleting just this row's entity.
-          `rowEnt`.delete
-        
-        # Inject stream statements.
-        `streamBody`
-        
-        `processed` = `processed` + 1
-        `sysLen` = `sys`.count()
+    for streamBody in streamBodies:
+      streamCore.add(quote do:
+        block:
+          # loop per entity in system
 
-        # processing based on commands.
-        `processNext`
-      
+          # Note that streaming bodies always check the length each iteration so
+          # there's no need to modify generation when a delete is called.
+
+          var
+            `sysLen` = `sys`.count()
+            `processed`: int
+            `finished` = `sysLen` == 0
+          `defineIdx` # TODO: Ensure owner streaming starts at index 1.
+          `initFirstRun`
+          while `finished` == false:
+            let
+              ## Current index into `groups`.
+              `groupIndex` {.used, inject.} = `sys`.lastIndex
+              ## The entity this row started execution with.
+              `rowEnt` {.used, inject.} = `sys`.groups[`groupIndex`].entity
+            ## Current system item being processed.
+            template item: `typeIdent` {.used.} =
+              `streamAssertCheck`
+              `sys`.groups[`groupIndex`]
+            template deleteEntity: untyped {.used.} =
+              ## Convenience shortcut for deleting just this row's entity.
+              `rowEnt`.delete
+            
+            # Inject stream statements.
+            `streamBody`
+            
+            `processed` = `processed` + 1
+            `sysLen` = `sys`.count()
+
+            # processing based on commands.
+            `processNext`
+          
+      )
+    streamCore.add(quote do:
       static:
         `cacheId`.set_inSystemStream false
-        `staticTearDown`
+    )
 
-  let timeWrapperStream = timeWrapper(streamCore)
-  if streamBody.len > 0:
+  let
+    timeWrapperStream = timeWrapper(streamCore)
+
+  if streamBodies.len > 0:
     streamWrapper = quote do:
       `timeWrapperStream`
 
@@ -1267,34 +1406,41 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       of stRunEvery, stProfiling:
         quote do: (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastTick >= `sys`.runEvery))
     initWrapper =
-      if initBody.len > 0:
+      if initBodies.len > 0:
         quote do:
           if unlikely(not `sys`.initialised):
             `echoInit`
-            `initBody`
+            `initBodies`
             `sys`.initialised = true
       else:
-        initBody
+        newStmtList()
 
   let
     # Assemble the final proc.
     systemProc = quote do:
       proc `doSystem`*(`sys`: var `sysType`) =
         `systemComment`
+        static:
+          `staticInit`
+
         `echoRun`
         if `runCheck`:
           `initWrapper`
-          `startBody`
+          `startBodies`
           if not `sys`.paused:
             `echoAll`
             `allWrapper`
             `streamWrapper`
           `echoFinish`
-          `finishBody`
+          `finishBodies`
           for ent in `sys`.deleteList:
             ent.delete
           `sys`.deleteList.setLen 0
         `echoCompleted`
+        
+        static:
+          `staticTearDown`
+      
       template `doSystem`*: untyped =
         `doSystem`(`sysId`)
 

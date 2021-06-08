@@ -1615,34 +1615,28 @@ macro flushGenLog*: untyped =
 
 import strutils
 
-proc genRunProc(id: EcsIdentity, name: string): NimNode =
-  ## Create a proc to call systems that haven't been committed.
-  # The current order is stored as a macrocache seq of SystemIndex.
+template processUncommitted(actions: untyped): untyped =
+  # Perform `actions` for currently uncommitted systems then reset for
+  # next set.
   let
-    procName = ident name.toLowerAscii
     start = id.systemOrderStart()
-    commitOrder = id.systemOrder()
-    currentCommits = commitOrder[start .. ^1]
-
-  #  
-  var sysCalls = newStmtList()
-
-  when defined(ecsLog) or defined(ecsLogDetails):
-    echo "Wrapper proc `" & name & "()` execution order:"
+    order = id.systemOrder()
+  var
+    systems {.inject.} = order[start .. ^1]
   
-  for system in currentCommits:
-    let sysName = id.getSystemName(system)
-    sysCalls.add nnkCall.newTree(ident doProcName(sysName))
-    
-    when defined(ecsLog) or defined(ecsLogDetails):
-      echo "  " & sysName
+  # Remove systems that are assigned to groups.
+  for i in systems.high.countDown 0:
+    let
+      groupCount = id.systemGroups(systems[i]).len
 
-  result = quote do:
-    proc `procName`* =
-      `sysCalls`
-  
+    if groupCount > 0:
+      # Delete whilst retaining order.
+      systems.delete(i)
+
+  actions
+
   # Set the starting point to take for the next set of commits.
-  id.set_systemOrderStart commitOrder.len
+  id.set_systemOrderStart order.len
 
 proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
   result = newStmtList()
@@ -1655,7 +1649,7 @@ proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
       else:
         error "Cannot process kind " & $wrapperName.kind & " for 'procName'"
         ""
-      
+
     commitHeader = "for \"" & id.string & "\""
     logTitle =
       if procName != "":
@@ -1667,36 +1661,65 @@ proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
     echo "Committing systems " & commitHeader
   
   id.startOperation "Commit systems " & commitHeader
-  
-  var committedBodies = id.ecsSysBodiesAdded
 
-  for sys in id.ecsSysUncommitted:
-    if sys notin committedBodies:
-      let definition = id.definition sys
-      if definition.len > 0:
+  const logOrder = defined(ecsLog) or defined(ecsLogDetails)
 
-        id.startOperation "Adding system proc for \"" & id.getSystemName(sys) & "\""
-        
+  var
+    sysCalls = newStmtList()
+    noBodies: seq[string]
+  when logOrder:
+    var executionOrder: string
+  let
+    alreadyAdded = id.ecsSysBodiesAdded
+
+  processUncommitted:
+
+    # Add the system body procedures.
+
+    for sys in systems:
+
+      let
+        definition = id.definition sys
+        sysName = id.getSystemName sys
+    
+      if definition.len > 0 and sys notin alreadyAdded:
+
+        id.startOperation "Adding system proc for \"" & sysName & "\""
         result.add definition
         id.add_ecsSysBodiesAdded sys
-        committedBodies.add sys
-
         id.endOperation
 
-  if procName != "":
-    # Generate wrapper proc.
-    result.add id.genRunProc(procName)
+        if procName.len > 0:
+          # Call the proc in commitSystems.
+          sysCalls.add nnkCall.newTree(ident doProcName(sysName))
 
-  # Check for defined but not committed systems.
-  var noBodies: seq[string]
+          when logOrder:
+            executionOrder &= "  " & sysName & "\n"
+      else:
+        noBodies.add "\"" & sysName & "\""
+
+    # Add the wrapper procedure that calls them.
+
+    if procName.len > 0:
+
+      when logOrder:
+        echo "Wrapper proc `" & procName & "()` execution order:"
+        if executionOrder.len > 0:
+          echo executionOrder
+        else:
+          echo "  <No bodies found>"
+
+      let procIdent = ident procName
+
+      result.add(quote do:
+        proc `procIdent`* =
+          `sysCalls`
+      )
+
   let
     bodiesAdded = id.ecsSysBodiesAdded
     sysDefined = id.ecsSysDefined
-    
-  for system in sysDefined:
-    if system notin bodiesAdded:
-      noBodies.add "\"" & id.getSystemName(system) & "\""
-  
+
   if noBodies.len > 0:
     var outputStr = noBodies[0]
     for i in 1 ..< noBodies.len:

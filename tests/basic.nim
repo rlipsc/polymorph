@@ -63,6 +63,32 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         item.entity.removeComponent RemDelSelf
       sys.counter.inc
 
+  makeSystemOpts("multipleBlocks", [AddOne], sysOpts):
+    init:
+      let initActivated = true
+    init: check initActivated == true
+    start:
+      type State = enum None, Started, Finished
+      var
+        number: int
+        state: State
+    start:
+      state = Started
+      let
+        a = 1
+        b = 2
+        c = 3
+        d = 4
+    all: number += a
+    all: number += b
+    stream 2: number += c
+    stream 2: number += d
+    finish:
+      check state == Started
+      state = Finished
+    finish: check number == (sys.count * (a + b)) + (2 * (c + d))
+    finish: check state == Finished
+
   makeEcs(entOpts)
   commitSystems("run")
 

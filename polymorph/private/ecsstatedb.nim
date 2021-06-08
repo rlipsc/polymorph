@@ -540,6 +540,10 @@ genItemState(SystemIndex, bool, ["sealed", "useThreadVar"])
 genItemState(SystemIndex, NimNode, ["instantiation", "definition"])
 genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents"])
 
+# System groups
+genListStates(string, SystemIndex, ["groupSystems"])  # Group to list of systems.
+genListStates(SystemIndex, string, ["systemGroups"])  # System to list of groups.
+
 # System options
 genItemState(SystemIndex, int, ["maxEntities"])
 genItemState(SystemIndex, ECSSysStorage, ["storageFormat"])
