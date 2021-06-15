@@ -40,7 +40,7 @@
 ## Example:
 ## 
 ## .. code-block:: nim
-##   genGlobalState(string, ["lastFoo"])
+##   genGlobalStates(string, ["lastFoo"])
 ##   genListStates(SystemIndex, string, ["foo"])
 ##
 ##   const myId = newEcsIdentity("MyId")
@@ -311,7 +311,7 @@ macro genLookupListStates(indexType1, indexType2, itemType: typedesc, listNames:
             i.inc
     )
 
-macro genItemState(indexType, itemType: typedesc, itemNames: static[openarray[string]]): untyped =
+macro genItemStates(indexType, itemType: typedesc, itemNames: static[openarray[string]]): untyped =
   ## Creates typed CacheSeq access procs for each item in `itemNames`.
   ## Each item represents an individual value indexed by type id.
   ## The index type is integrated into the key.
@@ -377,7 +377,7 @@ macro genItemState(indexType, itemType: typedesc, itemNames: static[openarray[st
         {.pop.}
     )
 
-macro genGlobalState(itemType: typedesc, itemNames: static[openarray[string]]): untyped =
+macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]): untyped =
   ## Creates typed CacheSeq access procs for each item in `itemNames`.
   ## Each item represents an individual value indexed by type id.
   ## Though all additions to a value are recorded, only the most
@@ -519,25 +519,25 @@ macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string
 #-------------------------------
 
 # Component properties
-genItemState(ComponentTypeId, string, ["instanceType", "refType", "initPrefix", "refInitPrefix"])
-genItemState(ComponentTypeId, bool, ["isOwned"])
-genItemState(ComponentTypeId, SystemIndex, ["systemOwner"])
+genItemStates(ComponentTypeId, string, ["instanceType", "refType", "initPrefix", "refInitPrefix"])
+genItemStates(ComponentTypeId, bool, ["isOwned"])
+genItemStates(ComponentTypeId, SystemIndex, ["systemOwner"])
 genListStates(ComponentTypeId, SystemIndex, ["systems", "dependentOwners", "linked"])
 
 # Raw component type definition AST.
 genListStates(ComponentTypeId, NimNode, ["componentDefinitions"])
 
 # Component options
-genItemState(ComponentTypeId, Natural, ["maxComponents"])
-genItemState(ComponentTypeId, EcsCompItemStorage, ["componentStorageFormat"])
-genItemState(ComponentTypeId, EcsAccessMethod, ["accessMethod"])
-genItemState(ComponentTypeId, EcsCompRecyclerFormat, ["recyclerFormat"])
-genItemState(ComponentTypeId, bool, ["clearAfterDelete", "useThreadVar"])
-genItemState(ComponentTypeId, EcsCompInvalidAccess, ["invalidAccess"])
+genItemStates(ComponentTypeId, Natural, ["maxComponents"])
+genItemStates(ComponentTypeId, EcsCompItemStorage, ["componentStorageFormat"])
+genItemStates(ComponentTypeId, EcsAccessMethod, ["accessMethod"])
+genItemStates(ComponentTypeId, EcsCompRecyclerFormat, ["recyclerFormat"])
+genItemStates(ComponentTypeId, bool, ["clearAfterDelete", "useThreadVar"])
+genItemStates(ComponentTypeId, EcsCompInvalidAccess, ["invalidAccess"])
 
 # System properties
-genItemState(SystemIndex, bool, ["sealed", "useThreadVar"])
-genItemState(SystemIndex, NimNode, ["instantiation", "definition"])
+genItemStates(SystemIndex, bool, ["sealed", "useThreadVar", "bodyDefined"])
+genItemStates(SystemIndex, NimNode, ["instantiation", "definition"])
 genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents"])
 
 # System groups
@@ -545,13 +545,13 @@ genListStates(string, SystemIndex, ["groupSystems"])  # Group to list of systems
 genListStates(SystemIndex, string, ["systemGroups"])  # System to list of groups.
 
 # System options
-genItemState(SystemIndex, int, ["maxEntities"])
-genItemState(SystemIndex, ECSSysStorage, ["storageFormat"])
-genItemState(SystemIndex, ECSSysIndexFormat, ["indexFormat"])
-genItemState(SystemIndex, ECSSysTimings, ["timings"])
-genItemState(SystemIndex, ECSSysEcho, ["echoRunning"])
-genItemState(SystemIndex, bool, ["assertItem"])
-genItemState(SystemIndex, bool, ["orderedRemove"])
+genItemStates(SystemIndex, int, ["maxEntities"])
+genItemStates(SystemIndex, ECSSysStorage, ["storageFormat"])
+genItemStates(SystemIndex, ECSSysIndexFormat, ["indexFormat"])
+genItemStates(SystemIndex, ECSSysTimings, ["timings"])
+genItemStates(SystemIndex, ECSSysEcho, ["echoRunning"])
+genItemStates(SystemIndex, bool, ["assertItem"])
+genItemStates(SystemIndex, bool, ["orderedRemove"])
 
 # Current build info
 genGlobalListStates(ComponentTypeId, [
@@ -562,33 +562,27 @@ genGlobalListStates(ComponentTypeId, [
   "ecsSealedComponents"])
 
 genGlobalListStates(string, ["codeLog"])
-genGlobalState(int, ["codeLogStart"])
+genGlobalStates(int, ["codeLogStart"])
 
 genGlobalListStates(SystemIndex, [
-  # Current range of systems that have yet to be processed by `makeEcs`.
-  "ecsSystemsToBeSealed",
-  # Current range of systems that need their procs committed.
-  "ecsSysUncommitted",
-  # Systems that have had their type and instance defined.
+  # Stores a list of defined systems.
   "ecsSysDefined",
-  # Systems that have been output by commitSystems().
-  "ecsSysBodiesAdded",
-  # Store the order of systems. Used to create run procedures.
+  # Stores the order of systems for `commitSystems`.
   "systemOrder"])
 
-# Mark the index into "systemOrder" to begin a commit do proc.
-genGlobalState(int, ["systemOrderStart"])
-
 # State tracking for systems.
-genGlobalState(bool, [
+genGlobalStates(bool, [
   "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",  
   "sysCheckLengthPerIter",  # Control iteration generation.
   "sysRemoveAffectedThisSystem", "systemCalledDelete",
   "systemCalledDeleteEntity",
   "logInitialised"])        # Perform one log clear per unique path.
 
+# Use the NimNode as a seq[int] as a mutable seq[SystemIndex].
+genGlobalStates(NimNode, ["uncommittedSystems"])
+
 # Which system is responsible for the current code.
-genGlobalState(SystemIndex, ["inSystemIndex"])
+genGlobalStates(SystemIndex, ["inSystemIndex"])
 # Record component accesses within systems.
 genListStates(SystemIndex, ComponentTypeId, ["readsFrom", "writesTo"])
 
@@ -626,12 +620,12 @@ genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromS
 # Track which systems are being invoked for onAdded/onRemoved blocks.
 # This helps monitor cyclic invocations.
 genListStates(SystemIndex, SystemIndex, ["onAddedChain", "onRemovedChain"])
-genGlobalState(SystemIndex, ["onAddedSource", "onRemovedSource"])
-genItemState(SystemIndex, int, ["onAddedStart", "onRemovedStart"])
+genGlobalStates(SystemIndex, ["onAddedSource", "onRemovedSource"])
+genItemStates(SystemIndex, int, ["onAddedStart", "onRemovedStart"])
 
-genGlobalState(string, ["ecsCurrentOperation"])
-genGlobalState(string, ["ecsCurrentOperationIndent"])
-genGlobalState(string, ["ecsCurrentOperationSource"])
+genGlobalStates(string, ["ecsCurrentOperation"])
+genGlobalStates(string, ["ecsCurrentOperationIndent"])
+genGlobalStates(string, ["ecsCurrentOperationSource"])
 genGlobalListStates(NimNode, ["onEcsBuiltCode"])
 
 #--------------------
@@ -734,7 +728,7 @@ macro genObjAccessor(accessName: untyped, storageType: typedesc): untyped =
       fieldType = ident field.identDef[1].strVal
 
     accessors.add(quote do:
-      genGlobalState(`fieldType`, [`fieldName`])
+      genGlobalStates(`fieldType`, [`fieldName`])
     )
 
     let

@@ -1615,41 +1615,10 @@ macro flushGenLog*: untyped =
 
 import strutils
 
-template processUncommitted(actions: untyped): untyped =
-  # Perform `actions` for currently uncommitted systems then reset for
-  # next set.
-  let
-    start = id.systemOrderStart()
-    order = id.systemOrder()
-  var
-    systems {.inject.} = order[start .. ^1]
-  
-  # Remove systems that are assigned to groups.
-  for i in systems.high.countDown 0:
-    let
-      groupCount = id.systemGroups(systems[i]).len
-
-    if groupCount > 0:
-      # Delete whilst retaining order.
-      systems.delete(i)
-
-  actions
-
-  # Set the starting point to take for the next set of commits.
-  id.set_systemOrderStart order.len
-
-proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
+proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   result = newStmtList()
 
   let
-    procName =
-      case wrapperName.kind
-      of nnkStrLit, nnkIdent: wrapperName.strVal
-      of nnkSym: $wrapperName
-      else:
-        error "Cannot process kind " & $wrapperName.kind & " for 'procName'"
-        ""
-
     commitHeader = "for \"" & id.string & "\""
     logTitle =
       if procName != "":
@@ -1662,147 +1631,135 @@ proc doCommitSystems(id: EcsIdentity, wrapperName: NimNode): NimNode =
   
   id.startOperation "Commit systems " & commitHeader
 
-  const logOrder = defined(ecsLog) or defined(ecsLogDetails)
-
+  let
+    toCommit = id.getUncommitted().toSet
   var
-    sysCalls = newStmtList()
-    noBodies: seq[string]
-  when logOrder:
-    var executionOrder: string
-  let
-    alreadyAdded = id.ecsSysBodiesAdded
+    order = id.systemOrder()
+    systems {.inject.} = newSeqOfCap[SystemIndex](toCommit.len)
 
-  processUncommitted:
+  # `systemOrder` is appended to when the system is first seen by
+  # `defineSystem` or `makeSystem`. All systems should exist in
+  # `systemOrder` before `makeEcs`.
+  #
+  # `toCommit` is the unordered subset of `systemOrder` with system
+  # bodies waiting to be committed.
 
-    # Add the system body procedures.
-
-    for sys in systems:
-
-      let
-        definition = id.definition sys
-        sysName = id.getSystemName sys
-    
-      if definition.len > 0 and sys notin alreadyAdded:
-
-        id.startOperation "Adding system proc for \"" & sysName & "\""
-        result.add definition
-        id.add_ecsSysBodiesAdded sys
-        id.endOperation
-
-        if procName.len > 0:
-          # Call the proc in commitSystems.
-          sysCalls.add nnkCall.newTree(ident doProcName(sysName))
-
-          when logOrder:
-            executionOrder &= "  " & sysName & "\n"
-      else:
-        noBodies.add "\"" & sysName & "\""
-
-    # Add the wrapper procedure that calls them.
-
-    if procName.len > 0:
-
-      when logOrder:
-        echo "Wrapper proc `" & procName & "()` execution order:"
-        if executionOrder.len > 0:
-          echo executionOrder
-        else:
-          echo "  <No bodies found>"
-
-      let procIdent = ident procName
-
-      result.add(quote do:
-        proc `procIdent`* =
-          `sysCalls`
-      )
+  for sys in order:
+    if sys in toCommit:
+      # Ignore systems that belong to groups.
+      if id.systemGroups(sys).len == 0:
+        systems.add sys
+  
+  # Add the system body procedures and run proc.
+  result.add id.commitSystemList(systems, procName)
 
   let
-    bodiesAdded = id.ecsSysBodiesAdded
-    sysDefined = id.ecsSysDefined
-
-  if noBodies.len > 0:
-    var outputStr = noBodies[0]
-    for i in 1 ..< noBodies.len:
-      outputStr &= ", " & noBodies[i]
-    let noBodyStr = "Systems are defined that don't have bodies: " & `outputStr`
-    result.add(quote do:
-      {.hint: `noBodyStr`.}
-    )
-
-  let logCodeComment = "Commit systems " & logTitle & "\n"
+    logCodeComment = "Commit systems " & logTitle & "\n"
+  
   genLog  "\n# " & logCodeComment &
           "# " & '-'.repeat(logCodeComment.len) & "\n" &
           result.repr
   
-  when defined(ecsLog) or defined(ecsLogDetails):
-    echo "Systems committed " & logTitle & "."
-
   result.add id.flushGenLog(defaultGenLogFilename)
   
   id.endOperation
 
-macro commitSystems*(id: static[EcsIdentity], wrapperName: untyped): untyped =
-  ## The macro will output the system execution procedures, and should
-  ## be run at some point after `makeEcs`.
+macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): untyped =
+  ## This macro outputs uncommitted system execution procedures for
+  ## system bodies defined so far in the specified ECS identity.
   ## 
-  ## Each procedure is defined as the system's name prefixed with `do`,
-  ## eg; a system "foo" generates `doFoo()`.
+  ## Each system procedure is generated as the system name prefixed with
+  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
   ## 
-  ## Each of these procedures perform all the non-event actions within
+  ## These procedures perform all the non-event actions within
   ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
   ## state for this system.
   ## 
-  ## If `wrapperName` is given a wrapper proc is generated that includes
-  ## all the procedures since the last `commitSystems` was invoked.
-  ## Systems in this wrapper are called in the order they appear in code.
+  ## If `wrapperName` is given, a proc is generated that runs
+  ## uncommitted system execution procedures in the order they've been
+  ## defined.
   ## 
-  ## `commitSystems` outputs any uncommitted system code that's been
-  ## defined so far.
+  ## System execution can be split into multiple procs by including a
+  ## `commitSystems` after each set of body definitions.
   ## 
-  ## This can be useful to split system execution into separate procs.
+  ## For more explicit grouping and ordering of systems, see
+  ## `groupSystems`.
   ## 
   ## For example:
   ## 
   ## .. code-block:: nim
-  ##    registerComponents(defaultCompOpts):
-  ##      type
-  ##        Render = object
-  ##        Physics = object
-  ##    const timed = ECS
-  ##    makeSystem("physics", [Physics], ):
+  ##    import polymorph
   ##
+  ##    registerComponents(defaultCompOpts):
+  ##      type Foo = object
+  ##
+  ##    defineSystem("a", [Foo])
+  ##    defineSystem("b", [Foo])
+  ##    defineSystem("c", [Foo])
+  ##
+  ##    makeEcs()
+  ##
+  ##    makeSystemBody("a"):
+  ##      start: echo "Running A"
+  ##
+  ##    makeSystemBody("b"):
+  ##      start: echo "Running B"
+  ##
+  ##    commitSystems("runAB")
+  ##
+  ##    makeSystemBody("c"):
+  ##      start: echo "Running C"
+  ##
+  ##    commitSystems("runC")
   ##
   id.doCommitSystems(wrapperName)
 
-macro commitSystems*(wrapperName: untyped): untyped =
-  ## The macro will output the system execution procedures, and should
-  ## be run at some point after `makeEcs`.
+macro commitSystems*(wrapperName: static[string]): untyped =
+  ## This macro outputs uncommitted system execution procedures for
+  ## system bodies defined so far in the default ECS identity.
   ## 
-  ## Each procedure is defined as the system's name prefixed with `do`,
-  ## eg; a system "foo" generates `doFoo()`.
+  ## Each system procedure is generated as the system name prefixed with
+  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
   ## 
-  ## Each of these procedures perform all the non-event actions within
+  ## These procedures perform all the non-event actions within
   ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
   ## state for this system.
   ## 
-  ## If `wrapperName` is given a wrapper proc is generated that includes
-  ## all the procedures since the last `commitSystems` was invoked.
-  ## Systems in this wrapper are called in the order they appear in code.
+  ## If `wrapperName` is given, a proc is generated that runs
+  ## uncommitted system execution procedures in the order they've been
+  ## defined.
   ## 
-  ## `commitSystems` outputs any uncommitted system code that's been
-  ## defined so far.
+  ## System execution can be split into multiple procs by including a
+  ## `commitSystems` after each set of body definitions.
   ## 
-  ## This can be useful to split system execution into separate procs.
+  ## For more explicit grouping and ordering of systems, see
+  ## `groupSystems`.
   ## 
   ## For example:
   ## 
   ## .. code-block:: nim
-  ##    registerComponents(defaultCompOpts):
-  ##      type
-  ##        Render = object
-  ##        Physics = object
-  ##    const timed = ECS
-  ##    makeSystem("physics", [Physics], ):
+  ##    import polymorph
   ##
+  ##    registerComponents(defaultCompOpts):
+  ##      type Foo = object
+  ##
+  ##    defineSystem("a", [Foo])
+  ##    defineSystem("b", [Foo])
+  ##    defineSystem("c", [Foo])
+  ##
+  ##    makeEcs()
+  ##
+  ##    makeSystemBody("a"):
+  ##      start: echo "Running A"
+  ##
+  ##    makeSystemBody("b"):
+  ##      start: echo "Running B"
+  ##
+  ##    commitSystems("runAB")
+  ##
+  ##    makeSystemBody("c"):
+  ##      start: echo "Running C"
+  ##
+  ##    commitSystems("runC")
   ##
   defaultIdentity.doCommitSystems(wrapperName)

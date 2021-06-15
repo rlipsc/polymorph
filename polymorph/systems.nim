@@ -280,31 +280,33 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   ## Create a tuple to hold the required combination of types for this system.
   result = newStmtList()
 
-  let existingSysIndex = id.findSystemIndex sysName
-  doAssert (not existingSysIndex.found) or
-    (existingSysIndex.index notin id.ecsSystemsToBeSealed),
-    "System \"" & sysName & "\" has already been defined"
+  if id.findSystemIndex(sysName).found:
+    error "System \"" & sysName & "\" has already been defined"
   
-  doAssert componentTypes.len > 0, "Systems require at least one type to operate on but none have been provided (missing a defineSystem?)"
+  if componentTypes.len == 0:
+    error "Systems require at least one component type to operate on but none have been provided"
   
   if sysOptions.indexFormat in [sifArray, sifAllocatedSeq] and sysOptions.maxEntities == 0:
-    error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using the fixed size type " & $sysOptions.indexFormat
+    error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using the fixed size option '" &
+      $sysOptions.indexFormat & "'"
+
+  if sysOptions.storageFormat in [ssArray] and sysOptions.maxEntities == 0:
+    error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using the fixed size option '" &
+      $sysOptions.storageFormat & "'"
 
   var
-    typeIdents: seq[NimNode]
     passedComponentIds: seq[ComponentTypeId]
 
   for item in componentTypes:
     let
       typeId = id.typeStringToId($item)
 
-    doAssert typeId notin id.ecsSealedComponents,
-      "Component " & id.typeName(typeId) &
-      " has already been sealed with makeEcs and cannot be extended to system \"" &
-      sysName &
-      "\". Use defineSystem to forward declare the system or place this makeSystem before makeEcs."
+    if typeId in id.ecsSealedComponents:
+      error "Component " & id.typeName(typeId) &
+        " has already been sealed with makeEcs and cannot be extended to system \"" &
+        sysName &
+        "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
 
-    typeIdents.add item
     passedComponentIds.add typeId
 
   # Process owned components.
@@ -315,12 +317,13 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
     let
       typeId = id.typeStringToId($comp)
 
-    doAssert typeId.int != -1, "This type's id can't be found in registered components: " & $comp
+    if typeId.int == -1:
+      error "This type's id can't be found in registered components: " & $comp
 
     if typeId notin passedComponentIds:
-      error "Asking to own component " & id.typeName(typeId) &
-        " that is not part of system \"" & sysName &
-        "\". System components are: " & id.commaSeparate(passedComponentIds)
+      error "Requesting to own component " & id.typeName(typeId) &
+        " which is not part of system \"" & sysName &
+        "\". System components: " & id.commaSeparate(passedComponentIds)
 
     ownedComponentIds.add typeId
 
@@ -457,27 +460,28 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
       template ownedComponents*(sys: `sysType`): seq[ComponentTypeId] = []
       )
 
-  id.add_ecsSystemsToBeSealed sysIndex
   id.add_ecsSysDefined sysIndex
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+  ## Define a system using an ECS identity, declaring types that are owned by this system and providing extra fields.
   result = id.createSysTuple(name, componentTypes, ownedComponents, extraFields, options)
 
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+  ## Define a system using an ECS identity, declaring types that are owned by this system.
   result = id.createSysTuple(name, componentTypes, ownedComponents, nil, options)
 
 macro defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
-  ## Forward-define a system and its types, providing extra fields to incorporate into the resultant system instance.
+  ## Define a system and its types using an ECS identity, providing extra fields to incorporate into the resultant system instance.
   result = id.createSysTuple(name, componentTypes, nil, extraFields, options)
 
 template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions]): untyped =
-  ## Forward-define a system and its types using options.
+  ## Define a system and its types using an ECS identity with specific options.
   defineSystem(id, name, componentTypes, options, nil)
 
 template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc]): untyped =
-  ## Forward-define a system and its types using the default system options.
+  ## Define a system and its types using an ECS identity with default system options.
   defineSystem(id, name, componentTypes, defaultSystemOptions, nil)
 
 #---------------------------------------------------
@@ -485,18 +489,23 @@ template defineSystem*(id: static[EcsIdentity], name: static[string], componentT
 #---------------------------------------------------
 
 template defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+  ## Define a system and its types using the default ECS identity, providing extra fields to incorporate into the resultant system instance.
   defaultIdentity.defineSystem(name, componentTypes, options, extraFields)
 
 template defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+  ## Define a system and its types using the default ECS identity with specific options.
   defaultIdentity.defineSystem(name, componentTypes, options)
 
 template defineSystem*(name: static[string], componentTypes: openarray[typedesc]): untyped =
+  ## Define a system and its types using the default ECS identity with default system options.
   defaultIdentity.defineSystem(name, componentTypes)
 
 template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+  ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options, extraField)
 
 template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+  ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options)
 
 # ----------------
@@ -531,55 +540,13 @@ template defineGroup*(group: static[string], systems: openarray[string]): untype
 macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): untyped =
   result = newStmtList()
 
-  # TODO: Does most of the same work as commitSystem, refactor to a shared operation.
-
   let
     systems = id.groupSystems(group)
-    committed = id.ecsSysBodiesAdded
-  var
-    sysCalls = newStmtList()
-  const
-    logOrder = defined(ecsLog) or defined(ecsLogDetails)
 
   if systems.len == 0:
     error "No system bodies defined for group \"" & group & "\""
   else:
-    for sys in systems:
-      let
-        definition = id.definition sys
-        sysName = id.getSystemName sys
-    
-      if definition.len > 0:
-
-        # Add system body proc.
-        if sys notin committed:
-          id.startOperation "Adding system proc for \"" & sysName & "\""
-
-          result.add definition
-          id.add_ecsSysBodiesAdded sys
-          
-          id.endOperation
-
-        # Call the proc in commitSystems.
-        if runProc.len > 0:
-          sysCalls.add nnkCall.newTree(ident doProcName(sysName))
-
-  if runProc.len > 0:
-
-    when logOrder:
-      echo "Wrapper proc `" & runProc & "()` execution order:"
-      if systems.len > 0:
-        for sys in systems:
-          echo "  ", id.getSystemName(sys)
-      else:
-        echo "  <No bodies found>"
-
-    let procIdent = ident runProc
-
-    result.add(quote do:
-      proc `procIdent`* =
-        `sysCalls`
-    )
+    result.add id.commitSystemList(systems, runProc)
 
 template commitGroup*(group, runProc: static[string]): untyped =
   defaultIdentity.commitGroup(group, runProc)
@@ -681,16 +648,26 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     sysId = ident(systemVarName(name))
     sys = ident "sys"
     sysType = ident systemTypeName(name)
+
   var
     sysIdxSearch = id.findSystemIndex(name)
+    sysIndex = sysIdxSearch[1]
 
   result = newStmtList()
 
   if sysIdxSearch.found:
     # This system has already been defined.
+    # Check the state passed here matches the previous definition.
+
     let
       existingSysIdx = sysIdxSearch.index
-      expectedTypes = id.ecsSysRequirements(existingSysIdx)
+
+    if id.bodyDefined(existingSysIdx):
+      error "System \"" & name & "\" already has a body defined"
+  
+    let
+      expectedTypes = id.ecsSysRequirements existingSysIdx
+      existingOpts = id.getOptions existingSysIdx
     
     if componentTypes.len > 0:
       # Check the components given to makeSystem match defineSystem.
@@ -707,10 +684,13 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         # Types must be given in the same order.
         if typeStringToId(id, $givenType) != expectedTypes[i]:
           errMsg()
+      
+    # Options must match with the original definition.
+    if existingOpts != options:
+      error "Options don't match with previous definition for system \"" &
+        name & "\":\nOriginal options:\n" & $existingOpts &
+        "\nPassed options:\n" & $options
 
-    if sysIdxSearch.index in id.ecsSysBodiesAdded:
-      error "System \"" & name & "\" already has a body defined"
-  
     when defined(ecsLog) or defined(ecsLogDetails):
       echo "Adding body to pre-defined system \"", name, "\" with types ",
         id.commaSeparate(expectedTypes)
@@ -723,6 +703,9 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     sysIdxSearch = id.findSystemIndex(name)
     assert sysIdxSearch.found, "Internal error: cannot find system \"" & name & "\" after adding it"
+    
+    # Use the new SystemIndex.
+    sysIndex = sysIdxSearch.index
 
   var
     initBodies = newStmtList()
@@ -736,10 +719,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     allWrapper = newStmtList()
     streamWrapper = newStmtList()
-
-  let
-    sysIndex = sysIdxSearch[1]
-    options = id.getOptions sysIndex
 
   if systemBody == nil:
     error "makeSystem needs a `body`"
@@ -1388,8 +1367,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     streamWrapper = quote do:
       `timeWrapperStream`
 
-  id.set_inSystemStream  false
-  
   # Generate list of types for system comment.
   var sysTypeNames: string
   for typeName in id.systemTypesStr(sysIndex):
@@ -1444,53 +1421,71 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       template `doSystem`*: untyped =
         `doSystem`(`sysId`)
 
-  id.set_inSystem  false
-
   # Store the body of the do proc.
   # The procs themselves are only accessible after commitSystem is called.
   id.set_definition(sysIndex, systemProc)
 
+  # Add to the list of systems with a defined body.
+  # This allows detection of trying to set a body multiple times.
+  id.set_bodyDefined(sysIndex, true)
+
+  # Add to the current list of systems with uncommitted bodies.
+  id.addUncommitted sysIndex
+
 ## Options specified
 
 macro makeSystemOptFields*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], extraFields, systemBody: untyped): untyped =
-  ## Make a system, defining types, options and adding extra fields to the generated system type.
+  ## Define a system and/or add a system code body using an ECS identity with specific options and extra fields.
   generateSystem(id, name, componentTypes, options, extraFields, systemBody, newEmptyNode())
 
 macro makeSystemOptFields*(name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], extraFields, systemBody: untyped): untyped =
-  ## Make a system, defining types, options and adding extra fields to the generated system type.
+  ## Define a system and/or add a system code body using the default ECS identity with specific options and extra fields.
   generateSystem(defaultIdentity, name, componentTypes, options, extraFields, systemBody, newEmptyNode())
 
 macro makeSystemOpts*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], systemBody: untyped): untyped =
-  ## Make a system.
+  ## Define a system and/or add a system code body using an ECS identity with specific options.
   generateSystem(id, name, componentTypes, options, newEmptyNode(), systemBody, newEmptyNode())
 
 macro makeSystemOpts*(name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], systemBody: untyped): untyped =
-  ## Make a system.
+  ## Define a system and/or add a system code body using the default ECS identity with specific options.
   generateSystem(defaultIdentity, name, componentTypes, options, newEmptyNode(), systemBody, newEmptyNode())
 
 ## No options specified
 
+proc sysOptionsOrDefault(id: EcsIdentity, name: string): tuple[found: bool, options: EcsSysOptions] {.compileTime.} =
+  let
+    sysIdxSearch = id.findSystemIndex(name)
+
+  if sysIdxSearch.found:
+    (true, id.getOptions sysIdxSearch.index)
+  else:
+    (false, defaultSysOpts)
+
 macro makeSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], systemBody: untyped): untyped =
-  ## Make and define a system using `defaultSystemOptions`.
-  generateSystem(id, name, componentTypes, defaultSystemOptions, newEmptyNode(), systemBody, newEmptyNode())
+  ## Define a system and/or add a system code body using an ECS identity.
+  ## 
+  ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
+  let opts = id.sysOptionsOrDefault name
+  generateSystem(id, name, componentTypes, opts.options, newEmptyNode(), systemBody, newEmptyNode())
 
 template makeSystem*(name: static[string], componentTypes: openarray[untyped], systemBody: untyped): untyped =
+  ## Define a system and/or add a system code body using the default ECS identity.
+  ## 
+  ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
   defaultIdentity.makeSystem(name, componentTypes, systemBody)
 
 macro makeSystemBody*(id: static[EcsIdentity], name: static[string], systemBody: untyped): untyped =
-  ## Make a system based on types previously defined with `defineSystem`.
-  ## Used to build the body for a forward declared system.
-  var found: bool
-  for sysName in id.allSystemNames:
-    if sysName.toLowerAscii == name.toLowerAscii:
-      found = true
-      break
-  if not found: error "`makeSystemBody` requires a `defineSystem` for \"" & name & "\""
-  generateSystem(id, name, newEmptyNode(), defaultSystemOptions, newEmptyNode(), systemBody, newEmptyNode())
+  ## Define the code body for a previously defined system using an ECS identity.
+  let opts = id.sysOptionsOrDefault name
+
+  if not opts.found:
+    error "`makeSystemBody` requires a `defineSystem` for \"" & name & "\""
+
+  generateSystem(id, name, newEmptyNode(), opts.options, newEmptyNode(), systemBody, newEmptyNode())
 
 template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
+  ## Define the code body for a previously defined system using the default ECS identity.
   defaultIdentity.makeSystemBody(name, systemBody)
-
 
 macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[ComponentTypeId]], actions: untyped): untyped =
   ## Statically perform `actions` only for systems defined for these types.

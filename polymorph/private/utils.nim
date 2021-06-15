@@ -950,6 +950,33 @@ proc unsealedSystemCount*(id: EcsIdentity): int =
   for sysId in id.unsealedSystems:
     result += 1
 
+proc getUncommitted*(id: EcsIdentity): seq[SystemIndex] =
+  ## Return a list of systems with bodies waiting to be committed.
+  var
+    curSystems = id.uncommittedSystems()
+
+  result = newSeqOfCap[SystemIndex](curSystems.len)
+  
+  for sysInt in curSystems:
+    result.add sysInt.intVal.SystemIndex
+
+proc setUncommitted*(id: EcsIdentity, value: seq[SystemIndex]) =
+  ## Update uncommittedSystems with a list of systems.
+  var n = newStmtList()
+
+  for sys in value:
+    n.add newLit(sys.int)
+  
+  id.set_uncommittedSystems n
+
+proc addUncommitted*(id: EcsIdentity, sys: SystemIndex) =
+  ## Append to existing systems in uncommittedSystems.
+  var
+    curSystems = id.getUncommitted()
+
+  curSystems.add sys
+  id.setUncommitted curSystems
+
 iterator typeDefs*(body: NimNode): NimNode =
   ## Return the nnkTypeDef nodes in a body.
   for item in body:
@@ -1488,3 +1515,104 @@ proc calcDependentOwners*(id: EcsIdentity, typeId: ComponentTypeId): seq[SystemI
 
   let systemsUsingSourceType = id.systems(typeId).toHashSet
   toSeq(resultSystems - systemsUsingSourceType)
+
+# -------------------
+# System commit utils
+# -------------------
+
+proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc: string): NimNode =
+  ## Output any uncommitted system body procs in `systems`.
+  ## 
+  ## If `runProc` is a non-empty string, a wrapper proc is generated to
+  ## call `systems` in the order given.
+
+  result = newStmtList()
+
+  const
+    logOrder = defined(ecsLog) or defined(ecsLogDetails)
+  var
+    sysCalls = newStmtList()
+    noBodies: seq[string]
+    uncommitted = id.getUncommitted()
+    ucRemoveIdx: seq[int]
+  
+  when logOrder:
+    var runOrder: string
+
+  for sys in systems:
+    let
+      definition = id.definition sys
+      sysName = id.getSystemName sys
+  
+    if definition.len > 0:
+
+      let ucIndex = uncommitted.find sys
+
+      # Add system body proc.
+      if ucIndex > -1:
+        id.startOperation "Adding run proc for system \"" & sysName & "\""
+
+        result.add definition
+        # Mark as committed.
+        id.set_bodyDefined(sys, true)
+        
+        # Now the definition has been added it can be removed from the
+        # uncommitted list.
+        uncommitted.delete ucIndex
+
+        id.endOperation
+
+      # Call all the parameter systems within the runProc.
+      if runProc.len > 0:
+        sysCalls.add nnkCall.newTree(ident doProcName(sysName))
+
+        when logOrder:
+          runOrder.add "  " & sysName & "\n"
+    else:
+      noBodies.add "\"" & sysName & "\""
+
+  # Write back list with committed systems removed.
+  id.setUncommitted uncommitted
+
+  if runProc.len > 0:
+    # Include a wrapper proc to execute the above systems.
+
+    when logOrder:
+      echo "Wrapper proc `" & runProc & "()` execution order:"
+      
+      if runOrder.len > 0:
+        echo runOrder
+      else:
+        echo "  <No system bodies found>"
+
+    if noBodies.len > 0:
+      # It's a compile time error to generate a run proc with systems
+      # that don't have bodies defined.
+
+      var outputStr = noBodies[0]
+      for i in 1 ..< noBodies.len:
+        outputStr &= ", " & noBodies[i]
+      
+      error "Systems to be committed were missing bodies: [" &
+        `outputStr` & "]"
+    else:
+      # Generate the run proc.
+      let
+        procIdent = ident runProc
+
+      if sysCalls.len > 0:
+        result.add(quote do:
+          proc `procIdent`* =
+            `sysCalls`
+        )
+      else:
+        # No systems with bodies have been provided.
+        # This isn't an error to allow easier prototyping.
+
+        let emptyProcStr = newLit(
+          "System run procedure `" & runProc & "` does not call any systems")
+        result.add(quote do:
+          proc `procIdent`* =
+            {.warning: `emptyProcStr`.}
+            discard
+        )

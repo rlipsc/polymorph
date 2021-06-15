@@ -76,7 +76,7 @@ proc runConstructAndClone*() =
 
   suite "Events":
 
-    registerConstructor ReplacedFrom, proc(entity: EntityRef, component: Component, master: EntityRef): seq[Component] =
+    registerConstructor ReplacedFrom, proc(entity: EntityRef, component: Component, context: EntityRef): seq[Component] =
       let rf = ReplacedFromRef(component).value
       result.add tmplReplacedTo(val = rf.val)
 
