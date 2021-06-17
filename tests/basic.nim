@@ -42,11 +42,11 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
 
   const testDeleteMods = [3, 7, 8]
 
-  makeSystemOptFields("removeAndDeleteSelf", [RemDelSelf], sysOpts) do:
-    counter: int
-    deletedCount: int
-    removedCount: int
-  do:
+  makeSystemOpts("removeAndDeleteSelf", [RemDelSelf], sysOpts):
+    fields:
+      counter: int
+      deletedCount: int
+      removedCount: int
     start:
       sys.counter = 0
       sys.deletedCount = 0

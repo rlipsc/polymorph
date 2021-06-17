@@ -35,7 +35,6 @@ proc endOperation*(id: EcsIdentity) {.compileTime.} =
 
   when defined(ecsLogDetails):
     let
-      curOp = id.ecsCurrentOperation()
       curIndent = id.ecsCurrentOperationIndent()
       newIndent =
         if curIndent.len > 2:

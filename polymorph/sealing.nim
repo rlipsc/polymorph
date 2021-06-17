@@ -460,12 +460,6 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
 
   # String operator for instance types.
   for c in id.unsealedComponents:
-    let
-      instTypeName = id.typeName c
-      instType = ident instanceTypeName(instTypeName)
-      invalidStr = newLit "<Invalid " & instTypeName & ">"
-      deletedPrefix = newLit "<Deleted " & instTypeName
-
     componentCount += 1
 
   let
@@ -1049,7 +1043,6 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       ty = newIdentNode tyStr
       tyRef = newIdentNode refTypeName(tyStr)
       tyInstance = newIdentNode instanceTypeName(tyStr)
-      tyInit = newIdentNode createInstanceName(tyStr)
       tyRefInit = newIdentNode refInitName(id.refInitPrefix(component), tyStr)
       tyDel = newIdentNode deleteInstanceName()
       # reference the alive variable for this type.
@@ -1632,7 +1625,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   id.startOperation "Commit systems " & commitHeader
 
   let
-    toCommit = id.getUncommitted().toSet
+    toCommit = id.getUncommitted().toHashSet
   var
     order = id.systemOrder()
     systems {.inject.} = newSeqOfCap[SystemIndex](toCommit.len)

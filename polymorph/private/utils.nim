@@ -1534,7 +1534,6 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
     sysCalls = newStmtList()
     noBodies: seq[string]
     uncommitted = id.getUncommitted()
-    ucRemoveIdx: seq[int]
   
   when logOrder:
     var runOrder: string

@@ -174,7 +174,7 @@ macro genListStates(indexType, itemType: typedesc, listNames: static[openarray[s
           quote do: `value`
       
       paramKey =
-        if idx_accessType != nil:
+        if idx_accessType != nil and idx_accessType != indexType:
           quote do: $`idx_accessType`(`param`)
         else:
           quote do: $`param`
