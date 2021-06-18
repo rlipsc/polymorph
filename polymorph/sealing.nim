@@ -1628,7 +1628,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
     toCommit = id.getUncommitted().toHashSet
   var
     order = id.systemOrder()
-    systems {.inject.} = newSeqOfCap[SystemIndex](toCommit.len)
+    systems = newSeqOfCap[SystemIndex](toCommit.len)
 
   # `systemOrder` is appended to when the system is first seen by
   # `defineSystem` or `makeSystem`. All systems should exist in

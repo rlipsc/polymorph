@@ -513,7 +513,11 @@ template defineSystemOwner*(name: static[string], componentTypes: openarray[type
 # ----------------
 
 macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: openarray[string]): untyped =
-  ## Give a set of systems a group tag.
+  ## Assign specific systems to a group using an ECS identity.
+  ## 
+  ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
+  ## 
+  ## Systems may be part of multiple groups.
   for systemName in systems:
     let
       nameStr = systemName.strVal
@@ -535,9 +539,48 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: open
       error "Cannot find system \"" & nameStr & "\""
 
 template defineGroup*(group: static[string], systems: openarray[string]): untyped =
+  ## Assign specific systems to a group using the default ECS identity.
+  ## 
+  ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
+  ## 
+  ## Systems may be part of multiple groups.
   defaultIdentity.defineGroup(group, systems)
 
+macro defineGroup*(id: static[EcsIdentity], group: static[string]): untyped =
+  ## Assign previously defined and ungrouped systems to a group using an ECS identity.
+  ## 
+  ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
+  ## 
+  ## Systems may be part of multiple groups.
+  var
+    order = id.systemOrder()
+
+  for sys in order:
+    # Ignore systems that already belong to groups.
+    if id.systemGroups(sys).len == 0:
+
+      # Add to list of systems for this group.
+      if sys notin id.groupSystems(group):
+        id.add_groupSystems(group, sys)
+
+      # Add the group to this system.
+      if group notin id.systemGroups(sys):
+        id.add_systemGroups(sys, group)
+
+template defineGroup*(group: static[string]): untyped =
+  ## Assign previously defined and ungrouped systems to a group using the default ECS identity.
+  ## 
+  ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
+  ## 
+  ## Systems may be part of multiple groups.
+  defaultIdentity.defineGroup(group)
+
 macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): untyped =
+  ## Output uncommitted system definitions for a group using an ECS identity and wrap in an execution procedure.
+  ## 
+  ## The order of execution matches the order these systems have been defined.
+  ## 
+  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
   result = newStmtList()
 
   let
@@ -549,6 +592,11 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
     result.add id.commitSystemList(systems, runProc)
 
 template commitGroup*(group, runProc: static[string]): untyped =
+  ## Output uncommitted system definitions for a group using the default ECS identity and wrap in an execution procedure.
+  ## 
+  ## The order of execution matches the order these systems have been defined.
+  ## 
+  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
   defaultIdentity.commitGroup(group, runProc)
 
 
