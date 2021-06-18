@@ -764,22 +764,25 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       cmStochastic: "stochastic"
       ]
 
-  var verbChoices = $SystemBlock.low
-  for verb in 1 .. SystemBlock.high.ord:
-    verbChoices &= ", " & $SystemBlock(verb)
+  var blockChoices = $SystemBlock.low
+  for sysBlock in 1 .. SystemBlock.high.ord:
+    blockChoices &= ", " & $SystemBlock(sysBlock)
 
   var
     command: Command
     streamAmount = newEmptyNode()
+  const
+    descriptorNodeKinds = [nnkIdent, nnkSym, nnkOpenSymChoice]
 
-  # Step through top level nodes and extract verbs and commands.
+  # Step through top level nodes and extract block descriptors and commands.
   for item in systemBody:
-    if item.kind notin [nnkCall, nnkCommand]: continue
+    if item.kind notin [nnkCall, nnkCommand]:
+      continue
 
-    doAssert item[0].kind in [nnkIdent, nnkSym],
-      "In system \"" & name & "\" expected command: " & verbChoices & " but got " & item[0].repr
+    if item[0].kind notin descriptorNodeKinds:
+      error "In system \"" & name & "\" expected block descriptor '" & item[0].repr & "' to be of " & $descriptorNodeKinds & " but got " & $item[0].kind
     let
-      verb = $item[0]
+      sysBlock = $item[0]
       code = item[1]
 
     type SysEventOp = enum seAdded = "onAdded", seRemoved = "onRemoved"
@@ -917,7 +920,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       msgSealedAdded = msgSealed % "added"
       msgSealedRemoved = msgSealed % "removed"
 
-    case verb.toLowerAscii
+    case sysBlock.toLowerAscii
       of $sbFields:
         # This block is pre-processed above, before the system's variable is created.
         if previouslyDefined:
@@ -1063,7 +1066,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           # No stream parameters
           code.expectKind nnkStmtList
           streamBodies.add code
-      else: error(&"makeSystem: Unknown verb \"{verb}\", expected {verbChoices}")
+      else: error(&"makeSystem: Unknown block descriptor \"{sysBlock}\", expected one of {blockChoices}")
 
   var activeBlocks: set[SystemBlockKind]
 
@@ -1078,7 +1081,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   if id.len_onRemovedCallback(sysIndex) > 0: activeBlocks.incl sbkRemovedCallback
 
   if activeBlocks == {}:
-    error("Systems must do something within " & verbChoices)
+    error("Systems must use one of more block descriptors from " & blockChoices)
 
   # Set up debug echo statements.
   var echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
