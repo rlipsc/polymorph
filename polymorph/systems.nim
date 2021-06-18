@@ -300,12 +300,16 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   for item in componentTypes:
     let
       typeId = id.typeStringToId($item)
+      typeName = id.typeName(typeId)
 
     if typeId in id.ecsSealedComponents:
-      error "Component " & id.typeName(typeId) &
+      error "Component " & typeName &
         " has already been sealed with makeEcs and cannot be extended to system \"" &
         sysName &
         "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
+
+    if typeId in passedComponentIds:
+      error "Component '" & typeName & "' is included multiple times for system \"" & sysName & "\""
 
     passedComponentIds.add typeId
 
