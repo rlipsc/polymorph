@@ -42,15 +42,21 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
 
   const testDeleteMods = [3, 7, 8]
 
+  defineSystem("removeAndDeleteSelf", [RemDelSelf], sysOpts):
+    counter: int
+    deletedCount: int
+    removedCount: int
+
   makeSystemOpts("removeAndDeleteSelf", [RemDelSelf], sysOpts):
     fields:
       counter: int
       deletedCount: int
       removedCount: int
-    start:
-      sys.counter = 0
-      sys.deletedCount = 0
-      sys.removedCount = 0
+
+    sys.counter = 0
+    sys.deletedCount = 0
+    sys.removedCount = 0
+
     all:
       if sys.counter mod testDeleteMods[0] == 0:
         sys.deletedCount.inc
@@ -64,11 +70,15 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
       sys.counter.inc
 
   makeSystemOpts("multipleBlocks", [AddOne], sysOpts):
+    
+    let
+      runningSystem = true
+    
     init:
       let initActivated = true
     init: check initActivated == true
     start:
-      type State = enum None, Started, Finished
+      type State = enum None, Started, PreFinished, Finished
       var
         number: int
         state: State
@@ -83,11 +93,18 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
     all: number += b
     stream 2: number += c
     stream 2: number += d
+
+    # These finish blocks are run after the main body, and run
+    # regardless of paused state.
     finish:
-      check state == Started
+      check state == PreFinished
       state = Finished
     finish: check number == (sys.count * (a + b)) + (2 * (c + d))
     finish: check state == Finished
+
+    check runningSystem
+    check state == Started
+    state = PreFinished
 
   makeEcs(entOpts)
   commitSystems("run")

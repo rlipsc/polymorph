@@ -44,7 +44,7 @@ const
 type
   TypeFields* = tuple[typeName: string, fields: seq[tuple[fieldNode, typeNode: NimNode]]]
   SystemBlockKind* = enum
-    sbkInit, sbkStart, sbkAll, sbkStream, sbkFinish,
+    sbkFields, sbkInit, sbkStart, sbkAll, sbkStream, sbkFinish,
     sbkAdded, sbkRemoved, sbkAddedCallback, sbkRemovedCallback
 
 # Type names derived from user types
