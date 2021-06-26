@@ -62,10 +62,6 @@ type
   ECSCompRecyclerFormat* = enum crfSeq, crfArray
   ECSCompInvalidAccess* = enum iaIgnore, iaAssert
   ECSCompOptions* = object
-    ## The prefix added to init constructors, eg for "init"; `initMyComp`.
-    initPrefix*: string
-    ## The prefix added to reference init constructors destined for run-time construction, eg for "tmpl"; `tmplMyComp`.
-    refInitPrefix*: string
     ## Maximum amount of components for all component types in this prefix.
     maxComponents*: Natural
     ## Underlying storage format for components.
@@ -116,11 +112,6 @@ type
   EntityOverflow* = object of OverflowDefect
   DuplicateComponent* = object of ValueError
 
-const
-  defaultMaxEntities* = 10_000
-  defaultInitPrefix* = "init"
-  defaultRefInitPrefix* = "tmpl"
-
 func fixedSizeSystem*(ents: int): ECSSysOptions =
   ## Shortcut for fixed size, high performance, high memory systems.
   ECSSysOptions(
@@ -138,8 +129,6 @@ func fixedSizeComponents*(maxInstances: int): ECSCompOptions =
   ## Shortcut for fixed size, high performance, high memory systems.
   ECSCompOptions(
     maxComponents: maxInstances,
-    initPrefix: defaultInitPrefix,
-    refInitPrefix: defaultRefInitPrefix,
     componentStorageFormat: cisArray,
     recyclerFormat: crfArray,
     )
@@ -147,8 +136,6 @@ func fixedSizeComponents*(maxInstances: int): ECSCompOptions =
 func dynamicSizeComponents*: ECSCompOptions =
   ## Shortcut for systems that adjust dynamically.
   ECSCompOptions(
-    initPrefix: defaultInitPrefix,
-    refInitPrefix: defaultRefInitPrefix,
     componentStorageFormat: cisSeq,
     recyclerFormat: crfSeq,
   )
@@ -210,9 +197,10 @@ type
     ## This root object allows runtime templates of components to be constructed.
     ## `registerComponents` automatically generates a type descending from here for each component
     ## type.
-    ## `typeId` has to match the valid componentTypeId for the type, and is automatically
-    ## initialised by called the generated ref init proc for the type (by default tmplTypeName()).
-    # Exposed fType id :( Required for currying parameters to ref inits and other set ups.
+    ## `typeId` has to match the valid componentTypeId for the descended
+    ## value's type, and is automatically initialised by `makeContainer`
+    ## and the `cl` macro.
+    # Internal value exposed for access.
     fTypeId*: ComponentTypeId
 
   ## 'Generic' index into a component storage array.

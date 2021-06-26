@@ -572,8 +572,7 @@ genGlobalListStates(SystemIndex, [
 
 # State tracking for systems.
 genGlobalStates(bool, [
-  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",  
-  "sysCheckLengthPerIter",  # Control iteration generation.
+  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",
   "sysRemoveAffectedThisSystem", "systemCalledDelete",
   "systemCalledDeleteEntity",
   "logInitialised"])        # Perform one log clear per unique path.
@@ -915,8 +914,6 @@ const defaultIdentity* = newEcsIdentity("default")
 #--------------------------
 
 proc setOptions*(id: EcsIdentity, compId: ComponentTypeId, opts: ECSCompOptions) =
-  id.set_initPrefix(compId, opts.initPrefix)
-  id.set_refInitPrefix(compId, opts.refInitPrefix)
   id.set_maxComponents(compId, opts.maxComponents)
   id.set_componentStorageFormat(compId, opts.componentStorageFormat)
   id.set_accessMethod(compId, opts.accessMethod)
@@ -927,8 +924,6 @@ proc setOptions*(id: EcsIdentity, compId: ComponentTypeId, opts: ECSCompOptions)
 
 proc getOptions*(id: EcsIdentity, compId: ComponentTypeId): ECSCompOptions =
   #id.set_maxEntities(compId, opts.maxEntities)
-  result.initPrefix = id.initPrefix(compId)
-  result.refInitPrefix = id.refInitPrefix(compId)
   result.maxComponents = id.maxComponents(compId)
   result.componentStorageFormat = id.componentStorageFormat(compId)
   result.accessMethod = id.accessMethod(compId)

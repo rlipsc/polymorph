@@ -32,7 +32,7 @@ proc runConstructAndClone*() =
   suite "Construction":
     test "Building from template":
       let templ: ConstructionTemplate = @[
-        @[tmplA(val = 1), tmplB(val = 123.456), tmplC(val = "Hello")]
+        cl(A(val: 1), B(val: 123.456), C(val: "Hello"))
       ]
 
       let ent = templ.construct()
@@ -56,7 +56,7 @@ proc runConstructAndClone*() =
 
     test "Incomplete owned system build":
       let templ: ConstructionTemplate = @[
-        @[tmplA(val = 1), tmplC(val = "Hello")]
+        cl(A(val: 1), C(val: "Hello"))
       ]
       expect Exception:
         let e = templ.construct
@@ -78,7 +78,7 @@ proc runConstructAndClone*() =
 
     registerConstructor ReplacedFrom, proc(entity: EntityRef, component: Component, context: EntityRef): seq[Component] =
       let rf = ReplacedFromRef(component).value
-      result.add tmplReplacedTo(val = rf.val)
+      result.add ReplacedTo(val: rf.val)
 
     registerPostConstructor ReplacedTo, proc(entity: EntityRef, component: ComponentRef, entities: var Entities) =
       let rf = ReplacedToInstance(component.index)
@@ -88,7 +88,7 @@ proc runConstructAndClone*() =
 
       let
         templ: ConstructionTemplate = @[
-          @[tmplReplacedFrom(val = 123).Component]
+          cl(ReplacedFrom(val: 123))
         ]
         ents = templ.construct()
 
@@ -99,7 +99,7 @@ proc runConstructAndClone*() =
 
     registerCloneConstructor ReplacedFrom, proc(entity: EntityRef, component: ComponentRef): seq[Component] =
       let rf = ReplacedFromInstance(component.index)
-      result.add tmplReplacedTo(val = rf.val)
+      result.add ReplacedTo(val: rf.val)
 
     test "Replace component during cloning":
       let

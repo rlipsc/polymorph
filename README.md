@@ -1033,8 +1033,6 @@ When passed to `registerComponents`, this object controls how these components a
 
 ### EcsCompOptions fields
 
-- `initPrefix`: the prefix added to init constructors, eg for "init" (the default) the initialiser would be `initMyComp`.
-- `refInitPrefix`: the prefix added to `ref` init constructors used for run-time construction, eg for "tmpl" (the default) the initialiser would be `tmplMyComp`.
 - `maxComponents`: maximum amount of components when `cisArray` is selected for storage.
 - `componentStorageFormat`: Underlying storage format for components.
   - `cisSeq`: store components in a heap allocated `seq`. This allows dynamically sizing storage by component. Resizing often, however, requires moving memory which can degrade performance.

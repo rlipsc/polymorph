@@ -60,104 +60,6 @@ func init*[T: Component](c: var T) {.inline.} =
 proc checkInit*[T: Component](c: var T) {.inline.} =
   if c.fTypeId.int == 0: c.fTypeId = c.type.typeId()
 
-proc makeRefCompInit(prefix: string, tyName: string, typeId: int): NimNode =
-  # Generate init macro for reference type.
-  # This macro curries the parameters to an object initialisation of the form `MyObjectRef(param1: value1, ...)`.
-  let
-    tyNameRefStr = refTypeName(tyName)
-    initNameStr = refInitName(prefix, tyName)
-    initName = newIdentNode(initNameStr)
-    initComment = newCommentStmtNode("Initialiser for " & tyNameRefStr & ", automatically sets `typeId` to " & $typeId)
-    res = newIdentNode "result"
-    typeIdFieldName = "fTypeId"
-
-  result = quote do:
-    macro `initName`*(args: varargs[untyped]): untyped =
-      `initComment`
-
-      # Setup value object that stores the component data.
-      var
-        stmts = newStmtList()
-        objData = nnkObjConstr.newTree()
-
-      objData.add newIdentNode(`tyName`)
-
-      # update the value object's fields.
-      for arg in args:
-        if arg.kind notin {nnkExprEqExpr, nnkExprColonExpr}:
-          error("Expected an equals or colon assignment but got " & $arg.kind)
-        # Assign this data item to the value object's field.
-        objData.add nnkExprColonExpr.newTree(arg[0], arg[1])
-    
-      # build the ref object type constructor 
-      stmts.add(nnkObjConstr.newTree(
-        newIdentNode `tyNameRefStr`,
-        nnkExprColonExpr.newTree(
-          newIdentNode(`typeIdFieldName`),
-          newDotExpr(newIntLitNode(`typeId`), newIdentNode("ComponentTypeId"))
-        ),
-        nnkExprColonExpr.newTree(
-          newIdentNode("value"), objData
-        )
-        ))
-
-      `res` = stmts
-
-proc makeInstanceCompInit(prefix, tyName: string, typeId: int): NimNode =
-  ## This macro generates an init proc that allows setting of fields.
-  ## These init procs return the instance of the type, which allows direct field access
-  ## and can be converted to a ref with toRef().
-  ## Eg;
-  ##   let comp = newMyComponent(x = 1, y = 2)
-  ## Translates to something like this:
-  ##   var comp = MyComponent(typeId: MyComponent.typeId, x: 1, y: 2)
-  let
-    initInstanceStr = instanceInitName(prefix, tyName)
-    initInstance = newIdentNode(initInstanceStr)
-    initComment = newCommentStmtNode("Initialiser for " & tyName & "(`typeId` " & $typeId & ")")
-    res = newIdentNode "result"
-
-  result = quote do:
-    macro `initInstance`*(args: varargs[untyped]): untyped =
-      `initComment`
-      var
-        stmts = newStmtList()
-        newComp = genSym(nskLet, "newComp")
-
-      # Generate new component instance for this type, eg:
-      # let
-      #   newComp = `initProc`()
-      stmts.add(
-        nnkLetSection.newTree(
-          nnkIdentDefs.newTree(
-            newComp,
-            newEmptyNode(),
-            nnkCall.newTree(
-              newIdentNode createInstanceName(`tyName`)
-            )
-          )
-        )
-      )
-      
-      var objData = nnkObjConstr.newTree()
-      objData.add newIdentNode(`tyName`)
-
-      # update the value object's fields.
-      for arg in args:
-        if arg.kind notin {nnkExprEqExpr, nnkExprColonExpr}:
-          error("Expected an equals or colon assignment but got " & $arg.kind)
-        # Assign this data item to the value object's field.
-        objData.add nnkExprColonExpr.newTree(arg[0], arg[1])
-
-      stmts.add(nnkCall.newTree(nnkDotExpr.newTree(newComp, newIdentNode("update")), objData))
-
-      # The return expression is the instance type of the new component.
-      stmts.add newComp
-
-      # build the type constructor
-      `res` = nnkBlockStmt.newTree(
-        newEmptyNode(), stmts)
-
 proc nameNode(typeNode: NimNode): NimNode =
   typeNode.expectKind nnkTypeDef
   typeNode[0].baseName
@@ -294,16 +196,9 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
       typeNameIdent = ident typeNameStr
       refTypeNameIdent = newIdentNode(refTypeName(typeNameStr))
       tyParam = newIdentNode("ty")
-
       maxComponentCount = options.maxComponents + 2
-      refInitPrefix = if options.refInitPrefix != "": options.refInitPrefix
-        else: defaultRefInitPrefix
 
     let instTypeNode = newIdentNode instanceTypeName(typeNameStr)
-    
-    # Add initialiser proc that sets `typeId` and passes on params to an object constructor.
-    # eg; initA*(param = x): A = A(fTypeId: A.typeId, param: x)
-    typeUtils.add makeRefCompInit(refInitPrefix, typeNameStr, typeId.int)
     
     typeUtils.add(quote do:
       ## Compile-time translation between a user's type/container type to its instance type.
@@ -386,7 +281,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
   for typeId in id.unsealedComponents:
     let
       options = id.getOptions typeId
-      initPrefix = if options.initPrefix != "": options.initPrefix else: defaultInitPrefix
       maxComponentCount = options.maxComponents + 2
       typeNameStr = id.typeName typeId
       typeNameIdent = ident typeNameStr
@@ -421,10 +315,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
               `identity`.add_writesTo `identity`.inSystemIndex, `typeId`.ComponentTypeId
         else: newStmtList()
 
-    # Add a proc to return a new component index.
-    # This is the 'new component' procedure, and uses the `initPrefix` parameters.
-    typeAccess.add(makeInstanceCompInit(initPrefix, typeNameStr, typeId.int))
-    
     # Potentially extra init for heap items
     case options.componentStorageFormat
       of cisArray:
@@ -487,7 +377,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
               `ownerSystem`.groups[`inst`.int].`sysTupleField` = `valueParam`
 
       # Dot overload to access the fields of the component in the owner system via the index.
-      # Two approaches, via dot operators or building access templates for every field in this component (not recursive).
       case options.accessMethod
       of amDotOp:
         # We only need two dot operators, one for reading and one for writing to cover all the fields in this instance.
@@ -527,7 +416,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         template generation*(inst: `instTypeNode`): untyped =
           ## Access the generation of this component.
           `generationTypeNode`(`instanceIds`[inst.int]).ComponentGeneration
-        template `createIdent` = discard
+        template `createIdent`* = discard
         template `deleteIdent`*(`instParam`: `instanceTypeIdent`) = discard
         
         # Updating storage.
@@ -557,6 +446,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
             quote do:
               `lcTypeIdent`[`instParam`.int] = `valueParam`
 
+      # Dot overload to access the fields of the component in storage via the index.
       case options.accessMethod
       of amDotOp:
         # We only need two dot operators, one for reading and one for writing to cover all the fields in this instance.
