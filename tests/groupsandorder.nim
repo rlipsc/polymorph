@@ -52,7 +52,7 @@ commitGroup("sysGroup1", "runGroup1")
 commitGroup("sysGroup2", "runGroup2")
 commitSystems("runRest")
 
-let e = newEntityWith(TestOrder())
+let e {.used.} = newEntityWith(TestOrder())
 
 runGroup1()
 runGroup2()

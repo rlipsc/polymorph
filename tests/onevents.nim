@@ -259,7 +259,6 @@ proc runOnEvents* =
       test "Single component construction":
         let
           testVal = Test1(data: 7)
-          test2Val = Test2(val: rand 1.0)
 
         check compAdds == otherEnts.len
         check comp2Adds == 0
