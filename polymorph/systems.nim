@@ -527,6 +527,9 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: open
   ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
   ## 
   ## Systems may be part of multiple groups.
+  let
+    lcGroup = group.toLowerAscii
+
   for systemName in systems:
     let
       nameStr = systemName.strVal
@@ -537,12 +540,12 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: open
         sys = lookupSys.index
 
       # Add to list of systems for this group.
-      if sys notin id.groupSystems(group):
-        id.add_groupSystems(group, sys)
+      if sys notin id.groupSystems(lcGroup):
+        id.add_groupSystems(lcGroup, sys)
 
       # Add the group to this system.
-      if group notin id.systemGroups(sys):
-        id.add_systemGroups(sys, group)
+      if lcGroup notin id.systemGroups(sys):
+        id.add_systemGroups(sys, lcGroup)
 
     else:
       error "Cannot find system \"" & nameStr & "\""
@@ -563,18 +566,20 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string]): untyped =
   ## Systems may be part of multiple groups.
   var
     order = id.systemOrder()
+  let
+    lcGroup = group.toLowerAscii
 
   for sys in order:
     # Ignore systems that already belong to groups.
     if id.systemGroups(sys).len == 0:
 
       # Add to list of systems for this group.
-      if sys notin id.groupSystems(group):
-        id.add_groupSystems(group, sys)
+      if sys notin id.groupSystems(lcGroup):
+        id.add_groupSystems(lcGroup, sys)
 
       # Add the group to this system.
-      if group notin id.systemGroups(sys):
-        id.add_systemGroups(sys, group)
+      if lcGroup notin id.systemGroups(sys):
+        id.add_systemGroups(sys, lcGroup)
 
 template defineGroup*(group: static[string]): untyped =
   ## Assign previously defined and ungrouped systems to a group using the default ECS identity.
@@ -593,7 +598,7 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
   result = newStmtList()
 
   let
-    systems = id.groupSystems(group)
+    systems = id.groupSystems(group.toLowerAscii)
 
   if systems.len == 0:
     error "No system bodies defined for group \"" & group & "\""
