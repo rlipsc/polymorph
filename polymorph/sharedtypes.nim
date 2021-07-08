@@ -19,12 +19,10 @@
 # ECS generation options and types.
 type
   ECSCompStorage* = enum csSeq, csArray, csTable
-  ECSErrorResponse* = enum erAssert, erRaise
+  ECSErrorResponse* = enum erAssert, erRaise  ## Note that with cdRaise, the component list is searched for duplicates each time a component is added, even with release/danger.
   ECSEntityItemStorage* = enum esSeq, esArray, esPtrArray
   ECSRecyclerFormat* = enum rfSeq, rfArray
   ECSErrorResponses* = object
-    ## Note that with cdRaise, the component list is searched for duplicates each
-    ## time a component is added, even with release/danger.
     errDuplicates*: ECSErrorResponse  # TODO
     errEntityOverflow*: ECSErrorResponse
     errCaseComponent*: ECSErrorResponse
@@ -54,7 +52,7 @@ type
     # TODO: Add ability to mark components as priority for inserting them at the
     # start of an entity's list rather than the end.
     useSet*: bool ## Use a set for hasComponent.
-    errors*: ECSErrorResponses  # Control how errors are generated.
+    errors*: ECSErrorResponses  ## Control how errors are generated.
 
   # Component storage options
   ECSAccessMethod* = enum amDotOp
@@ -62,21 +60,13 @@ type
   ECSCompRecyclerFormat* = enum crfSeq, crfArray
   ECSCompInvalidAccess* = enum iaIgnore, iaAssert
   ECSCompOptions* = object
-    ## Maximum amount of components for all component types in this prefix.
-    maxComponents*: Natural
-    ## Underlying storage format for components.
-    componentStorageFormat*: ECSCompItemStorage
-    ## Controls accessing fields through instances. This currently only offers dot operator access.
-    accessMethod*: ECSAccessMethod
-    ## Underlying storage format the recycler uses to keep track of deleted component indexes.
-    ## TODO. Not currently functional.
-    recyclerFormat*: ECSCompRecyclerFormat
-    ## Zeros memory of component after deletion.
-    clearAfterDelete*: bool
-    ## Declare the component arrays as {.threadVar.}.
-    useThreadVar*: bool
-    ## Allow inserting assert checks for each instance field access.
-    invalidAccess*: ECSCompInvalidAccess
+    maxComponents*: Natural   ## Maximum amount of components for all component types in this prefix.
+    componentStorageFormat*: ECSCompItemStorage ## Underlying storage format for components.
+    accessMethod*: ECSAccessMethod  ## Controls accessing fields through instances.
+    recyclerFormat*: ECSCompRecyclerFormat  ## TODO: Underlying storage format the recycler uses to keep track of deleted component indexes.
+    clearAfterDelete*: bool ## Zeros memory of component after deletion.
+    useThreadVar*: bool ## Declare the component arrays as {.threadVar.}.
+    invalidAccess*: ECSCompInvalidAccess  ## Allow inserting assert checks for each instance field access.
 
   # System storage options
   ECSSysStorage* = enum ssSeq, ssArray
@@ -84,29 +74,14 @@ type
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
   ECSSysOptions* = object
-    ## Maximum entities this system can hold.
-    maxEntities*: int
-    ## Underlying storage format for the system groups.
-    storageFormat*: ECSSysStorage
-    ## sifArray = constant time deletes, uses `maxEntities` * ~8 bytes per system, uses stack space.
-    ## Recommended for performance applications.
-    ## 
-    ## sifAllocatedSeq = heap allocated storage, initialised to `maxEntities`.
-    ## Useful for large amounts of entities where stack space is at a premium.
-    ## 
-    ## sifTable = adaptive memory use, but requires reallocated when extended.
-    indexFormat*: ECSSysIndexFormat
-    ## Generate timing code.
-    timings*: ECSSysTimings
-    ## Declare systems as {.threadVar.}.
-    useThreadVar*: bool
-    ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
-    echoRunning*: ECSSysEcho
-    ## Add asserts to check the system `item` is within bounds.
-    assertItem*: bool
-    ## Maintains the execution order when items are removed from groups.
-    ## This changes deletion from an O(1) to an O(N) operation.
-    orderedRemove*: bool
+    maxEntities*: int ## Maximum entities this system can hold.
+    storageFormat*: ECSSysStorage ## Underlying storage format for the system groups.
+    indexFormat*: ECSSysIndexFormat ## sifArray = constant time deletes, uses `maxEntities` * ~8 bytes per system, uses stack space, sifAllocatedSeq = heap allocated storage, initialised to `maxEntities`, sifTable = adaptive memory use, but requires reallocated when extended.
+    timings*: ECSSysTimings ## Generate timing code.
+    useThreadVar*: bool ## Declare systems as {.threadVar.}.
+    echoRunning*: ECSSysEcho  ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
+    assertItem*: bool ## Add asserts to check the system `item` is within bounds.
+    orderedRemove*: bool  ## Maintains the execution order when items are removed from groups. This changes deletion from an O(1) to an O(N) operation.
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect
