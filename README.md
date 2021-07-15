@@ -1,10 +1,11 @@
 - [Project overview](#project-overview)
+  - [ECS](#ecs)
+  - [Polymorph](#polymorph)
   - [Project goals](#project-goals)
   - [Example code](#example-code)
-  - [System oriented, no management layer](#system-oriented-no-management-layer)
   - [Compile time focus](#compile-time-focus)
-    - [Compile time optimisation](#compile-time-optimisation)
     - [Characteristics](#characteristics)
+  - [Why Nim?](#why-nim)
   - [Polymers companion library](#polymers-companion-library)
 - [Overview of building an ECS](#overview-of-building-an-ecs)
   - [After `makeEcs`](#after-makeecs)
@@ -13,11 +14,17 @@
   - [Components and instance types](#components-and-instance-types)
   - [Instances in components](#instances-in-components)
 - [Defining systems](#defining-systems)
-  - [Additional system definition mechanisms](#additional-system-definition-mechanisms)
+  - [Providing custom system fields](#providing-custom-system-fields)
   - [Committing systems](#committing-systems)
+  - [System execution order](#system-execution-order)
+  - [Grouping systems](#grouping-systems)
   - [System anatomy](#system-anatomy)
-    - [Adding or removing components during `all` and `stream` blocks](#adding-or-removing-components-during-all-and-stream-blocks)
+    - [System scope blocks](#system-scope-blocks)
+    - [Work item blocks](#work-item-blocks)
+    - [Removing components during `all` or `stream` blocks](#removing-components-during-all-or-stream-blocks)
   - [System utilities](#system-utilities)
+    - [`clear`](#clear)
+    - [`remove`/`removeComponents`](#removeremovecomponents)
 - [Working with entities](#working-with-entities)
   - [Creating entities](#creating-entities)
   - [Adding components to existing entities](#adding-components-to-existing-entities)
@@ -27,10 +34,11 @@
 - [Constructing entities at run time](#constructing-entities-at-run-time)
   - [Constructing multiple entities](#constructing-multiple-entities)
   - [Cloning entities](#cloning-entities)
+- [Switching components with component lists](#switching-components-with-component-lists)
 - [Events](#events)
   - [Inline events](#inline-events)
   - [System events](#system-events)
-  - [Inline events, changing entities, and compile time cycles](#inline-events-changing-entities-and-compile-time-cycles)
+    - [Mutating entities within inline system events](#mutating-entities-within-inline-system-events)
   - [Change events](#change-events)
   - [`onEcsBuilt`](#onecsbuilt)
   - [Construction and clone events](#construction-and-clone-events)
@@ -53,15 +61,30 @@
 - [ECS identities](#ecs-identities)
   - [Multiple ECS outputs with a single identity](#multiple-ecs-outputs-with-a-single-identity)
   - [Multiple identities](#multiple-identities)
+- [Future work](#future-work)
+  - [Performance](#performance)
+  - [Utility](#utility)
 
 
 # Project overview
 
-This library lets you build sets of data types and efficiently dispatch program logic over subsets of these types.
+This library provides a lean abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern (or ECS for short).
 
-This pattern is known as [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system), or *ECS* for short, where a set of types is an **entity**, a data type is a **component**, and program logic running over these types is called a **system**.
+## ECS
 
-Polymorph is system oriented and generates the logic for ECS operations at compile time as pared down system state changes.
+This pattern lets you create sets of data types at run time and dispatch code by type combinations.
+
+  - A set of types is an **entity**.
+  - A data type is a **component**.
+  - A **system** is program logic running over components.
+
+Advantages of using ECS include: design agility, run time composition, [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID), naturally decoupled and reusable systems, and high performance through cache friendly batch processing.
+
+## Polymorph
+
+This library takes a generative, system oriented approach to ECS.
+
+Systems store execution state and require no work to iterate. Adding or removing components outputs code to directly update the compile time inferred systems. ECS functionality is generated from the relationship between systems and components.
 
 The output is statically dispatched with a sequential flow, optimised to each system/component design.
 
@@ -71,13 +94,14 @@ The output is statically dispatched with a sequential flow, optimised to each sy
 - Scalable, low boilerplate platform for composing data oriented designs.
 - No runtime, zero system iteration overhead.
 - Leverage static typing and metaprogramming to elide run time work.
+- No external dependencies.
 
 ## Example code
 
 ```nim
 import polymorph
 
-# Define components types.
+# Create some components.
 registerComponents(defaultCompOpts):
   type
     Position = object
@@ -112,23 +136,13 @@ let pos = movingEntity.fetch Position
 assert pos.x == 3 and pos.y == 0
 ```
 
-## System oriented, no management layer
-
-Execution state is held by systems and mutated directly when components are added or removed from entities, acting like pre-fetched queries updated on an ad hoc basis. There's no need for a run time management layer or query engine, and systems are always ready to run without any further work.
-
-This is an alternate focus from many ECS implementations which run over components or entities, and systems are dynamic queries which match sets of components at run time.
-
 ## Compile time focus
 
-Adding and removing components is performed by macros which generate minimised delta updates for system lists, based on the static types involved. These system state changes do the minimum run time work the design allows for.
+Adding and removing components generate updates for system lists based on the static types involved. These system state changes do the minimum run time work the system/component design allows for.
 
 Functionality such as building entities from blueprints, cloning entities, and debugging utilities are also fully generated from your types and system design at compile time.
 
-### Compile time optimisation
-
-The more that state can be determined at compile time, the less run time work is needed.
-
-For example, creating a new entity with a set of components fully specifies the entity state, and systems are unconditionally matched at compile time. Any system updates required are then output directly without any run time speculative work.
+The more that state can be determined at compile time, the less run time work is needed. Creating a new entity with a set of components fully specifies the entity state, and systems are unconditionally matched at compile time. Any system updates required are then output directly without any run time speculative work.
 
 Adding and removing multiple components at once is also minimised at compile time, outputting single pass inline operations.
 
@@ -136,25 +150,38 @@ Adding and removing multiple components at once is also minimised at compile tim
 
 - ***Design driven***: run time work is generated from the component/system design. Tiny designs yield tiny outputs, complex designs only pay for what they use.
 - ***No run time manager***: no query engine, no system iteration overhead. Always up to date systems.
+- ***Low cost to change components***: freely evolve entities with wildly disparate components without moving memory.
 - ***Sequential code flow***: flatten run time composition, declarative code execution, and event hooks into a linear flow without needing callbacks or virtual calls.
 - ***Architecturally simple output***: outputs simple loops over lists in a set order. Aims to scale from stack only, low resource environments to cache efficient, high performance data processing.
-- ***Granular code generation control***: select between different data structures for each component and system, choose error handling mechanisms, system interval execution, indexing and removal strategies, and more - without changing any code.
+- ***Granular code generation options***: select different data structures for each component and system, choose error handling mechanisms, system interval execution, indexing and removal strategies, and more - without changing any code.
+
+## Why Nim?
+
+[Nim](https://nim-lang.org/) is an extremely adaptable language with low development friction, very high performance, and fast compile times. It's built to be readable with a flexible syntax.
+
+The language is extremely portable, compiling to C, C++, ObjC, and JavaScript, along with good Python interop. Nim's static typing and high level abstractions can be shared across domain boundaries and interface with a huge variety of ecosystems.
+
+Extensibility is a core philosophy, with hygienic macros using the language in a VM to process abstract syntax trees directly. Nim's compile time evaluation and well supported macros make this library possible.
 
 ## Polymers companion library
 
-The [**Polymers**](https://github.com/rlipsc/polymers/) library provides components and systems for various tasks:
+The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-made components and systems for various tasks:
 
   - `Console`: reading keyboard and mouse events, writing text with normalised (-1, 1) coordinates.
   - `Database`: performing queries with ODBC.
-  - `Networking`: components for socket TCP/IP (Windows IOCP), HTTP processing, serving webpages, and JSON RPC over HTTP.
+  - `Networking`: components for:
+    - socket TCP/IP (Windows IOCP) and UDP,
+    - HTTP processing,
+    - Serving webpages,
+    - JSON RPC over HTTP.
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
-  - `Physics`: interact with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
+  - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
 
 Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) folder are examples combining other components from Polymers.
   - [A console database browser](https://github.com/rlipsc/polymers/blob/master/demos/dbbrowser.nim).
   - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/demos/particledemo.nim).
   - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/demos/particlelife.nim).
-  - [An asteroids like 2D game](https://github.com/rlipsc/polymers/blob/master/demos/simplegame.nim).
+  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/demos/simplegame.nim).
   - [A simple web server](https://github.com/rlipsc/polymers/blob/master/demos/simplewebsite.nim).
 
 # Overview of building an ECS
@@ -163,17 +190,9 @@ Polymorph uses a gather and seal process to generate the output.
 
 This is a three stage process:
 
-1. ***Design the component types*** and systems we want to use.
-    - Create components with `registerComponents`.
-    - Create systems with `defineSystems` and/or `makeSystem`.
-
-2. ***Seal the design*** and generate the ECS machinery with `makeEcs`
-    - All access and utility functionality is constructed.
-    - We can now create and use entities, and add or remove components.
-    - Systems are updated when components are added/removed, but can't yet be run.
-
-3. ***Output the program logic*** for systems.
-    - System code is deposited and can now be run.
+1. ***Design the components and systems*** using `registerComponents`, `defineSystems` and/or `makeSystem`.
+2. ***Seal the design*** and generate the ECS interface with `makeEcs`.
+3. ***Output the program logic*** for systems with `commitSystems`.
 
 For example:
 
@@ -197,7 +216,7 @@ makeEcs()
 # Output the system code.
 commitSystems("runSystems")
 
-# Run the committed systems in the order they exist in the code.
+# Run the committed systems in the order they're defined.
 runSystems()
 ```
 
@@ -223,7 +242,7 @@ Once all the components and systems have been defined, the `makeEcs` macro gener
 
 # Defining components
 
-Creating components is as simple as wrapping their type definition with `registerComponents`. This will extract any `typedef` and pass the block through unaltered.
+Creating components is as simple as wrapping their type definition with `registerComponents`. This will process any `typedef` and pass the block through unaltered.
 
 `registerComponents` takes two parameters:
 
@@ -246,7 +265,7 @@ registerComponents(defaultCompOpts):
       value: int
 ```
 
-You can invoke `registerComponents` multiple times before actually constructing the ECS, for example to split component definitions over separate modules.
+You can use `registerComponents` multiple times before actually constructing the ECS, for example to split component definitions over separate modules.
 
 Each `registerComponents` may have separate options.
 
@@ -267,7 +286,7 @@ Each type passed to `registerComponents` creates two other types to support its 
 
 1) An instance type, generated with the `Instance` postfix. This is used to point to a specific component's data in storage.
 
-2) A container type, generated with the `Ref` postfix. This is inherited from the `Container` type, and allows `seq[Component]` with different component types for [`construct`](#constructing-entities-at-run-time) to build arbitrary entities.
+2) A container type, generated with the `Ref` postfix. This is inherited from the `Container` type, and allows `seq[Component]` with different component types for [`construct`](#constructing-entities-at-run-time) to build arbitrary entities at run time.
 
 ## Components and instance types
 
@@ -342,7 +361,7 @@ if not foo.valid:
 
 ## Instances in components
 
-`registerComponents` generates and inserts instance types before the component definitions themselves. This lets you use instance types within component definitions, and have type safe many-to-one links to components.
+`registerComponents` generates and inserts instance types before the component definitions themselves. This lets you use instance types within component definitions and have type safe links to other components.
 
 Instance types are always defined as the component type name postfixed with "Instance".
 
@@ -366,15 +385,25 @@ type
     a: AInstance
 ```
 
+> ***Note***: **instances don't store generation information**. Use `ComponentRef` to include generation checking.
+
 # Defining systems
 
-Systems perform the program logic in the ECS, and are essentially procs which loop over a list of components.
+Systems perform all the program logic for an ECS. Each system is essentially a proc which loops over a set of components to perform some work.
 
-There are two main ways to define systems, as a prototype/forward declaration with `defineSystem`, or declared "inline" with `makeSystem`. Both of these take a list of component types.
+For systems to participate in an ECS, they must first be defined with `defineSystem`, passing the name of the system along with the component types it uses. This allows `makeEcs` to create ECS operations based on how systems and components interact.
 
-When `defineSystem` is used, you can choose to declare the body of a system with `makeSystemBody`. This allows you to just define the code for a system whilst keeping the definition separate.
+After a system is defined, it needs program logic assigned to it in order to perform work. Such logic is referred to as a system *body*.
 
-Alternatively, you can use `defineSystem` along with `makeSystem` to include the types involved at the site of the system body as well. This can be useful when, for example, a system is defined in another module but you want to be able to see the available components when writing the code body. The types must match between `defineSystem` and `makeSystem` for the same system.
+System bodies can only be defined once per system.
+
+When `defineSystem` is used, you can declare the body of a system later with `makeSystemBody`. This allows you to keep the code for a system separate from its definition.
+
+Alternatively, you can define a system and its body at the same time with `makeSystem`, or `makeSystemOpts` if you wish to specify system compile options.
+
+`makeSystem` is passed the name and component types like `defineSystem`. If the system is already defined, `makeSystem` will just add the system body whilst ensuring that the components and options match the previous definition. It's a compile time error for the types or options to be mismatched between `defineSystem` and `makeSystem` for the same system.
+
+Once a system is defined (whether using `defineSystem` or `makeSystem`), the system type is created and its variable is instantiated. These variables are created with the system's name, prefixed with `sys` and are immediately accessible.
 
 ```nim
 import polymorph
@@ -384,148 +413,229 @@ registerComponents(defaultCompOpts):
     Comp1 = object
     Comp2 = object
 
-# "Forward declare" systems with `defineSystem`.
-# Systems defined in this way contribute to the design, but don't have a
-# 'body' of code yet.
-defineSystem("mySystem1", [Comp1], defaultSysOpts)
-defineSystem("mySystem2", [Comp1], defaultSysOpts)
-defineSystem("mySystem3", [Comp1, Comp2], defaultSysOpts)
+# Define a system.
+defineSystem("mySystem1", [Comp1])
 
-# You can also define systems without forward declaration.
-# This only makes sense in the design phase, before `makeEcs()`, and can
-# be convenient when prototyping or just to have a single place where
-# the system is defined.
-makeSystem("mySystemNoFwd", [Comp1]):
-  all: echo "Comp1: ", item.comp1
+# Access the instantiated system.
+assert sysMySystem1.count == 0
 
-# Once the ECS is sealed, new system definitions won't contribute to the
-# ECS design and won't be updated when components are added/removed
-# from entities.
+# Define a system and pass compile options to it.
+defineSystem("mySystem2", [Comp1, Comp2], defaultSysOpts)
+
+# Define a system and code body at the same time.
+makeSystem("mySystem3", [Comp1, Comp2]):
+  all:
+    echo "Comp1: ", item.comp1
+
+# Once the ECS is sealed, new systems can't be defined using these components.
 makeEcs()
 
-# We can, however, give forward declared systems a body *after*
-# `makeEcs`, but before `commitSystems`.
-#
-# This allows grouping systems into multiple 'commits'.
-
+# Define a code body for a previously defined system.
 makeSystemBody("mySystem1"):
-  all: echo "Comp1: ", item.comp1
+  all:
+    echo "Comp1: ", item.comp1
 
-# This commit will only include "mySystem1" and "mySystemNoFwd", as
-# these are the only systems with code bodies defined so far.
-commitSystems("runA")
-
-# Run "mySystem1" and "mySystemNoFwd".
-runA()
-
-makeSystemBody("mySystem2"):
-  all: echo "Comp1: ", item.comp1
-
-# Package "mySystem2" into the `runB` proc, as this is the only
-# uncommitted system with a body.
-commitSystems("runB")
-
-# Runs "mySystem2".
-runB()
+# Define a code body for a previously defined system with makeSystem.
+# Options are retrieved from the system's defineSystem.
+makeSystem("mySystem2", [Comp1, Comp2]):
+  all:
+    echo "Comp1: ", item.comp1
 ```
 
-When defining a body you can also include the components and options
-as well, in this case they *must* match the forward declarations and be
-included in the same order.
+## Providing custom system fields
 
-This can be useful to be able to see at a glance which components a
-system has access to.
-It's a compile time error to define a body twice for the same system, or
-to provide mismatching components to the original declaration.
+Passing field definitions to `defineSystem` will add them to the system variable declaration.
 
 ```nim
-# The below definition will fail with:
-#   "Components passed to makeSystem "mySystem3" [Comp1] in conflict
-#   with previous definition in defineSystem: [Comp1, Comp2]"
-makeSystem("mySystem3", [Comp1]):
-  all: discard
+const sysOpts = EcsSysOptions()
+
+defineSystem("mySystem", [Comp1], sysOpts):
+  myFieldStr: string
+
+sysMySystem.myFieldStr = "Foo"
+
+makeSystemBody("mySystem"):
+  echo "myFieldStr = ", sys.myFieldStr
 ```
 
-Once a system is defined (whether using `defineSystem` or `makeSystem`) in the design stage, the system type is created and its variable is instantiated. These variables are created with the system's name, prefixed with `sys`.
-
-> Note that systems are instantiated immediately after being defined, and before `makeEcs`.
+These fields can also be initialised at system creation.
 
 ```nim
-import polymorph
-
-registerComponents(defaultCompOpts):
-  type Foo = object
-
-defineSystem("bar", [Foo])
-
-echo sysBar.count
+defineSystem("mySystem", [Comp1], sysOpts):
+  myFieldStr = "Foo"
 ```
 
+When the type cannot be inferred but needs to be initialised, you can explicitly define it.
 
-## Additional system definition mechanisms
+Since the `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
 
-- `defineSystem` allows you to include custom fields into the system's type.
-  ```nim
-  const sysOpts = EcsSysOptions()
-  
-  defineSystem("mySystem", [Comp1], sysOpts):
-    myFieldStr: string
-  
-  sysMySystem.myFieldStr = "Foo"
-  ```
-  Custom fields can also be initialised at system creation.
-  ```nim
-  defineSystem("mySystem", [Comp1], sysOpts):
-    myFieldStr = "Foo"
-  ```
-  When the type cannot be inferred but needs to be initialised, you can explicitly define it.
-  
-  Since the `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
-  
-  ```nim
-  defineSystem("mySystem", [Comp1], sysOpts):
-    myFieldStr -> string = "Foo"
-  ```
+```nim
+defineSystem("mySystem", [Comp1], sysOpts):
+  myFieldStr -> string = "Foo"
+```
 
-- `makeSystemOpts`: define a system inline with `EcsSysOptions`.
-  ```nim
-  const sysOpts = EcsSysOptions()
-  
-  makeSystemOpts("mySystem", [Comp1], sysOpts)
-  ```
-- `makeSystemOptFields`: define a system with `EcsSysOptions` and include custom fields. Note the inclusion of the `do` to allow multiple `untyped` blocks to be passed.
-  ```nim
-  const sysOpts = EcsSysOptions()
-  
-  makeSystemOptFields("mySystem", [Comp1], sysOpts):
+Fields can also be added when defining a system and its body with `makeSystem` by using the `fields` block. If the system has already been defined these fields are checked to match the definition.
+
+```nim
+makeSystem("mySystem", [Comp1]):
+  fields:
     myFieldInt: int
-  do:
-    all: echo "This system has a custom field: ", sys.myFieldInt
-  ```
+  echo "This system has a custom field: ", sys.myFieldInt
+```
 
 ## Committing systems
 
 Once committed, each system is output as a procedure named after the system, prefixed with "`do`".
 
-Separating `makeEcs` and `commitSystems` allows more design flexibility, for example:
+Separating `makeEcs` and `commitSystems` allows for more design flexibility, for example:
   - to write code that uses the sealed ECS (after `makeEcs`) and is also used within system code,
   - to allow the sealed ECS and system code as separate imports,
-  - to split systems into separate wrapper procs as above.
+  - to split systems into separate wrapper procs.
+
+> Note: systems bind at the site they're output, *not* where the body is defined with `makeSystem`. As such, external routines or variables used by systems need to be accessible at the commit site.
+
+```nim
+# CommitSystems uses the string parameter to create a wrapper proc that
+# runs the systems it outputs in order.
+commitSystems("runMySystems")
+
+# Run systems output by `commitSystems` above.
+runMySystems()
+
+# You can run systems individually using their `do` proc.
+doMySystem()
+```
+
+## System execution order
+
+The order systems are run is key in determining how your ECS operates.
+
+Systems are added to the output of `commitSystems` in the order `defineSystem` is encountered.
+
+When no matching `defineSystem` is present, `makeSystem` will invoke `defineSystem` for you, defining the order as it's encountered in the source code.
+
+```nim
+import polymorph
+
+var executionOrder: seq[string]
+
+registerComponents(defaultCompOpts):
+  type Foo = object
+
+# The order systems are defined sets the order they're run when output
+# by `commitSystems`.
+defineSystem("a", [Foo], EcsSysOptions(maxEntities: 1))
+defineSystem("b", [Foo])
+
+# Define the system "c" and also add a code body.
+makeSystem("c", [Foo]):
+  executionOrder.add sys.name
+
+# Seal and generate the ECS.
+makeEcs()
+
+# Define the code body for "a".
+makeSystemBody("a"):
+  executionOrder.add sys.name
+
+# Both "c" and "a" have bodies waiting to be committed, but "b" doesn't
+# have a code body yet and so is not included in the output of `commitSystems`.
+#
+# As systems are run in the order they're defined, the output proc will
+# run "a" then "c".
+commitSystems("runAC")
+
+# Define the body for "b". This will be included in the next `commitSystems`.
+makeSystemBody("b"):
+  executionOrder.add sys.name
+
+# Only "b" has an uncommitted code body so the output will just run "b".
+commitSystems("runB")
+
+# Execute the two run procs.
+runAC()
+runB()
+
+# Check the order of execution is as expected.
+assert executionOrder == @["a", "c", "b"]
+```
+
+## Grouping systems
+
+Systems can be extracted into separate procedures using `defineGroup`. Grouping can be useful to separate the concerns of multiple systems to particular procedures.
+
+Systems can be part of *multiple* groups at the same time.
+
+When a system is grouped, it will not be output by `commitSystem` and must be manually output using `commitGroup`.
+
+Grouping can be performed explicitly by passing a list of systems to `defineGroup`, or ad hoc by using `defineGroup` without specifying systems. In the latter case, any systems that have been defined but *not already grouped or committed* are added to the group.
+
+It's a compile time error to try to perform `commitGroup` for systems that don't have bodies.
+
+Grouping can occur before or after `makeEcs`.
+
+Group names are case insensitive.
+
+```nim
+import polymorph
+
+registerComponents(defaultCompOpts):
+  type Comp1 = object
+
+makeSystem("g1a", [Comp1]): discard
+makeSystem("g1b", [Comp1]): discard
+
+# Gather previously defined systems into a group.
+defineGroup "group1"
+
+makeSystem("g2a", [Comp1]): discard
+makeSystem("g2b", [Comp1]): discard
+
+# Add specific systems to a group.
+defineGroup "group2", ["g2a", "g2b"]
+
+makeSystem("ungrouped", [Comp1]): discard
+
+makeEcs()
+
+commitGroup "group1", "runGroup1"
+commitGroup "group2", "runGroup2"
+# Commit the remaining "ungrouped" system.
+commitSystems "runUngrouped"
+
+runGroup1()
+runGroup2()
+runUngrouped()
+```
 
 ## System anatomy
 
-Systems offer several ways to execute code. A system must use *at least one* of these blocks, and *at least one* component.
+Systems offer several labelled blocks that allow executing code in particular contexts. These are classified into two categories: system scope blocks and work item blocks.
 
-Within a system block, the `sys` template refers to the current system.
+System scope blocks (`init`, `start`, `finish`) are run at specific points in a system's execution. They may be written at any point in the root of the system's body, but are *extracted* from the body and pieced together in the order they're written, to be executed within the appropriate scope.
 
-- `init:` this is run when the system's `initialised` flag is unset. After this block is run an `initialised` boolean is set to true. You can set `initialised` to false to re-trigger this block.
+Work item blocks (`all`, `stream`) are run for items in the system's work list. These blocks are expanded in place within the system body. Multiple occurrences of these blocks are run as they are encountered within the system body and allow multiple passes of the system's work list, potentially with other code executed between them.
 
-- `start:` run every time a non-disabled system begins. Any setup work for each system run can be performed here. The `start` block is in the same scope as `all`, `stream`, and `finish`, so variables and data defined in `start` can be used within these blocks.
+Systems can be disabled by setting `disabled = true` in the system variable. When disabled, a system will not perform any blocks, even `init`, until `disabled = false`.
 
-- `all:` this is usually where most processing is performed. This block is given an `item` template to reference the current entity's components and is executed for every row in the work list.
-  - `item` provides access to the components the system uses (defined as the type name in lower case) for the current entity being processed, as well as a reference to the entity itself.
+Systems can be paused by setting `paused = true` in the system variable. When paused, the system scope blocks `init`, `start`, and `finish` are still executed. This allows control of paused state within these blocks.
 
-- `stream:` process a portion of the entities in the system. Like `all`, this also includes the `item` template. This has several variations:
+Code in the root of a system body is executed when the system is run and `paused` and `disabled` are `false`.
+
+Within a system the `sys` template refers to the variable for the current system.
+### System scope blocks
+
+- `init:` this is run when the system's `initialised` flag is unset. After this block is run the system's `initialised` boolean is set to true. You can set `initialised` to false to re-trigger this block.
+- `start:` executed every time a non-disabled system begins running, before the check for `sys.paused`. The `start` block is in the same scope as the system body and the `all`, `stream`, and `finish` blocks, so variables and data defined in `start` can be used within these blocks. The `start` block can also be useful to change `sys.paused` according to some condition to inhibit or allow the system body to run.
+- `finish:` run after a system body has finished executing, regardless of `sys.paused` state. This can be useful for cleaning up or changing `sys.paused` state.
+
+### Work item blocks
+
+These block include an `item` template to access the current row entity's components. This template provides access to the entity being processed as `item.entity`, and components the system uses defined as the type name in lower case (eg; `item.myComponent`).
+
+- `all:` this is usually where most processing is performed and is executed for each entity/component combination in the system's work list.
+
+- `stream:` process a portion of the entities in the system. This has several variations:
   - `stream:` process `sys.streamRate` entities. If `sys.streamRate` is zero, all entities are processed as if this were an `all` block.
   - `stream N:` the same as `stream`, but overrides `sys.streamRate` to fix the number of entities processed per run to `N`.
   - `stream multipass:` the same as `stream`, but will force `sys.streamRate` entities to be processed per run. If the number of entities is less than `sys.streamRate`, they will be reprocessed until `sys.streamRate` is met.
@@ -533,56 +643,107 @@ Within a system block, the `sys` template refers to the current system.
   - `stream stochastic:` processes `sys.streamRate` entities selected at random from the system.
   - `stream stochastic N:` the same as `stream stochastic` but overrides `sys.streamRate` to `N` entities.
 
-- `finish:` any work that needs to happen after items have been processed.
-
 ```nim
+import polymorph
+
 registerComponents(defaultCompOpts):
   type Comp1 = object
 
 makeSystem("allTheBlocks", [Comp1]):
   init:
-    echo "First run for ", sys.name
+    echo "Init: first run for ", sys.name
   start:
-    echo "Beginning execution for ", sys.name
+    echo "Start: beginning execution for ", sys.name
+  
+  echo "Body: this system has started running!"
+  
   all:
-    echo "Entity ", item.entity, " has component ", item.comp1
+    echo "All: running for entity ", item.entity.entityId.int
+  
+  echo "Body: the all block has finished!"
+  
   stream:
-    echo "Process a set number of entities"
-  finish:
-    echo "Finished execution for ", sys.name
+    echo "Stream: running for entity ", item.entity.entityId.int
+  
+  echo "Body: the stream block has finished!"
+
+  finish: echo "Finish: finished execution for ", sys.name
+  start: echo "Start: still beginning execution for ", sys.name
+
+makeEcs()
+commitSystems("run")
+let entity = newEntityWith(Comp1())
+run()
 ```
 
-### Adding or removing components during `all` and `stream` blocks
+The above outputs:
+```
+Init: first run for allTheBlocks
+Start: beginning execution for allTheBlocks
+Start: still beginning execution for allTheBlocks
+Body: this system has started running!
+All: running for entity 1
+Body: the all block has finished!
+Stream: running for entity 1
+Body: the stream block has finished!
+Finish: finished execution for allTheBlocks
+```
+
+### Removing components during `all` or `stream` blocks
+
+Operations that remove rows from the *currently iterating* system in a work item block may invalidate the `item` template until the next row.
+
+This means that `item.entity.delete` makes `item` refer to a different entity and set of components, or even invalid memory!
+
+To force checking this condition each time `item` is accessed at run time, set `assertItem = true` in the `ECSSysOptions` passed when defining the system.
+
+To help with these cases without needing run time checks, the `entity` variable accessible in these blocks references the entity that the row *originally* started with, regardless of the system state. This can be useful when you want to perform destructive operations to the row (such as `delete` or `removeComponent` for a component the system uses, which causes the row to be removed) without worrying about the `item` being invalidated:
+  ```nim
+  makeSystem("processEntities", [SomeComponent]):
+    all:
+      # Removing a component used by the system will remove
+      # the row and invalidates `item`.
+      entity.remove SomeComponent
+      # We can still change the original entity even though
+      # `item.entity` may now be different.
+      entity.add SomeOtherComponent
+  ```
 
 Polymorph detects when you add or remove components that affect the currently iterating system within `all` and `stream` blocks at compile time, and will add extra checks to ensure iterations stay within bounds.
 
-However, deleting entities is opaque to compile time analysis as it cannot be known what components exist on a run time entity. This means these checks will always be added when deleting entities in `all` or `stream` blocks.
+*Deleting* entities, however, is opaque to compile time analysis as it cannot be known what components exist on a run time entity. This means these checks will always be added when deleting entities inside `all` or `stream` blocks.
 
-To see information about which systems are affected, compile with `-d:ecsPerformanceHints`.
+To see information about which system iteration loops are affected by removes/deletes, compile with `-d:ecsPerformanceHints`.
 
-> **Important note:**
-> 
-> After removing a component or deleting an entity that affects the system currently running, the `item` template should not be used as it may refer to an incorrect row.
->
-> To check for this at run time, set `assertItem = true` in the `EcsSysOptions` object passed to `makeSystem`/`defineSystem`.
+Another option for deleting entities is to use the system's `deleteList`. Any entity added to this `seq` will be removed after the `finish` block is executed, and the list is then cleared. These deletes don't affect iteration, but simple appending may cause a heap allocation and potentially memory moving as part of the standard `seq` operation. For extensive use of `deleteList`, it may be worth setting the capacity at the start of system execution.
+
+```nim
+makeSystem("deleteEntities", [SomeComponent]):
+  all:
+    sys.deleteList.add entity
+```
 
 ## System utilities
 
-You can perform remove operations on systems as a whole with the following two operations:
+You can perform delete/remove operations on systems as a whole with the following two operations:
 
-- `clear`: will delete all entities in the given system.
+### `clear`
 
-  ```nim
-  mySystem.clear
-  ```
+Deletes **all entities** in the given system. Use with caution!
 
-- `remove`/`removeComponents`: removes one or more components from all entities in the given system.
+```nim
+mySystem.clear
+```
 
-  ```nim
-  mySystem.remove Comp1, Comp2, Comp3
-  ```
+### `remove`/`removeComponents`
 
-Within system blocks you can use the `sys` template to refer to the current system:
+Removes one or more components from all entities in the given system.
+
+```nim
+mySystem.remove Comp1, Comp2, Comp3
+```
+
+Within system blocks you can use the `sys` template with these utilities to act on the current system:
 
 ```nim
 makeSystem("removeComp1", Comp1):
@@ -595,7 +756,7 @@ makeSystem("removeComp1", Comp1):
 
 Once `makeEcs` has finished, entities can be created with either `newEntity` or `newEntityWith`, where the latter allows setting up entities with components.
 
-In particular, `newEntityWith` can be a very performant way to create entities, as by definition the entity can only contain the components passed to it, so the systems that need to be updated are fully constrained at compile time.
+In particular, `newEntityWith` can be a very performant way to create entities, as by definition the entity can only contain the components passed to it, and the systems that need to be updated are fully constrained at compile time.
 
 This means that the output code consists of simply updating the entity's internal list and producing static system updates only where parameter components fully satisfy systems. No conditional work is required.
 
@@ -626,7 +787,7 @@ let
 
 ## Adding components to existing entities
 
-Entities can also be updated 'piecemeal' with `add` or `addComponents`.
+Entities can be updated 'piecemeal' with `add` or `addComponents`.
 
 This operation also supports multiple components at a time. Providing multiple components in one operation (as opposed to several singular `add` operations) can help inform code generation to confirm systems that are definitely being updated, producing non-conditional code.
 
@@ -673,10 +834,10 @@ else:
 
 Removing components is performed with `remove` or `removeComponents`. Much like adding, this operation also allows multiple components to be removed in a single operation.
 
-This takes the *type* of the component.
+This takes the *type* of components.
 
 ```nim
-# Remove components from the entity and any systems currently in use.
+# Remove components from the entity and systems which using Comp1 and/or Comp2.
 entity.remove Comp1, Comp2
 ```
 
@@ -695,7 +856,7 @@ entity.delete
 
 `makeEcs` generates a `construct` procedure that lets you build entities from lists of components.
 
-This is fairly efficient, as the list is mapped for types then the entity is created in a single integrated operation much like `newEntityWith`. As such it can elide the speculation of multiple separate `addComponent` operations.
+This is fairly efficient, as the list is parsed for types then the entity is created in a single integrated operation in a similar way to `newEntityWith`. As such it can elide the speculation and repeated work of multiple separate `addComponent` operations.
 
 To allow storing different component types in a single list, `registerComponents` generates a `ref` container type for each component, descended from the `Component` object.
 
@@ -711,9 +872,9 @@ The `makeContainer` template will correctly set up containers for individual com
 let mcContainer = MyComponent(data: 1234).makeContainer
 ```
 
-The `cl` macro makes setting up a `ComponentList` more convenient.
+The `cl` macro makes setting up a `ComponentList` much more convenient.
 
-This macro lets you pass the original component types or `ref` container types, and ensures containers are correctly set up. Another advantage of `cl` is that it avoids over constraining the list type with single components - for example `@[MyComponentRef()]` is of type `seq[MyComponentRef]`, not the `seq[Component]` type that `construct` expects.
+This macro lets you mix the original component types and `ref` container types, and ensures containers are correctly set up. Another advantage of `cl` is that it always outputs `ComponentList`, and avoids over constraining the list type when single components are used - for example `@[MyComponentRef()]` is of type `seq[MyComponentRef]`, not the `seq[Component]` type that `construct` expects.
 
 ```nim
 import polymorph
@@ -741,7 +902,7 @@ assert c2.value == "Foo"
 
 ## Constructing multiple entities
 
-To create several entities, a `seq[ComponentList]` is used. This is aliased as `ConstructionTemplate`.
+To create multiple entities in one operation, a `seq[ComponentList]` is used. This is aliased as `ConstructionTemplate`.
 
 ```nim
 let
@@ -762,17 +923,46 @@ Entities may be duplicated at run time with the generated `clone` procedure.
 let myClose = myEntity.clone
 ```
 
-This performs less work than `construct`, as the entity state must already be valid for the entity to exist.
+This performs less validation work than `construct`, as the entity state must already be valid for the entity to exist.
+
+# Switching components with component lists
+
+The `transition` template lets you remove one set of components and add or update another. This can be useful for using components for state machine behaviour. Only components within the parameter lists `prevState` and `newState` are considered. Other components are unaffected.
+
+This comes in two flavours:
+- `transition(entity: EntityRef, prevState, newState: ComponentList, transitionType: static[EntityTransitionType])`
+
+  `transitionType` controls whether to just update components that
+  are in both states, or to always remove components in
+  `prevState` and add `newState`.
+
+  - A transition type of `ettUpdate` will remove components that are in
+  `prevState` but don't exist in `newState`, and update components that
+  exist in both `prevState` and `newState`.
+  Events such as add/remove events for updated components are not
+  triggered, the data for the component is just updated.
+
+  - A transition type of `ettRemoveAdd` will always trigger events
+  such as `onRemoved` and `onAdd`, but does more work when many components
+  are shared between `prevState` and `newState`. This can be useful for
+  components containing managed resources and other situations where events
+  must be triggered.
+
+- `transition(entity: EntityRef, prevState, newState: ComponentList)`
+  
+  This version calls `transition` with `ettUpdate`.
+
+Note: be aware when invoking this in systems that removing components can invalidate the current system `item` row.
 
 # Events
 
 Polymorph includes a variety of events for different situations. Most of these are 'inline' and are included ad hoc when required in the output code. All events are called immediately at the point of invocation.
 
-In general, events are invoked *after* the state has been fully resolved for events that trigger when 'added' and *before* the state has been resolved for 'removing' events.
+In general, events are invoked *after* the state has been fully resolved for events that trigger when 'adding' and *before* the state has been resolved for 'removing' events.
 
 ## Inline events
 
-These events are directly inserted during a state change without any call overhead. This makes them great for component initialisations/deinitialisations, monitoring, and other light work.
+These events are directly injected during a state change without any call overhead. This makes them great for component initialisations/deinitialisations, monitoring, and other light work.
 
 Each event *appends* code, which is run in the order the event code is added. This allows extending events on components even if they already have existing event code.
 
@@ -783,8 +973,8 @@ This is important because it means you ***cannot add or remove components*** wit
 |---|---|---|
 | `onAdded` | A component type | When this type is added to an entity |
 | `onRemoved` | A component type | When this type is removed from an entity |
-| `onAddedTo` | A component type, and a system name | When a type is added to a particular system |
-| `onRemovedFrom` | A component type, and a system name | When a type is removed from a particular system |
+| `onAddedTo` | A component type and a system name | When a type is added to a particular system |
+| `onRemovedFrom` | A component type and a system name | When a type is removed from a particular system |
 
 ## System events
 
@@ -798,18 +988,18 @@ These events allow using the sealed ECS, such that you can add or remove compone
 |---|---|
 | `added` | When a new row is added to the system |
 | `removed` | When a row is removed from the system |
-| `addedCallback` | When a new row is added to the system |
-| `removedCallback` | When a row is removed from the system |
+| `addedCallback` | Call a procedure when a new row is added to the system |
+| `removedCallback` | Call a procedure when a row is removed from the system |
 
-## Inline events, changing entities, and compile time cycles
+### Mutating entities within inline system events
 
 Inline events are expanded by the compiler and can therefore create cycles at compile time. For example, if your `added` event for a system adds a component that directly or indirectly ends up triggering the original `added` event again, code generation would get stuck in a cycle.
 
-Polymorph guards against event cycles at compile time and will fail with an error message when events of the same type invoke the same system more than once. However this is limited to code expansion, not semantic analysis. It cannot determine conditional event triggers, for example, as this would require understanding the event code itself.
+Polymorph guards against event cycles at compile time and will fail with an error message when events of the same type invoke the same system more than once. However this is limited to code expansion, not semantic analysis. It cannot determine conditional event triggers, for example.
 
-This caveat only applies to inline system events `added` and `removed`. Callback events such as `addedCallback` and `removedCallback` do not require expansion in this way, and so offer the benefits of manipulating entities without the potential for compile time cycles - ***however***, you can still create *run time* event cycles with callback events!
+This caveat only applies to inline system events `added` and `removed`. Callback events such as `addedCallback` and `removedCallback` do not require expansion in this way, and so offer the benefits of manipulating entities without the potential for compile time cycles.
 
-For this reason, it's worth being aware of how events affect a design, particularly if your systems are being used by other developers who may use their own events which could be triggered along with, or inside, your event code.
+It's worth being aware of how events affect a design, particularly if your systems are being used by other developers who may use their own events which could be triggered along with, or inside, your event code.
 
 ## Change events
 
@@ -819,13 +1009,19 @@ For this reason, it's worth being aware of how events affect a design, particula
 
 This event is triggered whenever an entity state changes. This includes components being added or removed from entities, new entities are constructed from a template of components, or entities are deleted. However it is not triggered for 'empty' entities such as created with `newEntity` (since no components have been added yet).
 
+This example shows logging all component changes for entities:
+
+```nim
+onEntityChange:
+  echo "Change: ", entity.entityId.int, ": ", state, ": ", types
+```
 ## `onEcsBuilt`
 
 Code passed to this macro will be emitted after `makeEcs` has completed.
 
-This can be useful when you want to define actions that uses the ECS, such as utilities or procedures used within system bodies.
+This can be useful when you want to define logic that uses the ECS and must be available as soon as possible. For example, for use within system bodies, for general set up situations, or for providing utility functions.
 
-In particular, this is invaluable for library components/systems, where some initialisation or utility procedures may use the ECS, but the library doesn't have control over when `makeEcs` is invoked.
+In particular, this is invaluable for library components/systems, where some initialisation or utility procedures may use the ECS, but the library doesn't have control over when `makeEcs` is run.
 
 ```nim
 registerComponents(defaultCompOpts):
@@ -860,7 +1056,7 @@ These events allow you to intercept the construction and cloning of entities and
 
 Changing the component types being added is not possible with other events.
 
-To register these events, `makeEcs` must have been invoked, and as such they have full access to ECS operations.
+To register these events `makeEcs` must have been run, and as such they have full access to ECS operations.
 
 One use for these kind of events is for blueprinting run time only data such as external resources.
 One component type can be used to provide information for instantiation, and is replaced with a different component that represents initialised data. This can be useful for separating the concerns of systems.
@@ -881,7 +1077,7 @@ Another example is for meta-components. One component can contain information th
     
     The component's container type is created by `registerComponents` as the component name with the `Ref` postfix, for example a `MyComponent` type would use `MyComponentRef(component).value`.
 
-  - `context`: the `construct` proc allows optionally passing this entity to provide input to construction events.
+  - `context`: the `construct` proc allows optionally passing an entity to provide input to construction events.
 
     If no entity is provided, `context` will match the `entity` parameter.
 
@@ -921,12 +1117,12 @@ Another example is for meta-components. One component can contain information th
   proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
   ```
   - `entity`: the entity being constructed.
-  - `component`: the component ref that's been assigned to the entity. To convert this to an instance to access it, type cast the index field with the component's instance type, which is the type postfixed with `Instance`. For example for `MyComponent`: `MyComponentInstance(component.index)`.
+  - `component`: the component ref that's been assigned to the entity. To convert this to an instance to access it, type cast the index field with the component's instance type, which is the type postfixed with `Instance`. For example for `MyComponent` the instance would be accessed with `MyComponentInstance(component.index)`.
   - `entities`: the list of entities that will be returned to the user.
 
   These events are called after multiple entities are built by using `construct` with a `ConstructionTemplate`. The event allows work to be performed on the fully constructed sets of entities.
   
-  It does not allow changing of components directly, but allows full manipulation of the entities themselves.
+  It does not allow changing the type of components *as they're added* like `registerConstructor`, but allows full manipulation of the fully constructed entities afterwards.
 
   This can be useful to update components that keep track of other entities, or perform other multi-entity work.
 
@@ -975,8 +1171,7 @@ template defineSay*(compOpts: EcsCompOptions, sysOpts: EcsSysOptions) {.dirty.} 
 
   makeSystemOpts("sayer", [Say], sysOpts):
     all: echo item.say.text
-    finish: removeComponents Say
-
+    finish: sys.remove Say
 ```
 
 This can then be instantiated along with other components and systems.
@@ -1038,7 +1233,7 @@ When passed to `registerComponents`, this object controls how these components a
   - `cisSeq`: store components in a heap allocated `seq`. This allows dynamically sizing storage by component. Resizing often, however, requires moving memory which can degrade performance.
   - `cisArray`: store components in a stack allocated, fixed size array of size `maxComponents`.
 - `accessMethod`: controls accessing fields through instances. This currently only offers dot operator access with `amDotOp`.
-- `clearAfterDelete`: when set, zeros memory of component after deletion.
+- `clearAfterDelete`: when set, zeros memory of components after deletion.
 - `useThreadVar`: declare the component arrays as {.threadVar.}.
 - `invalidAccess`: allow inserting assert checks for each instance field access.
   - `iaIgnore`: no check is performed.
@@ -1140,7 +1335,7 @@ When passed to `makeEcs`, this object controls how entities are generated at com
   
   Note that any generated code *after* the above operations has to be manually 'flushed' with `flushGenLog()`. The log will then include subsequent operations.
 
-  > **Important note**: as Nim doesn't currently allow you to output to files at compile time, the log is generated at compile time but written at ***run time***. In other words, using this switch will bulk your output executable and write a static string at program startup.
+  > **Important note**: as Nim doesn't currently allow you to output to files at compile time, the log is generated at compile time but written at ***run time***. In other words, using this switch will bulk your output executable and write a static string to file at program startup.
   
   The log file is named `ecs_code_log.nim` and will be placed in the same path as the executable when run. This file isn't actually runnable as it doesn't include the full program context, and the `.nim` extension is just a hint for editors to use syntax highlighting.
 
@@ -1150,7 +1345,9 @@ When passed to `makeEcs`, this object controls how entities are generated at com
 
 Polymorph is a very thin layer over simple list processing, and the order of memory accesses is (currently) up to the user to manage. Future version may ameliorate this by optimising the insertion points of new rows, for now, high performance applications may find it useful to understand how systems execute with respect to memory access.
 
-Systems have no overhead to iterate, but each component is accessed via an (index) indirection. If the source component data is in the cache and systems access this data in a forward access pattern, this has little performance impact.
+Systems have no overhead to iterate, but each (non-[owned](#owned-components-and-removing-indirection)) component is accessed via an index indirection to a list of structures. This format can be cache efficient for systems that access all the fields in the component, but can be less so when components contain large and seldom accessed fields, as this unused data may be pulled from RAM and fill the cache only to be skipped over by systems.
+
+The key to high performance is to fully utilise the instruction and data cache within the CPU, fetching memory from RAM only when necessary. Components that are processed often should therefore be designed to hold the minimum reasonable data required for associated system tasks.
 
 When a system's indirections are skipping backwards or far forwards in memory, performance will degrade as the CPU cache cannot be effectively used.
 
@@ -1166,12 +1363,12 @@ This can happen if systems often have rows removed then readded again from addin
 # end up with something like this:
 [9, 1, 7, 2, 8, 3, 6, 0, 5, 4]
 # As this system iterates, it's skipping about in memory and the cache
-# can't be effectively used.
+# can't be as effectively used.
 ```
 
 This kind of 'system churn' can dramatically affect the performance of systems by reducing the chance of data being in the CPU cache, causing many long trips to main memory. Each system has a unique "indirection window" to the underlying component storage based on the order of updates.
 
-One solution is to simply not change components often and maintain bulk entity creation/deletion. However, it can often be useful to take advantage of the dynamic qualities of run time composition in designs.
+One solution is to simply not change components often and maintain bulk entity creation/deletion, or to design systems that undergo churn to work with smaller data sets that fit within cache, if possible. However, it can often be useful to take advantage of the dynamic qualities of run time composition in designs with large amounts of data.
 
 Two tools that can help when performance sensitive systems often reorder their execution:
 
@@ -1221,6 +1418,8 @@ This data also lets you understand the "shape" of indirections within a system a
 Tabulated to the right is a simplified 'quick look' version of the data.
 
 > Note that 'outliers' in the "Kurtosis/spread" right tabulated data refer to the excess kurtosis. Many/few outliers in this case refer to outliers from the normal distribution for this data set.
+
+The analysis is split into two parts for each component: statistics for out of order accesses as "Fragmentation", and statistics for all memory accesses within the system.
 
 Here we can see that the fragmentation is not too bad in this system. Fragmentation for Comp1 is at just 2%, with only 2 accesses being out of sequence.
 
@@ -1289,7 +1488,7 @@ Analysis for frag (100 rows of 1 components):
 
 # Owned components and removing indirection
 
-System can 'inline' component data into their work list, ensuring that each system item contains component data side by side in memory. Systems that own all of their components have no indirection and process memory in a forward access pattern. This offers a theoretically higher iteration speed, fewer cache misses, and potentially allowing SIMD optimisations.
+System can 'inline' component data into their work list, ensuring that each system item contains component data side by side in memory. Systems that own all of their components have no indirection and process memory in a forward access pattern. This offers a theoretically higher iteration speed, fewer cache misses, and potentially SIMD optimisations.
 
 The practical performance advantages from this, however, depend on the nature of the system's work, the size of the components, and whether all or only some of the component data is used. This guarantee only applies to the owning system.
 
@@ -1336,7 +1535,11 @@ References to owned components outside of the owning system itself, such as in o
 
 ## Satisfying owner systems
 
-When a system owns components, a new row can only be created if all of the system's owned components are present in a single state change. Incomplete owned state results in a compile time error for `newEntityWith`, and a run time error for `add`/`addComponents`.
+When a system owns components, a new row can only be created if all of the system's owned components are present in a single state change.
+
+Incomplete owned state results in a compile time error for `newEntityWith` or for `add`/`addComponents` that affect fully owned systems. For systems that include instanced components, a run time error occurs for `add`/`addComponents` if the owning system cannot access the required components from the entity.
+
+These constraints also apply to `construct`, which will fail at run time if ownership cannot be satisfied.
 
 For example:
 
@@ -1355,11 +1558,7 @@ makeEcs()
 
 # Error: Owned component(s) [A] need their owner systems completed with component(s): [B, C]
 let e1 = newEntityWith(A())
-```
 
-The same applies to `add` and `addComponents`:
-
-```nim
 let e2 = newEntity()
 # Error: Cannot add A, missing required owned component C
 discard e2.add(A(), B())
@@ -1385,8 +1584,8 @@ For example:
 defineSystemOwner("fullyOwned", [A, B, C, D], [A, B, C, D], sysOpts)
 
 # Both these systems rely on `fullyOwned` to exist as they use its components.
-defineSystem("refToOwned1", [A, B, C, D], sysOpts )
-defineSystem("refToOwned2", [A, B], sysOpts )
+defineSystem("refToOwned1", [A, B, C, D], sysOpts)
+defineSystem("refToOwned2", [A, B], sysOpts)
 
 # This system requires owned components C, and D from `fullyOwned` and
 # also has its own owned components, E and F.
@@ -1489,3 +1688,16 @@ myId.makeSystem("test1", [Comp1]):
 
 myId.makeEcs(defaultEntOpts)
 ```
+
+# Future work
+
+## Performance
+
+- Optimise component metadata management.
+- Allow component storage to select between 'array of struct' and 'struct of array'.
+- Heuristics for inserting components and systems to minimise fragmentation with high system churn.
+- Automatically group systems that interact into threads (see the [automated threading](https://github.com/rlipsc/polymorph/issues/4) issue).
+
+## Utility
+
+- Allow run time component and system definitions to support plugin architectures.
