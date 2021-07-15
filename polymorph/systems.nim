@@ -1274,17 +1274,22 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     if item.len < 1 or
         item.kind notin [nnkCall, nnkCommand] or
-        item[0].kind notin descriptorNodeKinds or
-        $item[0] notin blockChoices:
+        item[0].kind notin descriptorNodeKinds:
       # Not something we need to process.
       bodyIndex.inc
       continue
 
     let
-      sysBlock = $item[0]
-      code = item[1]
+      sysBlock = ($item[0]).toLowerAscii
+
+    if sysBlock notin blockChoices:
+      # Not a known block descriptor.
+      bodyIndex.inc
+      continue
 
     let
+      code = item[1]
+
       staticCloseAdded = quote do:
         static:
           const
