@@ -557,29 +557,47 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
       ## `transitionType` controls whether to just update components that
       ## are in both states, or to always remove components in
       ## `prevState` and add `newState`.
-      ## A transition type of `ettRemoveAdd` will always trigger events
-      ## such as `onAdd`, but does more work if many components are
-      ## shared between `prevState` and `newState`.
       ## 
-      ## Note: be aware when invoking this in systems that removing
-      ## components can invalidate the current `item` row.
+      ## - A transition type of `ettUpdate` will remove components that are in
+      ## `prevState` but don't exist in `newState`, and update components that
+      ## exist in both `prevState` and `newState`.
+      ## Events such as `onAdd`/`onRemove` for updated components are not
+      ## triggered, the data for the component is just updated.
+      ## 
+      ## A transition type of `ettRemoveAdd` will always trigger events
+      ## such as `onAdd`/`onRemove`, but does more work if many components
+      ## are shared between `prevState` and `newState` and may reorder
+      ## more system rows. This can be useful for components containing
+      ## managed resources and other situations where events must be
+      ## triggered.
+      ## 
+      ## Note: be aware when using `transition` whilst iterating in a
+      ## system that removing components the system uses can invalidate
+      ## the current `item` template.
       {.line.}:
         if prevState.len > 0:
-          var prevIds = newSeq[ComponentTypeId](prevState.len)
-          for i, c in prevState:
-            prevIds[i] = c.typeId
           # Remove components first so we don't invoke a state with both old
           # and new components.
           when transitionType == ettUpdate:
-            for c in newState:
-              let tyId = c.typeId
-              if tyId notin prevIds:
+            var
+              newIds = newSeq[ComponentTypeId](newState.len)
+            
+            for i, c in newState:
+              newIds[i] = c.typeId
+
+            for c in prevState:
+              let
+                tyId = c.typeId
+              
+              if tyId notin newIds:
                 caseComponent tyId:
                   entity.removeComponent componentType()
+
           elif transitionType == ettRemoveAdd:
             for c in prevState:
               caseComponent c.typeId:
                 entity.removeComponent componentType()
+
           else:
             {.fatal: "Unknown transition type '" & $transitionType & "'".}
         entity.addOrUpdate newState

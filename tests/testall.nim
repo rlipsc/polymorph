@@ -1,5 +1,5 @@
 import polymorph, basic, forwardDecl/forwardDeclTest as fdcl, onevents,
-  constructandclone, streaming, groupsandorder
+  constructandclone, streaming, groupsandorder, transitioncomponents
 
 const
   compOpts = ECSCompOptions()
