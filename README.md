@@ -177,7 +177,7 @@ The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-m
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
   - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
 
-Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) folder are examples combining other components from Polymers.
+Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) folder are examples combining different components from Polymers.
   - [A console database browser](https://github.com/rlipsc/polymers/blob/master/demos/dbbrowser.nim).
   - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/demos/particledemo.nim).
   - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/demos/particlelife.nim).
@@ -837,7 +837,7 @@ Removing components is performed with `remove` or `removeComponents`. Much like 
 This takes the *type* of components.
 
 ```nim
-# Remove components from the entity and systems which using Comp1 and/or Comp2.
+# Remove components from the entity and systems using Comp1 and/or Comp2.
 entity.remove Comp1, Comp2
 ```
 
@@ -939,20 +939,53 @@ This comes in two flavours:
   - A transition type of `ettUpdate` will remove components that are in
   `prevState` but don't exist in `newState`, and update components that
   exist in both `prevState` and `newState`.
-  Events such as add/remove events for updated components are not
+  Events such as `onAdd`/`onRemove` for updated components are not
   triggered, the data for the component is just updated.
 
   - A transition type of `ettRemoveAdd` will always trigger events
-  such as `onRemoved` and `onAdd`, but does more work when many components
-  are shared between `prevState` and `newState`. This can be useful for
-  components containing managed resources and other situations where events
-  must be triggered.
+  such as `onAdd`/`onRemove`, but does more work when many components
+  are shared between `prevState` and `newState` and may reorder more
+  system rows. This can be useful for components containing managed
+  resources and other situations where events must be triggered.
 
 - `transition(entity: EntityRef, prevState, newState: ComponentList)`
   
   This version calls `transition` with `ettUpdate`.
 
-Note: be aware when invoking this in systems that removing components can invalidate the current system `item` row.
+> Note: be aware when using `transition` whilst iterating in a system that removing components the system uses can invalidate the current `item` template.
+
+```nim
+import polymorph
+
+registerComponents(defaultCompOpts):
+  type
+    A = object
+      value: int
+    B = object
+      value: int
+    C = object
+      value: string
+    D = object
+      value: string
+
+makeEcs(defaultEntOpts)
+
+let
+  compsAB = cl(A(value: 456), B(value: 789))
+  compsAD = cl(A(value: 999), D(value: "Bar"))
+  
+  entity = newEntityWith(A(value: 123), C(value: "Foo"))
+
+entity.transition(compsAB, compsAD)
+# A is overwritten with the A in `compsAC` and D is added.
+# There's no B to remove yet and C is unaffected.
+# Entity is now: A(value: 999), C(value: "Foo"), D(value: "Bar")
+
+entity.transition(compsAD, compsAB)
+# A is overwritten with the A in `compsAB`, D is removed, and B is added.
+# C is unaffected.
+# Entity is now (A(value: 456), C(value: "Foo"), B(value: 789))
+```
 
 # Events
 
@@ -971,10 +1004,12 @@ This is important because it means you ***cannot add or remove components*** wit
 
 | Event | Parameters | Triggered |
 |---|---|---|
-| `onAdded` | A component type | When this type is added to an entity |
-| `onRemoved` | A component type | When this type is removed from an entity |
-| `onAddedTo` | A component type and a system name | When a type is added to a particular system |
-| `onRemovedFrom` | A component type and a system name | When a type is removed from a particular system |
+| `onAdd` | A component type | When this type is added to an entity |
+| `onRemove` | A component type | When this type is removed from an entity |
+| `onSystemAdd` | A component type | When a type is added to any system |
+| `onSystemRemove` | A component type | When a type is removed from any system |
+| `onSystemAddTo` | A component type and a system name | When a type is added to a particular system |
+| `onSystemRemoveFrom` | A component type and a system name | When a type is removed from a particular system |
 
 ## System events
 
