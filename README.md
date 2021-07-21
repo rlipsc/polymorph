@@ -13,6 +13,8 @@
   - [`registerComponents` generated types](#registercomponents-generated-types)
   - [Components and instance types](#components-and-instance-types)
   - [Instances in components](#instances-in-components)
+  - [Component utilities](#component-utilities)
+    - [Matching run time `ComponentTypeId`](#matching-run-time-componenttypeid)
 - [Defining systems](#defining-systems)
   - [Providing custom system fields](#providing-custom-system-fields)
   - [Committing systems](#committing-systems)
@@ -25,16 +27,20 @@
   - [System utilities](#system-utilities)
     - [`clear`](#clear)
     - [`remove`/`removeComponents`](#removeremovecomponents)
+    - [`systemsUsed`](#systemsused)
+    - [`caseSystem`](#casesystem)
 - [Working with entities](#working-with-entities)
   - [Creating entities](#creating-entities)
   - [Adding components to existing entities](#adding-components-to-existing-entities)
   - [Fetching and checking for components](#fetching-and-checking-for-components)
   - [Removing components](#removing-components)
   - [Deleting entities](#deleting-entities)
+  - [Checking entities satisfy specific systems](#checking-entities-satisfy-specific-systems)
 - [Constructing entities at run time](#constructing-entities-at-run-time)
   - [Constructing multiple entities](#constructing-multiple-entities)
   - [Cloning entities](#cloning-entities)
 - [Switching components with component lists](#switching-components-with-component-lists)
+  - [Updating entities with component lists](#updating-entities-with-component-lists)
 - [Events](#events)
   - [Inline events](#inline-events)
   - [System events](#system-events)
@@ -345,7 +351,7 @@ Sometimes, however, you want access to the underlying type directly. For this, t
   let copyFoo = storageFoo[foo.int]
 ```
 
-You can also update components in one go using instances:
+You can also update whole components using instances:
 
 ```nim
 foo.update Foo(text: "Hey there", value: 18)
@@ -387,11 +393,58 @@ type
 
 > ***Note***: **instances don't store generation information**. Use `ComponentRef` to include generation checking.
 
+## Component utilities
+
+- `componentCount`: retrieves the number of instances in use for a particular component type.
+
+- `typeName(typeId: componentTypeId)` converts a run time type id to the string of the type it represents.
+
+### Matching run time `ComponentTypeId`
+
+The `caseComponent` template creates a case statement to handle all components from a run time `ComponentTypeId`. This template includes templates to allow 'generic' code to perform type specific actions with dynamic component types such as in `ComponentList`.
+
+Note:
+
+- Has no concept of entity, this is a static case statement with injected actions
+- The same action block is compiled for every choice.
+
+The following templates are available with the `caseComponent` block:
+
+- `componentId`: the `ComponentTypeId` being matched.
+- `componentName`: the string of the component name.
+- `componentType`: the `type` of the component.
+- `componentRefType`: the `ref` container type of the component.
+- `componentDel`: the delete procedure for manually deleting a component slot.
+- `componentAlive`: the `alive` proc for this component.
+- `componentGenerations`: the storage list for this component's generation info.
+- `componentInstanceType`: the instance type for this component.
+- `componentData`: the storage list for this component.
+- `isOwned`: returns `true` when the component is owned by a system, or `false` otherwise.
+- `owningSystemIndex`: the `SystemIndex` of the owner system, or `InvalidSystemIndex` if the component is not owned.
+- `owningSystem`: this is only included for owned components, and references the owner system variable.
+
+Example of use:
+
+```nim
+import polymorph
+
+registerComponents(defaultCompOpts):
+  type Comp1 = object
+
+makeEcs()
+
+let
+  compList = cl(Comp1())
+
+caseComponent compList[0].typeId:
+  echo "Component type is ", componentName
+```
+
 # Defining systems
 
 Systems perform all the program logic for an ECS. Each system is essentially a proc which loops over a set of components to perform some work.
 
-For systems to participate in an ECS, they must first be defined with `defineSystem`, passing the name of the system along with the component types it uses. This allows `makeEcs` to create ECS operations based on how systems and components interact.
+For systems to participate in an ECS, they must first be defined with `defineSystem` by passing the name of the system along with the component types it uses. This allows `makeEcs` to create ECS operations based on how systems and components interact.
 
 After a system is defined, it needs program logic assigned to it in order to perform work. Such logic is referred to as a system *body*.
 
@@ -467,7 +520,7 @@ defineSystem("mySystem", [Comp1], sysOpts):
 
 When the type cannot be inferred but needs to be initialised, you can explicitly define it.
 
-Since the `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
+Since `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
 
 ```nim
 defineSystem("mySystem", [Comp1], sysOpts):
@@ -693,11 +746,14 @@ Finish: finished execution for allTheBlocks
 
 Operations that remove rows from the *currently iterating* system in a work item block may invalidate the `item` template until the next row.
 
-This means that `item.entity.delete` makes `item` refer to a different entity and set of components, or even invalid memory!
+For example `item.entity.delete` or `item.entity.removeComponent` with components the system uses (both of which will cause the current row to be removed) causes `item` refer to a different entity and set of components, or even out of bounds memory!
 
-To force checking this condition each time `item` is accessed at run time, set `assertItem = true` in the `ECSSysOptions` passed when defining the system.
+To force checking this condition each time `item` is accessed at run time, set `assertItem = true` in the `ECSSysOptions` passed when defining the system. This inserts an `assert` inside the `item` template to ensure it refers to the same row the iteration step started on, and that the row is within the system's item bounds.
 
-To help with these cases without needing run time checks, the `entity` variable accessible in these blocks references the entity that the row *originally* started with, regardless of the system state. This can be useful when you want to perform destructive operations to the row (such as `delete` or `removeComponent` for a component the system uses, which causes the row to be removed) without worrying about the `item` being invalidated:
+Alternatively, to perform compile time checking with destructive iteration pass `-d:ecsStrict` when compiling (see [compile switches](#compile-switches)). This will halt compilation when `item` is used after a system removes components that affect the iterating system, or if `item` is used after *any* delete operation. Note that this does not perform semantic analysis of the code, and will respond in the same to conditional remove/delete operations even when they are not triggered.
+
+To help with these cases without needing run time or compile time checks, the `entity` variable accessible in these blocks references the entity that the row *originally* started with, regardless of the system state. This can be useful when you want to perform destructive operations to the row without worrying about the `item` being invalidated:
+
   ```nim
   makeSystem("processEntities", [SomeComponent]):
     all:
@@ -749,6 +805,26 @@ Within system blocks you can use the `sys` template with these utilities to act 
 makeSystem("removeComp1", Comp1):
   finish: sys.remove Comp1
 ```
+
+### `systemsUsed`
+
+This utility returns a string containing the systems that would be used for entities with a particular set of components. This can be used as a static debugging tool to check a set of components invokes the systems you expect.
+
+```nim
+echo systemsUsed([MyComponent1, MyComponent2])
+```
+
+### `caseSystem`
+
+Similar to `caseComponent`, the `caseSystem` template creates a case statement that matches a `SystemIndex` with its instantiation.
+
+This generates a runtime case statement that will perform `actions` for all systems.
+
+This allows you to write generic code that dynamically applies to any system chosen at runtime.
+
+The `SystemIndex` of a system variable is accessed from the `id` field at run time.
+
+Within `caseSystem`, use the `sys` template to access to the system variable the index represents, and `SystemTupleType` to reference the tuple type for the system's `groups` field (in other words, the type of the system's `item` when iterating).
 
 # Working with entities
 
@@ -850,6 +926,22 @@ In general, the performance of `delete` depends on how many components the entit
 ```nim
 # Remove the entity and delete associated component and/or system storage.
 entity.delete
+```
+
+## Checking entities satisfy specific systems
+
+The `expectSystems` utility will generate a `doAssert` operation to ensure that an entity is using particular systems. The code is constructed at compile time based on the systems passed to it and is therefore unique to your design and the systems involved.
+
+When the entity doesn't match the parameter systems and the `doAssert` fails, the following output is produced:
+
+- the expected systems passed in the parameters,
+- the current systems the entity satisfies,
+- the missing systems, and components the entity lacks to satisfy these systems,
+- the entity's current components,
+- a summary of all components required to satisfy all missing systems.
+
+```nim
+entity.expectSystems ["mySystem1", "mySystem2"]
 ```
 
 # Constructing entities at run time
@@ -954,6 +1046,8 @@ This comes in two flavours:
 
 > Note: be aware when using `transition` whilst iterating in a system that removing components the system uses can invalidate the current `item` template.
 
+> **Note**: as components are added/removed individually, designs with systems that own two or more components **may not allow such transitions to compile** as they are not added in a single state change.
+
 ```nim
 import polymorph
 
@@ -985,6 +1079,16 @@ entity.transition(compsAD, compsAB)
 # A is overwritten with the A in `compsAB`, D is removed, and B is added.
 # C is unaffected.
 # Entity is now (A(value: 456), C(value: "Foo"), B(value: 789))
+```
+## Updating entities with component lists
+
+You can use `update`/`updateComponents` to update multiple components on an entity at once using a `ComponentList`. This only updates the components that exist on the entity, others in the list are ignored. This can be useful for constructed entities that need context sensitive component initialisation after they've been built, or for applying bulk changes to entities at run time without adding or removing components.
+
+```nim
+entity.update cl(
+    A(value: 765),
+    B(value: 825)
+  )
 ```
 
 # Events
@@ -1353,7 +1457,7 @@ When passed to `makeEcs`, this object controls how entities are generated at com
   - the creation for `delete`, `construct`, and `clone`,
   - operations such as `newEntityWith`, `addComponents` and `removeComponents`,
   - events triggered within operations,
-  - event chains within system `onAdded`/`onRemoved` events.
+  - event chains within system `added`/`removed` events.
 
 - `-d:ecsPerformanceHints`: displays compile time information for tuning memory access patterns.
   This includes:
@@ -1373,6 +1477,8 @@ When passed to `makeEcs`, this object controls how entities are generated at com
   > **Important note**: as Nim doesn't currently allow you to output to files at compile time, the log is generated at compile time but written at ***run time***. In other words, using this switch will bulk your output executable and write a static string to file at program startup.
   
   The log file is named `ecs_code_log.nim` and will be placed in the same path as the executable when run. This file isn't actually runnable as it doesn't include the full program context, and the `.nim` extension is just a hint for editors to use syntax highlighting.
+
+- `-d:ecsStrict`: systems include an extra check to catch accessing `item` after a remove has affected the system (which can potentially change what `item` refers to).
 
 # Performance considerations
 

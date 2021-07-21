@@ -574,6 +574,11 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
       ## Note: be aware when using `transition` whilst iterating in a
       ## system that removing components the system uses can invalidate
       ## the current `item` template.
+      ## 
+      ## **Note**: as components are added/removed individually, designs
+      ## with systems that own two or more components **may not allow such
+      ## transitions to compile** as they are not added in a single state
+      ## change.
       {.line.}:
         if prevState.len > 0:
           # Remove components first so we don't invoke a state with both old

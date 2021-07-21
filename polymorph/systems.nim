@@ -716,12 +716,12 @@ proc checkEventCycle(id: EcsIdentity, name: string, sysIndex: SystemIndex, op: S
   # Of particular note, `construct` must statically expand all
   # possible inline events for every component in the identity.
   # 
-  # System events such as "onAdded" and "onRemoved" are therefore
+  # System events such as `added` and `removed` are therefore
   # checked to halt compilation when nested state changes try to
   # invoke the same event for the same system again.
   # 
   # To avoid the possibility of compile time cycles within system
-  # events, use `onAddedCallback` and `onRemoveCallback`.
+  # events, use `addedCallback` and `removedCallback`.
   # 
   # Future work: it may be possible to isolate state change
   # branches by inserting ident tracking code using the
