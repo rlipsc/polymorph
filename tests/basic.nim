@@ -29,8 +29,7 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
 
   makeSystemOpts("delOwnEnt", [DeleteSelf], sysOpts):
     all:
-      # Built in to efficiently delete currently executing row.
-      deleteEntity()
+      entity.delete
 
   makeSystemOpts("arbDel", [DeleteArb], sysOpts):
     all:
@@ -60,13 +59,13 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
     all:
       if sys.counter mod testDeleteMods[0] == 0:
         sys.deletedCount.inc
-        deleteEntity()
+        entity.delete
       elif sys.counter  mod testDeleteMods[1] == 0:
         sys.deletedCount.inc
-        item.entity.delete
+        entity.delete
       elif sys.counter  mod testDeleteMods[2] == 0:
         sys.removedCount.inc
-        item.entity.removeComponent RemDelSelf
+        entity.removeComponent RemDelSelf
       sys.counter.inc
 
   makeSystemOpts("multipleBlocks", [AddOne], sysOpts):

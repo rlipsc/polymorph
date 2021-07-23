@@ -574,7 +574,6 @@ genGlobalListStates(SystemIndex, [
 genGlobalStates(bool, [
   "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",
   "sysRemoveAffectedThisSystem", "systemCalledDelete",
-  "systemCalledDeleteEntity",
   "logInitialised"])        # Perform one log clear per unique path.
 
 # Use the NimNode as a seq[int] as a mutable seq[SystemIndex].

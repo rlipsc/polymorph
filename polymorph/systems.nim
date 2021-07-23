@@ -818,16 +818,16 @@ proc checkEventCycle(id: EcsIdentity, name: string, sysIndex: SystemIndex, op: S
 
 proc strictCatchCheck(cacheId: NimNode): NimNode =
   let
-    undefinedItemMsg = "Cannot access 'item' here as the current row is undefined " &
-      "until the next iteration, due to a previous removal of components " &
-      "or deletion of entities within this system iteration. Use the injected " &
-      "'entity' variable or make a note of data in 'item' before " &
-      "removing components or deleting entities."
+    undefinedItemMsg = "Cannot access 'item' here as the current row may be " &
+      "undefined until the next iteration due to a previous removal of " &
+      "components or deletion of an entity within this system iteration. " &
+      "Use the injected 'entity' variable or the system's 'deleteList' " &
+      "to avoid this error whilst using 'ecsStrict'"
 
   if defined(ecsStrict):
     quote do:
       static:
-        when `cacheId`.sysRemoveAffectedThisSystem:
+        when `cacheId`.sysRemoveAffectedThisSystem or `cacheId`.systemCalledDelete:
           error `undefinedItemMsg`
   else: newStmtList()
 
@@ -909,23 +909,10 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
             `assertCheck`
             `sys`.groups[`idx`]
 
-          template deleteEntity: untyped {.used.} =
-            ## Convenience shortcut for deleting just this row's entity.
-            # Although we know this delete only affects this row, we don't
-            # know that it definitely will (for example if the deleteEntity depends on a 
-            # condition). As such we still need to check the length each iteration.
-            static:
-              `cacheId`.set_inSystemDeleteRow true
-              `cacheId`.set_systemCalledDeleteEntity true
-            `rowEnt`.delete
-            static:
-              `cacheId`.set_inSystemDeleteRow false
-
           # Inject the user's statements from `all:`
           `code`
 
-          when `cacheId`.systemCalledDeleteEntity or
-            `cacheId`.systemCalledDelete or
+          when `cacheId`.systemCalledDelete or
             `cacheId`.sysRemoveAffectedThisSystem:
               `sysLen` = `sys`.count()
               if `sysLen` > 0 and (`idx` < `sysLen` and `sys`.groups[`idx`].entity == `rowEnt`):
@@ -1045,6 +1032,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         quote do:
           var `idx`: int
     
+    strictCatch = strictCatchCheck(cacheId)
     assertItem = id.assertItem(sysIndex)
     streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)
 
@@ -1115,11 +1103,9 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
           `rowEnt` {.used, inject.} = `sys`.groups[`groupIndex`].entity
         ## Current system item being processed.
         template item: `typeIdent` {.used.} =
+          `strictCatch`
           `streamAssertCheck`
           `sys`.groups[`groupIndex`]
-        template deleteEntity: untyped {.used.} =
-          ## Convenience shortcut for deleting just this row's entity.
-          `rowEnt`.delete
         
         # Inject stream statements.
         `streamBody`
@@ -1481,7 +1467,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       `cacheId`.set_inSystemIndex `sysIndex`.SystemIndex
       `cacheId`.set_sysRemoveAffectedThisSystem false
       `cacheId`.set_systemCalledDelete false
-      `cacheId`.set_systemCalledDeleteEntity false
       const
         errPrelude = "Internal error: "
         internalError = " macrocache storage is unexpectedly populated for system \"" & `name` & "\""
@@ -1505,8 +1490,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
             debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration"
           elif `cacheId`.sysRemoveAffectedThisSystem:
             debugPerformance `cacheId`, prefix & " calls a remove that affects this system, length must be checked each iteration"
-          elif `cacheId`.systemCalledDeleteEntity:
-            debugPerformance `cacheId`, prefix & " calls deleteEntity, length must be checked each iteration"
       else:
         newStmtList()
 
@@ -1518,7 +1501,6 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
       `cacheId`.set_sysRemoveAffectedThisSystem false
       `cacheId`.set_systemCalledDelete false
-      `cacheId`.set_systemCalledDeleteEntity false
       
       # Reset event chaining.
       when `cacheId`.onAddedSource != InvalidSystemIndex:
