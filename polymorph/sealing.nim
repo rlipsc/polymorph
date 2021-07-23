@@ -1066,7 +1066,6 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       ty = newIdentNode tyStr
       tyRef = newIdentNode refTypeName(tyStr)
       tyInstance = newIdentNode instanceTypeName(tyStr)
-      tyRefInit = newIdentNode refInitName(id.refInitPrefix(component), tyStr)
       tyDel = newIdentNode deleteInstanceName()
       # reference the alive variable for this type.
       aliveStateIdent = newIdentNode aliveStateInstanceName(tyStr)
@@ -1096,7 +1095,6 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       template componentName: untyped {.used.} = `tyStr`
       template componentType: untyped {.used.} = `ty`
       template componentRefType: untyped {.used.} = `tyRef`
-      template componentRefInit: untyped {.used.} = `tyRefInit`
       template componentDel(index: `tyInstance`): untyped {.used.} = `tyDel`(index)
       template componentAlive: untyped {.used.} = `aliveStateIdent`
       template componentGenerations: untyped {.used.} = `tyInstanceIds`
@@ -1128,10 +1126,8 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       ##
       ## Note:
       ## * Has no concept of entity, this is a static case statement with injected
-      ##   actions
-      ## * the same action block is compiled for every choice, but you can use the
-      ##   local `component` template to fetch any outer scope entities you wish
-      ##   on the branch qualified type.
+      ##   actions.
+      ## * The same action block is compiled for every component.
       ##
       ## For example, the following will display the name of a run-time component type id.
       ##
@@ -1141,16 +1137,18 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       ##
       ## Within `actions`, the following templates provide typed access to the runtime index.
       ##
-      ##   * componentId: the ComponentTypeId of the component
-      ##   * componentName: string name
-      ##   * componentType: static type represented by `id`
-      ##   * componentInstanceType: index type, eg; MyComponentInstance
-      ##   * componentRefType: ref type for this component, eg: MyComponentRef
-      ##   * componentInit: initialiser procedure for this type
-      ##   * componentRefInit: Ref initialiser procedure for this type
-      ##   * componentDel: delete procedure for this type
-      ##   * componentAlive: direct access to proc to test if this component is alive
-      ##   * componentGenerations: direct access to the generation values for this type
+      ##   - `componentId`: the ComponentTypeId of the component.
+      ##   - `componentName`: string name.
+      ##   - `componentType`: static type represented by `id`.
+      ##   - `componentInstanceType`: index type, eg; MyComponentInstance.
+      ##   - `componentRefType`: ref type for this component, eg: MyComponentRef.
+      ##   - `componentDel`: delete procedure for this type.
+      ##   - `componentAlive`: direct access to proc to test if this component is alive.
+      ##   - `componentGenerations`: direct access to the generation values for this type.
+      ##   - `componentData`: direct access to the storage list for this component.
+      ##   - `isOwned: returns `true` when the component is owned by a system, or `false` otherwise.
+      ##   - `owningSystemIndex`: the `SystemIndex` of the owner system, or `InvalidSystemIndex` if the component is not owned.
+      ##   - `owningSystem`: this is only included for owned components, and references the owner system variable.
       `caseStmt`
   )
 
@@ -1204,17 +1202,18 @@ proc makeMatchSystem(id: EcsIdentity): NimNode =
     template caseSystem*(`index`: SystemIndex, `actions`: untyped): untyped =
       ## Creates a case statement that matches a `SystemIndex` with its instantiation.
       ## This generates a runtime case statement that will perform `actions`
-      ## for all systems like so:
-      ##  case index
-      ##    of 0: actions
-      ##    of 1: actions
-      ##    ... and so on for each system index
-      ## `actions` is therefore executed using the correct `system` context
-      ## for the runtime system. IE, if `index` = 7 then `system` will be 
-      ## the instantiated variable for the seventh system.
+      ## for all systems.
+      ## 
+      ## `actions` is executed using the correct `system` context
+      ## for the runtime system.
+      ## 
       ## This allows you to write generic code that dynamically applies to any system
       ## chosen at runtime.
-      ## Use the `sys` template to access to the system variable the index represents.
+      ## 
+      ## Within `caseSystem`, use the `sys` template to access to the system
+      ## variable the index represents, and `SystemTupleType` to reference
+      ## the tuple type for the system's `groups` field (in other words,
+      ## the type of the system's `item` when iterating).
       `body`
 
     template forAllSystems*(`actions`: untyped): untyped =

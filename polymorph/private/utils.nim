@@ -61,10 +61,6 @@ proc refTypeName*(tyName: string): string =
   ## Reference container type name
   tyName & "Ref"
 
-proc refInitName*(prefix, s: string): string =
-  ## Initialiser proc name for instance reference types, takes arguments to set fields
-  ($prefix & s).toLowerAscii()
-
 # Initialisation/deleting components
 
 proc instanceInitName*(prefix, s: string): string =
