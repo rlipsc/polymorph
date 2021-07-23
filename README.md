@@ -401,7 +401,7 @@ type
 
 ### Matching run time `ComponentTypeId`
 
-The `caseComponent` template creates a case statement to handle all components from a run time `ComponentTypeId`. This template includes templates to allow 'generic' code to perform type specific actions with dynamic component types such as in `ComponentList`.
+The `caseComponent` template creates a case statement to handle all components from a run time `ComponentTypeId`. This template includes templates to allow generic code to perform type specific actions with dynamic component types such as in `ComponentList`.
 
 Note:
 

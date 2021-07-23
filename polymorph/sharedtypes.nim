@@ -178,7 +178,7 @@ type
     # Internal value exposed for access.
     fTypeId*: ComponentTypeId
 
-  ## 'Generic' index into a component storage array.
+  ## Generic index into a component storage array.
   ## This is 'sub-classed' into distinct types per component type by registerComponents.
   ## These distinct versions of ComponentIndex allow direct access to component storage by
   ## transforming the type at compile time to an index into the storage array that contains the
