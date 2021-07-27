@@ -11,40 +11,53 @@ registerComponents(defaultComponentOptions):
     StreamB = object
       value: int
 
-makeSystem("streamByRate", [StreamA, StreamB]):
-  start:
-    var processed: int
+makeSystem("stream", [StreamA, StreamB]):
+  var processed: int
   stream:
     processed += 1
-  finish:
-    check processed == sys.streamRate
+  check processed == sys.streamRate
 
-const fixedStreamRate = 50
-makeSystem("streamed", [StreamA, StreamB]):
-  start:
-    var processed: int
+makeSystem("streamFixed", [StreamA, StreamB]):
+  const fixedStreamRate = 50
+  var processed: int
   stream fixedStreamRate:
     processed += 1
-  finish:
-    check processed == min(fixedStreamRate, sys.groups.len)
+  check processed == min(fixedStreamRate, sys.groups.len)
 
-const multiPassRate = 20
+
 makeSystem("streamMulti", [StreamA, StreamB]):
-  start:
-    var processed: int
-  stream multipass multiPassRate:
+  var processed: int
+  sys.streamRate = 50
+  stream multipass:
     processed += 1
-  finish:
-    check processed == multiPassRate
+  check processed == sys.streamRate
 
-const stochasticRate = 5
-makeSystem("streamSto", [StreamA, StreamB]):
-  start:
-    var processed: int
-  stream stochastic stochasticRate:
+makeSystem("streamMultiFixed", [StreamA, StreamB]):
+  let rate = 20
+  var processed: int
+  stream multipass rate:
     processed += 1
-  finish:
-    check processed == stochasticRate
+  stream rate multipass:
+    processed += 1
+  check processed == rate * 2
+
+makeSystem("streamSto", [StreamA, StreamB]):
+  var processed: int
+  sys.streamRate = 60
+  stream stochastic:
+    processed += 1
+  # Stochastic implies multipass.
+  check processed == sys.streamRate
+
+makeSystem("streamStoFixed", [StreamA, StreamB]):
+  const rate = 5
+  var processed: int
+  stream stochastic rate:
+    processed += 1
+  stream rate stochastic:
+    processed += 1
+  check processed == rate * 2
+
 
 makeEcs()
 commitSystems("run")

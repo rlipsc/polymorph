@@ -88,17 +88,26 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         b = 2
         c = 3
         d = 4
+      var cStream, dStream: int
+
     all: number += a
     all: number += b
-    stream 2: number += c
-    stream 2: number += d
+
+    stream 2:
+      number += c
+      cStream += 1
+    stream 2:
+      number += d
+      dStream += 1
+    
+    check cStream + dStream <= sys.count
 
     # These finish blocks are run after the main body, and run
     # regardless of paused state.
     finish:
       check state == PreFinished
       state = Finished
-    finish: check number == (sys.count * (a + b)) + (2 * (c + d))
+    finish: check number == (sys.count * (a + b)) + (cStream * c + dStream * d)
     finish: check state == Finished
 
     check runningSystem

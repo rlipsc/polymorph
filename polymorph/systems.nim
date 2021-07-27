@@ -925,9 +925,20 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
   )
 
 type
-  Command = enum cmNone, cmMultiPass, cmStochastic
+  Command = enum
+    cmdNone,
+    cmdMultiPass = "multipass",
+    cmdStochastic = "stochastic"
 
-proc getStreamDetails(code: NimNode): tuple[amount: NimNode, command: Command, body: NimNode] =
+proc getCommand(node: NimNode): Command =
+  if node.kind == nnkIdent:
+    case node.strVal.toLowerAscii
+    of $cmdMultiPass:
+      result = cmdMultiPass
+    of $cmdStochastic:
+      result = cmdStochastic
+
+proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command, body: NimNode] =
   # Stream commands:
   #   stream multipass <optional count>: <code block>
   #     - forces a minimum of `count` rows to be processed even if repeated.
@@ -936,76 +947,64 @@ proc getStreamDetails(code: NimNode): tuple[amount: NimNode, command: Command, b
   #     - selects rows to process at random.
   #     - omitting count uses system.streamRate.
 
-  const
-    commandStrs =
-      [
-        cmMultiPass: "multipass",
-        cmStochastic: "stochastic"
-      ]
+
+  let formatError =
+      "Expected one of:\n" &
+      "  'stream:'\n" &
+      "  'stream <command|parameter>:'\n" &
+      "  'stream <parameter|parameter> <command|parameter>:'\n" &
+      "Passed:\n" & code.repr & "\n"
+
+  if code.len notin [2, 3]:
+    error formatError
 
   case code.kind
-    of nnkIntLit:
-      # Provided a stream amount `stream 10:` or `stream expression:`.
-      code.expectLen 3
-
-      result.amount = code[1]
-      code[2].expectKind nnkStmtList
-      result.body = code[2]
-
     of nnkCommand:
-      # Stream is followed by a command and parameter, eg `stream stochastic 10:`.
-
-      code.expectMinLen 2
-
-      if code.len == 3:
-        case code[1].kind
-          of nnkIdent, nnkIntLit:
-            result.amount = code[1]
-            code[2].expectKind nnkStmtList
-            result.body = code[2]
-
-          of nnkCommand:
-            let
-              userCommand = code[1][0].strVal.toLowerAscii
-
-            case userCommand
-            of commandStrs[cmMultipass]:
-              result.command = cmMultiPass
-            of commandStrs[cmStochastic]:
-              result.command = cmStochastic
-            else:
-              error "Unknown command for streaming: \"" & userCommand & "\""
-
-            result.amount = code[1][1]
-            result.body = code[2]
-          else:
-            error "Unknown stream command format"
-
-      elif code.len > 3:
-        error "Unknown stream command format"
-  
-    of nnkIdent:
-      # Stream is followed by an ident which could be a command or parameter.
-      let userCommand = code[1].strVal.toLowerAscii
-
-      # When a command is provided here the system.streamRate will be used.
-      case userCommand
-        of commandStrs[cmMultipass]:
-          result.command = cmMultiPass
-        of commandStrs[cmStochastic]:
-          result.command = cmStochastic
-        else:
-          # Allow `stream myVar:`
-          result.amount = code[1]
-
-      code[2].expectKind nnkStmtList
-
       result.body = code[2]
-    else:
-      # No stream parameters
-      code[1].expectKind nnkStmtList
 
-      result.body = code[1]
+      case code[1].kind
+        of nnkIntLit:
+          # `stream N:`
+          result.amount = code[1]
+        
+        of nnkIdent:
+          # `stream x:`
+          result.command = code[1].getCommand
+
+          if result.command == cmdNone:
+            # Pass through user's identifier.
+            result.amount = code[1]
+        
+        of nnkCommand:
+          # `stream x y:`
+
+          result.command = code[1][0].getCommand
+
+          if result.command != cmdNone:
+            # `stream command x:`
+            result.amount = code[1][1]
+
+          else:
+            # Check for `stream x command:`
+            result.command = code[1][1].getCommand
+
+            if result.command == cmdNone:
+              # No commands found.
+              error formatError
+            else:
+              result.amount = code[1][0]
+
+        else:
+          error formatError
+
+    of nnkCall:
+      # `stream:`
+      if code[1].kind != nnkStmtList:
+        error formatError
+      else:
+        result.body = code[1]
+    else:
+      error formatError
 
 proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options: EcsSysOptions, code: NimNode): NimNode =
   let
@@ -1035,11 +1034,9 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
     strictCatch = strictCatchCheck(cacheId)
     assertItem = id.assertItem(sysIndex)
     streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)
-
-    streamDetails = getStreamDetails(code)
-    
+    streamDetails = parseStreamCommands(code)
     streamBody = streamDetails.body
-    
+
     streamAmount =
       if streamDetails.amount == nil:
         # Use default stream rate if not provided.
@@ -1049,7 +1046,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         streamDetails.amount
 
   if streamDetails.body.len == 0:
-    error "Stream body is empty"
+    error "Stream cannot be empty"
 
   let
     processed = genSym(nskVar, "processed")
@@ -1058,24 +1055,24 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
 
     processNext =
       case streamDetails.command
-      of cmNone:
+      of cmdNone:
         quote do:
           `sys`.lastIndex = `sys`.lastIndex + 1
           `finished` = (`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`)
-      of cmMultiPass:
+      of cmdMultiPass:
         quote do:
           `sys`.lastIndex = (`sys`.lastIndex + 1) mod `sysLen`
           `finished` = `processed` >= `streamAmount`
-      of cmStochastic:
+      of cmdStochastic:
         quote do:
-          `sys`.lastIndex = `randomValue`(`sys`.high)
+          `sys`.lastIndex = `randomValue`(0 .. `sys`.high)
           `finished` = `processed` >= `streamAmount`
     initFirstRun =
       case streamDetails.command
-      of cmNone, cmMultiPass:
+      of cmdNone, cmdMultiPass:
         quote do:
-          if `sys`.lastIndex >= `sysLen` - 1: `sys`.lastIndex = 0
-      of cmStochastic:
+          `sys`.lastIndex = `sys`.lastIndex mod `sysLen`
+      of cmdStochastic:
         quote do:
           if not `finished`:
             `sys`.lastIndex = `randomValue`(`sys`.high)
@@ -1093,7 +1090,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         `sysLen` = `sys`.count()
         `processed`: int
         `finished` = `sysLen` == 0
-      `defineIdx` # TODO: Ensure owner streaming starts at index 1.
+      `defineIdx`
       `initFirstRun`
       while `finished` == false:
         let
@@ -1161,7 +1158,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   # Extract definitions `fields:` blocks for system variable creation.
   # If the system is previously defined, fields are checked to match.
   for item in systemBody:
-    if item.kind == nnkCall and ($item[0]).toLowerAscii == $sbFields:
+    if item.kind == nnkCall and item[0].kind == nnkIdent and item[0].strVal.toLowerAscii == $sbFields:
       if not hasFieldsBlock:
         hasFieldsBlock = true
         extraFields = newStmtList()
