@@ -932,6 +932,11 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): 
   inner.add addOwned(id, entity, componentInfo)
   inner.add addToEntityList(id, entity, componentInfo.passed)
   inner.add addConditionalSystems(id, entity, componentInfo)
+  if id.useSet:
+    let
+      setType = ident enumName()
+      setVal = componentListToSet(id, componentInfo.passed, setType)
+    inner.add entSetIncl(quote do: `entity`.entityId, setVal)
   inner.add id.userStateChange(entity, eceAddComponents, componentInfo.passed)
   
   # Build return tuple.
