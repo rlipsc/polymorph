@@ -115,7 +115,7 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     fields.add genField("maxTimePerGroupItem", true, ident "float")
     fields.add genField("minTimePerGroupRun", true, ident "float")
     fields.add genField("maxTimePerGroupRun", true, ident "float")
-  if options.timings in [strunEvery, stProfiling]:
+  if options.timings in [stRunEvery, stProfiling]:
     # Keeps track of the last time a tick was issued
     fields.add genField("lastTick", true, ident "float")
     # In theory, inputting a negative curTime() + x in runEvery would allow no trigger until x
@@ -511,7 +511,7 @@ template defineSystem*(name: static[string], componentTypes: openarray[typedesc]
 
 template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
-  defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options, extraField)
+  defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options, extraFields)
 
 template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.

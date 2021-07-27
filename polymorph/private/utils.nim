@@ -1023,7 +1023,8 @@ proc typeStringToId*(id: EcsIdentity, n: string): ComponentTypeId {.compiletime.
   # Might want to store type trees themselves and match on that.
   assert(n != "Component", "Not enough type information to create id: Receiving type `Component`, expected sub-class of Component or a registered component type")
   var r = id.findCompId(n)
-  assert r.int != -1, "Cannot find type \"" & n & "\" in known component types: " & id.commaSeparate(id.allComponentsSeq)
+  if r.int < 1:
+    error "Cannot find type \"" & n & "\" in known component types: " & id.commaSeparate(id.allComponentsSeq)
   r
 
 proc toTypeList*(id: EcsIdentity, componentList: NimNode): seq[ComponentTypeId] =

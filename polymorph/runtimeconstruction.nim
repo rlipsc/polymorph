@@ -376,7 +376,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       # up when checking systems.
       var
         `types`: Table[int, tuple[`component`: Component, `compIdx`: ComponentIndex]]
-        `visited`: array[`maxSys`, bool]
+        `visited` {.used.}: array[`maxSys`, bool]
       `curEntTempl`
 
       for compRef in `cList`:
@@ -487,7 +487,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       # Build an index of component type to its instantiated instance.
       var
         `types`: Table[int, ComponentIndex]
-        `visited`: array[`maxSys`, bool]
+        `visited` {.used.}: array[`maxSys`, bool]
       `curEntTempl`
 
       for compRef in `entity`.components:

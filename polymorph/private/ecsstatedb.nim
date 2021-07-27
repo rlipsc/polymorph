@@ -140,6 +140,9 @@ macro genListStates(indexType, itemType: typedesc, listNames: static[openarray[s
   ## Each list is a sequence of `itemType` taking `indexType` as the index.
   
   result = newStmtList()
+  result.add(quote do:
+    {.push hint[ConvFromXtoItselfNotNeeded]:off.}
+  )
 
   let
     (nodeGet, accessType) = typeNodeAccess itemType
@@ -216,6 +219,9 @@ macro genListStates(indexType, itemType: typedesc, listNames: static[openarray[s
             `res`[i] = `readNode`
             i.inc
     )
+  result.add(quote do:
+    {.push hint[ConvFromXtoItselfNotNeeded]:on.}
+  )
 
 macro genLookupListStates(indexType1, indexType2, itemType: typedesc, listNames: static[openarray[string]]): untyped =
   ## Creates typed CacheSeq access procs for each item in `listNames`.

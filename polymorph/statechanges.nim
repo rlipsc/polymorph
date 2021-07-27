@@ -1530,7 +1530,7 @@ proc makeDelete*(id: EcsIdentity): NimNode =
 
   let
     visitedArray = quote do:
-      var `visitedIdent`: array[0 .. `totalSystemCount`, bool]
+      var `visitedIdent` {.used.}: array[0 .. `totalSystemCount`, bool]
 
     clearRecycler = storageVar.recyclerClear(recFormat)
 
@@ -1567,7 +1567,7 @@ proc makeDelete*(id: EcsIdentity): NimNode =
 
       let `entIdIdent` = `ent`.entityId
       if entityData(`entIdIdent`).setup:
-        var `rowIdent`: int
+        var `rowIdent` {.used.}: int
 
         `foundDecls`
         `foundChecks`
