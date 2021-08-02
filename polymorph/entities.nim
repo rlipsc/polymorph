@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import macros, sharedtypes, private/[utils, ecsstatedb]
 
 proc genComponentSet(id: EcsIdentity): NimNode =
@@ -30,8 +31,9 @@ proc genComponentSet(id: EcsIdentity): NimNode =
       )
     )
   let eName = ident enumName()
+
   result = quote do:
-    type `eName`* = `items`
+    type `eName`* {.used.} = `items`
 
 proc recyclerType(options: ECSEntityOptions): NimNode =
   case options.recyclerFormat
@@ -41,9 +43,8 @@ proc recyclerType(options: ECSEntityOptions): NimNode =
     let maxEnts = options.maxEntities
     quote do: array[0..`maxEnts`, EntityId]
 
-proc makeEntityItems*(id: EcsIdentity): NimNode =
+proc makeEntityItems*(id: EcsIdentity, options: EcsEntityOptions): NimNode =
   ## Create the type that holds data per entity and supporting entity utilities.
-  let options = id.entityOptions
   if options.maxEntities == 0:
     if options.entityStorageFormat in [esArray, esPtrArray]:
       error "Entity generation: maxEntities cannot be zero when using a fixed size storage format type such as " & $options.entityStorageFormat

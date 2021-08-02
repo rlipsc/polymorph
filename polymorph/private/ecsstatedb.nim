@@ -637,6 +637,7 @@ genGlobalListStates(NimNode, ["onEcsBuiltCode"])
 #--------------------
 
 genGlobalListStates(NimNode, ["onEntityStateChange"])
+genGlobalStates(bool, ["private"])
 
 #--------------------
 # Root objects <-> DB

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, strutils, typetraits, ../sharedtypes, tables, ecsstatedb
+import macros, strutils, typetraits, ../sharedtypes, ecsstatedb
 import debugging, tables, deques, sequtils, sets, macrocache
 export debugging
 
@@ -1001,7 +1001,8 @@ proc findType*(compNode: NimNode): string =
         tyInst[1].expectKind nnkSym
         tyInst[1].strVal
       else:
-        tyInst.repr
+        tyInst.strVal
+
     of nnkCall:
       let caller = compNode[0].getImpl()
       caller.expectKind nnkProcDef
@@ -1017,14 +1018,22 @@ proc componentListToSet*(id: EcsIdentity, componentIds: seq[ComponentTypeId], se
   for ty in componentIds:
     result.add ident "ce" & id.typeName(ty)
 
-proc typeStringToId*(id: EcsIdentity, n: string): ComponentTypeId {.compiletime.} =
+proc typeStringToId*(id: EcsIdentity, n: string): ComponentTypeId {.compileTime.} =
   ## Returns an index for a type string, if found.
   # TODO: String based checks of types with the same name will return the same ComponentTypeId.
   # Might want to store type trees themselves and match on that.
   assert(n != "Component", "Not enough type information to create id: Receiving type `Component`, expected sub-class of Component or a registered component type")
+
   var r = id.findCompId(n)
   if r.int < 1:
-    error "Cannot find type \"" & n & "\" in known component types: " & id.commaSeparate(id.allComponentsSeq)
+    let
+      compStr =
+        if id.components.len > 1:
+          id.commaSeparate(id.allComponentsSeq)
+        else:
+          "<No components defined>"
+
+    error "Identity \"" & id.string & "\" cannot find type '" & n & "' in known component types: " & compStr
   r
 
 proc toTypeList*(id: EcsIdentity, componentList: NimNode): seq[ComponentTypeId] =
@@ -1230,8 +1239,9 @@ proc genSeq*(typeIdent: NimNode): NimNode =
 proc genSeq*(typeName: string): NimNode = genSeq(newIdentNode(typeName))
 
 proc genTable*(typeName1, typeName2: NimNode): NimNode =
+  let boundTable = bindSym "Table"
   nnkBracketExpr.newTree(
-    newIdentNode "Table" ,
+    boundTable ,
     typeName1,
     typeName2
   )
@@ -1612,3 +1622,59 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
             {.warning: `emptyProcStr`.}
             discard
         )
+
+# --------------
+# Source parsing
+# --------------
+
+proc deExport*(code: var NimNode, suppressUnusedHints = true) =
+  ## Removes top level export markers from templates, procs, funcs,
+  ## var, let, and const sections, and macros.
+  if code.len > 0 and suppressUnusedHints:
+    code.insert(0, quote do:
+      {.push used.}
+    )
+
+  for i in 0 ..< code.len:
+
+    template isExport(n: NimNode): bool =
+      if n.kind == nnkPostFix and n[0].kind == nnkIdent and n[0].strVal == "*":
+        true
+      else:
+        false
+
+    # Unpack postfix export markers in place.
+
+    case code[i].kind
+
+      of nnkProcDef, nnkTemplateDef, nnkIteratorDef, nnkMethodDef, nnkFuncDef, nnkMacroDef:
+        if code[i][0].isExport:
+          code[i][0] = code[i][0][1]
+
+      of nnkConstSection, nnkLetSection, nnkVarSection, nnkTypeSection:
+        for def in 0 ..< code[i].len:
+
+          if code[i][def].kind in [nnkConstDef, nnkIdentDefs, nnkTypeDef]:
+
+            for id in 0 ..< code[i][def].len:
+
+              if code[i][def][id].kind == nnkPragmaExpr:
+                if code[i][def][id][0].isExport:
+                  code[i][def][id][0] = code[i][def][id][0][1]
+
+              else:
+                if code[i][def][id].isExport:
+                  code[i][def][id] = code[i][def][id][1]
+
+      of nnkStmtList:
+        var temp = code[i]
+        temp.deExport
+        code[i] = temp
+
+      else:
+        discard
+
+  if code.len > 0 and suppressUnusedHints:
+    code.add(quote do:
+      {.pop.}
+    )

@@ -487,6 +487,7 @@ proc doNewEntityWith(id: EcsIdentity, componentList: NimNode): NimNode {.compile
 
   genLog "\n# macro newEntityWith(" & id.commaSeparate(compIds) & "):\n", result.repr
 
+
 proc makeNewEntityWith*(id: EcsIdentity): NimNode =
   let componentList = ident "componentList"
   quote do:
@@ -538,6 +539,7 @@ type
     ## Systems that own passed components and must be fully satisfied.
     ownedSystems*:    seq[SystemIndex]
 
+
 proc parseComponentParameters(id: EcsIdentity, componentList: NimNode): ComponentParamInfo =
   ## Collect information from parameters passed as part of a state change
   ## and process into targetted lists for each code generation job.
@@ -549,7 +551,7 @@ proc parseComponentParameters(id: EcsIdentity, componentList: NimNode): Componen
   for compNode in componentList:
     let tyName = compNode.findType
     doAssert tyName != "", "Cannot determine type name of argument:\n" & compNode.treeRepr & "\ngetType:\n" & compNode.getType.repr
-    
+
     # Find the ComponentTypeId for this type.
     let typeId = id.typeStringToId(tyName)
     if typeId in result.passed: error "Passed more than one component of type " & tyName
@@ -565,7 +567,7 @@ proc parseComponentParameters(id: EcsIdentity, componentList: NimNode): Componen
     let
       ownerSystem = id.systemOwner(typeId)
       isOwned = ownerSystem != InvalidSystemIndex
-    
+
     if isOwned:
       if ownerSystem notin result.ownedSystems:
         # Owning systems must have all their components fully satisfied.
@@ -574,12 +576,14 @@ proc parseComponentParameters(id: EcsIdentity, componentList: NimNode): Componen
 
         # Add component instances that must be valid to support the owner system for a component passed.
         for comp in id.ecsSysRequirements(ownerSystem):
-          if comp notin result.passed:
+          if comp != typeId and comp notin result.passed:
             if id.isOwned comp:
               let
                 curName = id.typeName(comp)
                 typeStr = id.typeName(typeId)
+              
               error "Cannot add " & typeStr & ", missing required owned component " & curName
+
             elif comp notin result.requiredFetches:
               result.requiredFetches.add comp
               result.lookFor.add comp
@@ -603,9 +607,10 @@ proc parseComponentParameters(id: EcsIdentity, componentList: NimNode): Componen
         if sys notin result.unownedSystems:
           result.unownedSystems.add sys
 
-        for typeId in id.ecsSysRequirements(sys):
-          if typeId notin result.passed and typeId notin result.lookFor:
-            result.lookFor.add typeId
+        for tId in id.ecsSysRequirements(sys):
+          if tId != typeId and tId notin result.passed and tId notin result.lookFor:
+            result.lookFor.add tId
+
 
 proc genComponents*(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo): NimNode =
   ## Create storage instances for passed components.
@@ -650,6 +655,7 @@ proc genComponents*(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamIn
     result.add interceptPrecursor
   result.add componentDecl
   result.add userEventDecls
+
 
 proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo): NimNode =
   ## Output code to fetch the `compInfo.lookFor` components from the
@@ -755,6 +761,7 @@ proc checkRequired(id: EcsIdentity, compInfo: ComponentParamInfo): NimNode =
             if not(`matchesSystem`): raise newException(ValueError, `unsatisfiedErrStr`)
     result.add errorResponse
 
+
 proc addConditionalSystems(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo): NimNode =
   ## Add components to systems that have no owned components.
   ## These systems may or may not be updated depending on fetched instances.
@@ -806,6 +813,7 @@ proc addConditionalSystems(id: EcsIdentity, entity: NimNode, compInfo: Component
   if conditionalAddedEvents.len > 0:
     result.add conditionalAddedEvents
 
+
 proc addOwned(id: EcsIdentity, entity: NimNode, compParamInfo: ComponentParamInfo): NimNode =
   ## Assumes we have everything we need to add to owned systems.
   ## Any systems updated here must be fully qualified with their components.
@@ -850,9 +858,9 @@ proc addOwned(id: EcsIdentity, entity: NimNode, compParamInfo: ComponentParamInf
       if ownedByThisSystem:
         # When a component is owned, it must be given as a parameter.
         let index = compParamInfo.passed.find(typeId)
-        doAssert index > -1,
-          "Cannot find owned component \"" & typeStr &
-          "\" when adding to system \"" & sysName & "\""
+        if index < 0:
+          error "Cannot find owned component \"" & typeStr &
+            "\" when adding to system \"" & sysName & "\""
 
         let
           value = compParamInfo.values[index]
@@ -904,6 +912,7 @@ proc addOwned(id: EcsIdentity, entity: NimNode, compParamInfo: ComponentParamInf
     result.add updateIndex
     result.add stateUpdates
     result.add userSysAddCode
+
 
 proc doAddComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): NimNode =
   ## Output minimised code to add the components in `componentList` to
@@ -962,64 +971,97 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): 
 
   genLog "\n# macro addComponents(" & id.commaSeparate(componentInfo.passed) & "):\n", result.repr
 
+
 proc makeAddComponents*(id: EcsIdentity): NimNode =
   let
-    componentList = ident "componentList"
     entity = ident "entity"
     identity = quote do: EcsIdentity(`id`)
     res = ident "result"
+    componentList = ident "componentList"
+  
   result = newStmtList()
+
+  # Core 'add' macros.
+
   result.add(
     quote do:
+      macro addComponents*(id: static[EcsIdentity], `entity`: EntityRef, `componentList`: varargs[typed]): untyped =
+        ## Add components to a specific identity.
+        doAddComponents(id, `entity`, `componentList`)
+
       macro addComponents*(`entity`: EntityRef, `componentList`: varargs[typed]): untyped =
         ## Add components to an entity and return a tuple containing
         ## the instances.
         doAddComponents(`identity`, `entity`, `componentList`)
 
-      proc addComponent*[T: ComponentTypeclass](`entity`: EntityRef, component: T): T.instanceType {.discardable.} =
-        ## Add a component to an entity and return the instance.
-        `entity`.addComponents(component)[0]
-
       macro add*(`entity`: EntityRef, `componentList`: varargs[typed]): untyped =
         ## Add components to an entity and return a tuple containing
         ## the instances.
         doAddComponents(`identity`, `entity`, `componentList`)
+  )
 
-      proc add*[T: ComponentTypeclass](`entity`: EntityRef, component: T): T.instanceType {.discardable.} =
-        ## Add a component to an entity and return the instance.
-        `entity`.addComponents(component)[0]
+  # Per-component utilities.
 
-      # TODO: addOrUpdate that allows updating a selection of fields rather than the whole component item.
-      proc addOrUpdate*[T: ComponentTypeclass](`entity`: EntityRef, component: T): T.instanceType {.discardable.} =
-        ## Add `component` to `entity`, or if `component` already exists, overwrite it.
-        ## Returns the component instance.
-        let fetched = `entity`.fetchComponent T.type
-        if fetched.valid:
-          # Replace original. No further work is required as the types or indexes have not been updated.
-          update(fetched, component)
-          
-          `res` = fetched
-        else:
-          # Add as normal.
-          `res` = `entity`.addComponent component
-      
-      proc addIfMissing*[T: ComponentTypeclass](entity: EntityRef, component: T): T.instanceType {.discardable.} =
-        ## Add a component only if it isn't already present.
-        ## If the component is already present, no changes are made and an invalid result is returned.
-        ## If the component isn't present, it will be added and the instance is returned.
-        if not entity.hasComponent T.type:
-          result = entity.addComponent component
-      
-      proc fetchOrAdd*[T: ComponentTypeclass](entity: EntityRef, component: typedesc[T]): T.instanceType {.discardable.} =
-        ## Fetch an existing component type if present, otherwise add
-        ## the component type and return the instance.
-        ## 
-        ## This is useful when you always want a valid component
-        ## instance returned, but don't want to overwrite existing
-        ## data.
-        result = entity.fetchComponent T.type
-        if not result.valid:
-          result = entity.addComponent component()
+  for typeId in id.unsealedComponents:
+    let
+      tyStr = id.typeName(typeId)
+      ty = ident tyStr
+      inst = ident instanceTypeName(tyStr)
+      owner = id.systemOwner(typeId)
+
+      # These single component operations cannot perform state updates
+      # to systems with multiple owned components.
+      skip = owner != InvalidSystemIndex and id.len_ecsOwnedComponents(owner) > 1
+
+    if not skip:
+      result.add(quote do:
+        proc addComponent*[T: ComponentTypeclass](`entity`: EntityRef, component: T): auto {.discardable.} =
+          ## Add a component to an entity and return the instance.
+          `entity`.addComponents(component)[0]
+
+        proc addComponent*(`entity`: EntityRef, component: `ty`): `inst` {.discardable.} =
+          ## Add a component to an entity and return the instance.
+          addComponents(`entity`, component)[0]
+
+        proc add*(`entity`: EntityRef, component: `ty`): `inst` {.discardable.} =
+          ## Add a component to an entity and return the instance.
+          addComponents(`entity`, component)[0]
+
+        # TODO: addOrUpdate that allows updating a selection of fields rather than the whole component item.
+        proc addOrUpdate*(`entity`: EntityRef, component: `ty`): `inst` {.discardable.} =
+          ## Add `component` to `entity`, or if `component` already exists, overwrite it.
+          ## Returns the component instance.
+          let fetched = `entity`.fetchComponent component.type
+          if fetched.valid:
+            # Replace original. No further work is required as the types or indexes have not been updated.
+            update(fetched, component)
+            
+            `res` = fetched
+          else:
+            # Add as normal.
+            `res` = addComponent(`entity`, component)
+        
+        proc addIfMissing*(`entity`: EntityRef, component: `ty`): `inst` {.discardable.} =
+          ## Add a component only if it isn't already present.
+          ## If the component is already present, no changes are made and an invalid result is returned.
+          ## If the component isn't present, it will be added and the instance is returned.
+          if not `entity`.hasComponent component.type:
+            `res` = addComponent(`entity`, component)
+        
+        proc fetchOrAdd*(`entity`: EntityRef, component: typedesc[`ty`]): `inst` {.discardable.} =
+          ## Fetch an existing component type if present, otherwise add
+          ## the component type and return the instance.
+          ## 
+          ## This is useful when you always want a valid component
+          ## instance returned, but don't want to overwrite existing
+          ## data.
+          `res` = `entity`.fetchComponent component.type
+          if not `res`.valid:
+            `res` = addComponent(`entity`, component())
+      )
+
+  result.add(
+    quote do:
 
       template addComponents*(`entity`: EntityRef, components: ComponentList) =
         ## Add components from a list.
@@ -1047,7 +1089,7 @@ proc makeAddComponents*(id: EcsIdentity): NimNode =
         {.line.}:
           for c in components:
             caseComponent c.typeId:
-              addOrUpdate(entity, componentRefType()(c).value)
+              discard addOrUpdate(entity, componentRefType()(c).value)
 
       template updateComponents*(entity: EntityRef, components: ComponentList) =
         ## Updates existing components from a list.
@@ -1343,6 +1385,7 @@ proc makeRemoveComponents*(id: EcsIdentity): NimNode =
         caseComponent c.typeId:
           removeComponent(entity, componentType())
 
+
 proc clearAllEntComponentRefs(entityId: NimNode, componentStorageFormat: ECSCompStorage): NimNode =
   case componentStorageFormat
   of csSeq:
@@ -1365,6 +1408,7 @@ proc clearAllEntComponentRefs(entityId: NimNode, componentStorageFormat: ECSComp
           componentDel(componentInstanceType()(compPair[1].index))
       entityData(`entityId`).componentRefs.clear
 
+
 proc recyclerAdd(ecStateNode, entIdNode: NimNode, recyclerFormat: ECSRecyclerFormat): NimNode =
   case recyclerFormat
   of rfSeq:
@@ -1378,6 +1422,7 @@ proc recyclerAdd(ecStateNode, entIdNode: NimNode, recyclerFormat: ECSRecyclerFor
       `ecStateNode`.entityRecycler[nextIdx] = `entIdNode`
       `ecStateNode`.`rLen` += 1
 
+
 proc recyclerClear*(ecStateNode: NimNode, recyclerFormat: ECSRecyclerFormat): NimNode =
   case recyclerFormat
   of rfSeq:
@@ -1386,6 +1431,7 @@ proc recyclerClear*(ecStateNode: NimNode, recyclerFormat: ECSRecyclerFormat): Ni
     let rLen = ident recyclerArrayLen()
     quote do:
       `ecStateNode`.`rLen` = 0
+
 
 proc makeDelete*(id: EcsIdentity): NimNode =
   ## Generates delete procedures for the current entity.

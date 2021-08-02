@@ -22,10 +22,13 @@ template newEntityTemplate*: ComponentList = @[]
 proc initComponents*: ComponentList = @[]
 
 proc indexInit(sysNode: NimNode, options: ECSSysOptions): NimNode =
+  let
+    initTab = bindSym "initTable"
+
   case options.indexFormat
   of sifTable:
     quote do:
-      `sysNode`.index = initTable[EntityId, int]() 
+      `sysNode`.index = `initTab`[EntityId, int]() 
   of sifArray:
     newEmptyNode()
   of sifAllocatedSeq:
@@ -43,12 +46,6 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     tupleTypeIdent = ident(tupleName(name))
     options = id.getOptions(sysIndex)
   result = newStmtList()
-
-  if options.indexFormat == sifTable:
-    result.add(quote do:
-      when not declared(tables):
-        import tables
-    )
 
   # Generate the type for this system
   result.add(quote do:
@@ -122,7 +119,6 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     # had passed, then act as if runEvery is zero (ie; always run)
     ## If runEvery is non-zero, this system's do proc will only trigger after this delay
     fields.add genField("runEvery", true, ident "float")
-    fields.add genField("lastRun", true, ident "float")
 
   # Finally, add extra fields (provided by the user) to the type.
   if extraFields.len > 0:
@@ -366,11 +362,6 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   for sys in ownedComponentIds:
     id.add_ecsOwnedComponents(sysIndex, sys)
 
-  # Store extra fields for this system.
-  # This allows checking later `fields:` components match the original
-  # definition.
-  id.set_extraFields(sysIndex, extraFields)
-
   # Build tuple type of components for this system.
   var
     elements = nnkTupleTy.newTree()
@@ -418,6 +409,12 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
     extraFieldDefs: seq[NimNode]
 
   if extraFields.kind != nnkEmpty:
+    
+    # Store extra fields for this system.
+    # This allows checking later `fields:` components match the original
+    # definition.
+    id.set_extraFields(sysIndex, extraFields)
+
     for tyDef in extraFields:
       case tyDef.kind
       of nnkCall:
@@ -470,6 +467,9 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
       )
 
   id.add_ecsSysDefined sysIndex
+
+  if id.private:
+    result.deExport
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
@@ -604,6 +604,9 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
     error "No system bodies defined for group \"" & group & "\""
   else:
     result.add id.commitSystemList(systems, runProc)
+  
+  if id.private:
+    result.deExport
 
 template commitGroup*(group, runProc: static[string]): untyped =
   ## Output uncommitted system definitions for a group using the default ECS identity and wrap in an execution procedure.
@@ -1065,8 +1068,9 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
           `finished` = `processed` >= `streamAmount`
       of cmdStochastic:
         quote do:
-          `sys`.lastIndex = `randomValue`(0 .. `sys`.high)
+          `sys`.lastIndex = `randomValue`(`sys`.high)
           `finished` = `processed` >= `streamAmount`
+
     initFirstRun =
       case streamDetails.command
       of cmdNone, cmdMultiPass:
@@ -1158,7 +1162,10 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   # Extract definitions `fields:` blocks for system variable creation.
   # If the system is previously defined, fields are checked to match.
   for item in systemBody:
-    if item.kind == nnkCall and item[0].kind == nnkIdent and item[0].strVal.toLowerAscii == $sbFields:
+    if item.kind == nnkCall and
+        item[0].kind in [nnkIdent, nnkOpenSymChoice] and
+        ($item[0]).toLowerAscii == $sbFields:
+
       if not hasFieldsBlock:
         hasFieldsBlock = true
         extraFields = newStmtList()
@@ -1167,6 +1174,15 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         extraFields.add fieldDef
 
   result = newStmtList()
+
+  # `repr` may give mangled type names when creating a private ECS
+  # inside a block.
+  var componentTypesStr: string
+  for t in componentTypes:
+    if t.kind in [nnkSym, nnkOpenSymChoice]:
+      componentTypesStr &= $t
+    else:
+      componentTypesStr &= t.repr
 
   if sysIdxSearch.found:
     # This system has already been defined.
@@ -1192,12 +1208,12 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     let
       expectedTypes = id.ecsSysRequirements existingSysIdx
       existingOpts = id.getOptions existingSysIdx
-    
+
     if componentTypes.len > 0:
       # Check the components given to makeSystem match defineSystem.
       template errMsg =
         error "Components passed to makeSystem \"" & name &
-          "\" " & componentTypes.repr &
+          "\" " & componentTypesStr &
           " in conflict with previous definition in defineSystem: [" &
           id.commaSeparate(expectedTypes) & "]"
       
@@ -1221,7 +1237,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   else:
     # This is an inline makeSystem.
     when defined(ecsLog) or defined(ecsLogDetails):
-      echo "Defining body for system \"", name, "\" with types ", componentTypes.repr
+      echo "Defining body for system \"", name, "\" with types ", componentTypesStr
 
     result.add createSysTuple(id, name, componentTypes, ownedFields, extraFields, options)
 

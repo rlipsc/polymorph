@@ -268,8 +268,16 @@ proc makeFindComponent(id: EcsIdentity, entityId: NimNode, componentTypeId: Comp
           quote: entityData(`entityId`).componentRefs.len
         else:
           quote: entityData(`entityId`).nextCompIdx
+      invalidRef =
+        if id.systemOwner(componentTypeId) != InvalidSystemIndex:
+          quote do:
+            (InvalidComponent, -1.ComponentIndex, InvalidComponentGeneration)
+        else:
+          quote do:
+            InvalidComponentRef
+
     quote do:
-      var `res` = InvalidComponentRef
+      var `res`: ComponentRef = `invalidRef`
       for i in 0 ..< `length`:
         if entityData(`entityId`).componentRefs[i].typeId == `componentTypeId`.ComponentTypeId:
           `res` = entityData(`entityId`).componentRefs[i]
@@ -438,8 +446,7 @@ proc makeEntities(id: EcsIdentity): NimNode =
   if entOpts.entityStorageFormat != esSeq and entOpts.maxEntities <= 0:
     error "Cannot generate entities with a max count of zero as the entity storage format is non-resizable"
   
-  let entTypes = makeEntityItems(id)
-  r.add entTypes
+  r.add makeEntityItems(id, entOpts)
   r.add makeEntityState(entOpts)
   r.add makeEntitySupport(entOpts)
   r.add makeNewEntity(entOpts)
@@ -453,6 +460,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     strOp = nnkAccQuoted.newTree(ident "$")
     # compName matches the template provided by caseComponent.
     compName = ident "componentName"
+    showData = ident "showData"
   var
     componentCount: int
   
@@ -490,45 +498,45 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       componentId.caseComponent:
         `res` = `compName`()
 
-    proc toString*(componentRef: ComponentRef, showData: bool = true): string =
+    proc toString*(componentRef: ComponentRef, `showData`: bool = true): string =
       ## Display the name, type and data for a component reference.
       let tId = componentRef.typeId
       tId.caseComponent:
         `res` = `compName`() & " (id: " & `strOp`(int(tId)) & ", index: " & `strOp`(componentRef.index.int) & ", generation: " & `strOp`(componentRef.generation.int) & ")"
-        if showData:
+        if `showData`:
           `res` &= ":\n"
           try:
             `res` &= `strOp`(componentInstanceType()(componentRef.index.int).access)
           except:
             `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & $(componentInstanceType().componentCount).int & ")>\n"
 
-    proc `strOp`*(componentRef: ComponentRef, showData: bool = true): string = componentRef.toString(showData)
+    proc `strOp`*(componentRef: ComponentRef, `showData`: bool = true): string = componentRef.toString(`showData`)
 
-    proc toString*(comp: Component, showData = true): string =
+    proc toString*(comp: Component, `showData` = true): string =
       ## `$` function for dynamic component superclass.
       ## Displays the sub-class data according to the component's `typeId`.
       caseComponent comp.typeId:
         result &= `compName`()
-        if showData:
+        if `showData`:
           result &= ":\n" & $componentRefType()(comp).value & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
-    proc toString*(componentList: ComponentList, showData: bool = true): string =
+    proc toString*(componentList: ComponentList, `showData`: bool = true): string =
       ## `$` for listing construction templates.
       let maxIdx = componentList.high
       for i, item in componentList:
-        let s = item.toString(showData)
-        if i < maxIdx and not showData:
+        let s = item.toString(`showData`)
+        if i < maxIdx and not `showData`:
           result &= s & ", "
         else:
           result &= s
     
     proc `strOp`*(componentList: ComponentList): string = componentList.toString
 
-    proc toString*(construction: ConstructionTemplate, showData: bool = true): string =
+    proc toString*(construction: ConstructionTemplate, `showData`: bool = true): string =
       for i, item in construction:
-        `res` &= `strOp`(i) & ": " & item.toString(showData) & "\n"
+        `res` &= `strOp`(i) & ": " & item.toString(`showData`) & "\n"
 
     proc `strOp`*(construction: ConstructionTemplate): string = construction.toString
 
@@ -537,6 +545,11 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
   )
 
 proc makeRuntimeTools(id: EcsIdentity): NimNode =
+
+  let
+    ettUpd = ident "ettUpdate"
+    ettRem = ident "ettRemove"
+
   result = newStmtList( quote do:
 
     template matchToSystems*(componentTypeId: ComponentTypeId, actions: untyped): untyped =
@@ -546,11 +559,9 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
         if componentTypeId in system.requirements:
           actions
 
-    type EntityTransitionType* = enum ettUpdate, ettRemoveAdd
-
     template transition*(entity: EntityRef,
         prevState, newState: ComponentList,
-        transitionType: static[EntityTransitionType]) =
+        transitionType: static[`EntityTransitionType`]) =
       ## Removes components in `prevState` that aren't in `newState` and
       ## adds or updates components in `newState`.
       ## 
@@ -583,7 +594,7 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
         if prevState.len > 0:
           # Remove components first so we don't invoke a state with both old
           # and new components.
-          when transitionType == ettUpdate:
+          when transitionType == `ettUpd`:
             var
               newIds = newSeq[ComponentTypeId](newState.len)
             
@@ -598,7 +609,7 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
                 caseComponent tyId:
                   entity.removeComponent componentType()
 
-          elif transitionType == ettRemoveAdd:
+          elif transitionType == `ettRem`:
             for c in prevState:
               caseComponent c.typeId:
                 entity.removeComponent componentType()
@@ -610,7 +621,7 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
     template transition*(entity: EntityRef, prevState, newState: ComponentList) =
       ## Removes components in `prevState` that aren't in `newState` and
       ## adds or updates components in `newState`.
-      transition(entity, prevState, newState, ettUpdate)
+      transition(entity, prevState, newState, `ettUpd`)
   )
 
 proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
@@ -715,7 +726,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
         `sysStr`(sys.name)
 
     ## Total number of systems defined
-    const `tsc`* = `totalCount`
+    const `tsc`* {.used.} = `totalCount`
   
     proc analyseSystem*[T](sys: T, jumpThreshold: Natural = 0): SystemAnalysis =
       ## Analyse a system for sequential component access by measuring
@@ -1232,13 +1243,6 @@ proc makeCompRefAlive: NimNode =
         r = componentAlive()[index] and compRef.generation.int == componentGenerations()[index]
       r
 
-proc sealComps(id: EcsIdentity): NimNode =
-  assert id.unsealedComponentCount > 0, "No components defined"
-
-  result = newStmtList()
-  result.add generateTypeStorage(id)
-  result.add genTypeAccess(id)
-
 proc addPerformanceLog(id: EcsIdentity) {.compileTime.} =
   ## Append system operations per component to the log.
   let commentStart = "# "
@@ -1528,8 +1532,18 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     if removedDecl.len > 0:
       result.add removedDecl
 
-  id.ecsBuildOperation "sealing " & $id.unsealedComponentCount() & " components":
-    result.add sealComps(id)
+  let s =
+    when defined(ecsLogDetails):
+      ": " & id.commaSeparate(id.allUnsealedComponents)
+    else:
+      ""
+
+  id.ecsBuildOperation "sealing " & $id.unsealedComponentCount() & " components" & s:
+    if id.unsealedComponentCount == 0:
+      error "No components have been defined by this ECS"
+
+    result.add generateTypeStorage(id)
+    result.add genTypeAccess(id)
 
   id.ecsBuildOperation "seal entities":
     result.add sealEntities(id)
@@ -1584,12 +1598,17 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   for sys in unsealedSystems:
     id.set_sealed sys, true
 
+  if id.private:
+    id.ecsBuildOperation "remove exports":
+      result.deExport
+
   when defined(ecsLogCode):
-    id.ecsBuildOperation "Generate makeEcs() log":
+    id.ecsBuildOperation "generate makeEcs() log":
       genLog("\n# makeEcs() code generation output:\n" & result.repr)
       result.add id.flushGenLog(defaultGenLogFilename)
   
   id.endOperation()
+  
   when defined(ecsLog) or defined(ecsLogDetails):
     echo "ECS \"" & id.string & "\" built."
 
@@ -1628,8 +1647,6 @@ macro flushGenLog*: untyped =
   ## logged to file.
   defaultIdentity.flushGenLog(defaultGenLogFilename)
 
-import strutils
-
 proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   result = newStmtList()
 
@@ -1667,6 +1684,10 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   
   # Add the system body procedures and run proc.
   result.add id.commitSystemList(systems, procName)
+
+  if id.private:
+    id.ecsBuildOperation "remove exports":
+      result.deExport
 
   let
     logCodeComment = "Commit systems " & logTitle & "\n"

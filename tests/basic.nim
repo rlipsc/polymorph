@@ -2,7 +2,6 @@ import polymorph
 
 if not defined(debug): quit("Basic tests must be run in debug mode.")
 template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions) {.dirty.} =
-  import unittest
 
   registerComponents(compOpts):
     type
@@ -96,6 +95,9 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
     stream 2:
       number += c
       cStream += 1
+
+    # When there's an odd number of entities in this system this stream
+    # block should only process one of it's two items.
     stream 2:
       number += d
       dStream += 1
@@ -107,7 +109,9 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
     finish:
       check state == PreFinished
       state = Finished
-    finish: check number == (sys.count * (a + b)) + (cStream * c + dStream * d)
+    finish: check number ==
+      (sys.count * (a + b)) +     # all blocks.
+      (cStream * c + dStream * d) # stream blocks.
     finish: check state == Finished
 
     check runningSystem
@@ -135,23 +139,11 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         check e.alive
         ents.add e    
 
-      test "Add component":
-        let
-          e = newEntity()
-          lastCount = sysIncInt.count
-        ents.add e
-        e.addComponent IntCont(value: 5)
-        check sysIncInt.count == lastCount
-
-        e.fetchCheck IntCont:
-          check comp.value == 5
-
-        e.addComponent AddOne()
-        check sysIncInt.count == lastCount + 1
-
       test "New entity with component":
         var e = newEntityWith(FloatCont(value: 12.34), AddOne(), IntCont(value: 12))
-
+        
+        e.expectSystems ["incInt", "incFloat"]
+        
         e.fetchCheck IntCont:
           check comp.value == 12
 
@@ -160,6 +152,25 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
 
         e.fetchCheck AddOne:
           discard
+
+      test "Add component":
+        let
+          e = newEntity() 
+          lastCount = sysIncInt.count
+        ents.add e
+
+        check not(e.fetch(AddOne).valid)
+        check not(e.fetch(IntCont).valid)
+
+        e.addComponent IntCont(value: 5)
+        
+        check sysIncInt.count == lastCount
+
+        e.fetchCheck IntCont:
+          check comp.value == 5
+
+        e.addComponent AddOne()
+        check sysIncInt.count == lastCount + 1
 
       test "Add components":
         var e = newEntity()
@@ -370,10 +381,16 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
   runBasicTests()
 
 when isMainModule:
+
+  import unittest
+
   const
     maxEnts = 10_000
     compOpts = ECSCompOptions(maxComponents: maxEnts)
     entOpts = ECSEntityOptions(maxEntities: maxEnts, componentStorageFormat: csSeq)
     sysOpts = ECSSysOptions(maxEntities: maxEnts)
 
-  runBasic(entOpts, compOpts, sysOpts)
+  static: defaultIdentity.set_private true
+  block:
+    runBasic(entOpts, compOpts, sysOpts) 
+

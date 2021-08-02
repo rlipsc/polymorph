@@ -92,7 +92,8 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
     typeDeclarations = newStmtList()
     typeUtils = newStmtList()
     registered: seq[string]
-  let previousComponentsDeclared = id.components.len
+  let
+    previousComponentsDeclared = id.components.len
 
   for tyDef in body.typeDefs:
     
@@ -169,25 +170,27 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   when defined(ecsLogDetails):
     echo "Component options:\n", options.repr, "\n"
 
-  # Generate the storage array type for these components
-  # storageTypeName: object =
-  #   <fields of type>
   result.add typeDeclarations
-  # The body always gets added unchanged, but after the instance types have been generated.
+  # The body gets added unchanged (aside from `{.notComponent.} stripping)
+  # after the instance types have been generated.
   # This allows instance types to be used within the user's type definitions.
   result.add body
   result.add typeUtils
 
+  if id.private:
+    result.deExport
+
   genLog("\n# Register components:\n" & result.repr)  
 
-proc generateTypeStorage*(id: EcsIdentity): NimNode =
-  result = newStmtList()
 
+proc generateTypeStorage*(id: EcsIdentity): NimNode =
   var
     typeUtils = newStmtList()
     # Each component gets a unique array generated in the storage type.
     storageFields = nnkVarSection.newTree()
-  
+    private = id.private
+    exportFields = not private
+
   for typeId in id.unsealedComponents:
     
     let
@@ -243,41 +246,41 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
     # Generate the field that will hold this component within storage.
     # eg; a: array[100000, A]
     # Note: Currently this field has to be added unconditionally as we don't know if this component is owned yet.
-    storageFields.add genField(storageFieldName, true, typeNameIdent.storageField(supportStorageSize), useThreadVar)
+    storageFields.add genField(storageFieldName, exportFields, typeNameIdent.storageField(supportStorageSize), useThreadVar)
     
     # Generate the last index list for this component of the specific instance type
     # eg; aLastIndex: seq[AInstance]
     let freeIdxIdent = typeNameStr.freeInstancesName
-    storageFields.add genField(freeIdxIdent, true, genSeq(instTypeNode), useThreadVar)
+    storageFields.add genField(freeIdxIdent, exportFields, genSeq(instTypeNode), useThreadVar)
     
     # Generate the next index variable for this component
     # eg; aNextIndex: AInstance
     let nextIdxName = typeNameStr.nextInstanceName
-    storageFields.add genField(nextIdxName, true, instTypeNode, useThreadVar)
+    storageFields.add genField(nextIdxName, exportFields, instTypeNode, useThreadVar)
 
     # Generate the instance alive state array for this component type
     # eg; aAlive: array[100000, bool]
     let aliveStateIdent = typeNameStr.aliveStateInstanceName
-    storageFields.add genField(aliveStateIdent, true, newIdentNode("bool").storageField(supportStorageSize), useThreadVar)
+    storageFields.add genField(aliveStateIdent, exportFields, newIdentNode("bool").storageField(supportStorageSize), useThreadVar)
 
     # Generate an array of instance numbers against each component id
     # This allows us to compare an existing instance with a ComponentRef.
     let instanceIdsName = typeNameStr.instanceIdsName
-    storageFields.add genField(instanceIdsName, true, newIdentNode("int32").storageField(supportStorageSize), useThreadVar)
+    storageFields.add genField(instanceIdsName, exportFields, newIdentNode("int32").storageField(supportStorageSize), useThreadVar)
 
-  result.add storageFields
-  result.add typeUtils
-  genLog("\n# Component type storage:\n" & result.repr)
-
-proc genTypeAccess*(id: EcsIdentity): NimNode =
-  result = newStmtList()  
+  newStmtList(
+    storageFields,
+    typeUtils
+  )
   
+proc genTypeAccess*(id: EcsIdentity): NimNode =
   var
     typeAccess = newStmtList()
     firstCompIdInits = newStmtList()
   let
     identity = quote do: EcsIdentity(`id`)
 
+  result = newStmtList()
   for typeId in id.unsealedComponents:
     let
       options = id.getOptions typeId

@@ -1,4 +1,4 @@
-import polymorph, unittest
+import polymorph
 
 template defineConstructAndClone*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions) {.dirty.} =
   registerComponents(compOpts):
@@ -14,107 +14,120 @@ template defineConstructAndClone*(entOpts: ECSEntityOptions, compOpts: ECSCompOp
       ReplacedTo = object
         val: int
 
-  defineSystemOwner("test", [A, B], [A, B], sysOpts)
-  defineSystem("test2", [A, B], sysOpts)
-  defineSystem("test3", [ReplacedTo], sysOpts)
+  defineSystemOwner "test", [A, B], [A, B], sysOpts
+  defineSystem "test2", [A, B], sysOpts
+  defineSystem "test3", [ReplacedTo], sysOpts
 
-const
-  entOpts = defaultEntityOptions
-  sysOpts = defaultSystemOptions
-  compOpts = defaultComponentOptions
+  makeSystem "test", [A, B]:
+    discard
 
-defineConstructAndClone(entOpts, compOpts, sysOpts)
-makeEcs(entOpts)
-commitSystems("run")
+  makeEcs(entOpts)
+  commitSystems("run")
 
-proc runConstructAndClone*() =
-
-  suite "Construction":
-    test "Building from template":
-      let templ: ConstructionTemplate = @[
-        cl(A(val: 1), B(val: 123.456), C(val: "Hello"))
-      ]
-
-      let ent = templ.construct()
-      check ent[0].hasComponent A
-      check ent[0].hasComponent B
-      check ent[0].hasComponent C
-      let
-        a = ent[0].fetchComponent A
-        b = ent[0].fetchComponent B
-        c = ent[0].fetchComponent C
-      check:
-        a.valid
-        b.valid
-        c.valid
-      check:
-        a.val == 1
-        b.val == 123.456
-        c.val == "Hello"
-      check:
-        sysTest.index.hasKey(ent[0].entityId)
-
-    test "Incomplete owned system build":
-      let templ: ConstructionTemplate = @[
-        cl(A(val: 1), C(val: "Hello"))
-      ]
-      expect Exception:
-        let e = templ.construct
-        echo e
-    
-  suite "Cloning":
-    test "Check values":
-      let
-        ent = newEntityWith(A(val: 123), B(val: 123.456), C(val: "Hello"))
-        cloned = ent.clone()
-      check cloned.hasComponent A
-      check cloned.hasComponent B
-      check cloned.hasComponent C
-      check cloned.fetchComponent(A).val == 123
-      check cloned.fetchComponent(B).val == 123.456
-      check cloned.fetchComponent(C).val == "Hello"
-
-  suite "Events":
-
-    registerConstructor ReplacedFrom, proc(entity: EntityRef, component: Component, context: EntityRef): seq[Component] =
-      let rf = ReplacedFromRef(component).value
-      result.add ReplacedTo(val: rf.val)
-
-    registerPostConstructor ReplacedTo, proc(entity: EntityRef, component: ComponentRef, entities: var Entities) =
-      let rf = ReplacedToInstance(component.index)
-      rf.val *= 2
-
-    test "Replace component during construction":
-
-      let
-        templ: ConstructionTemplate = @[
-          cl(ReplacedFrom(val: 123))
+  proc runConstructAndClone() =
+    suite "Construction":
+      test "Building from template":
+        let templ: ConstructionTemplate = @[
+          cl(A(val: 1), B(val: 123.456), C(val: "Hello"))
         ]
-        ents = templ.construct()
 
-      check not ents[0].hasComponent(ReplacedFrom)
-      check ents[0].hasComponent ReplacedTo
-      check ents[0].fetchComponent(ReplacedTo).val == 123 * 2
-      check ents[0] in sysTest3
+        let ent = templ.construct()
+        check ent[0].hasComponent A
+        check ent[0].hasComponent B
+        check ent[0].hasComponent C
+        let
+          a = ent[0].fetchComponent A
+          b = ent[0].fetchComponent B
+          c = ent[0].fetchComponent C
+        check:
+          a.valid
+          b.valid
+          c.valid
+        check:
+          a.val == 1
+          b.val == 123.456
+          c.val == "Hello"
+        check:
+          sysTest.index.hasKey(ent[0].entityId)
 
-    registerCloneConstructor ReplacedFrom, proc(entity: EntityRef, component: ComponentRef): seq[Component] =
-      let rf = ReplacedFromInstance(component.index)
-      result.add ReplacedTo(val: rf.val)
+      test "Incomplete owned system build":
+        let templ: ConstructionTemplate = @[
+          cl(A(val: 1), C(val: "Hello"))
+        ]
+        expect Exception:
+          let e = templ.construct
+          for x in e:
+            echo x
+      
+    suite "Cloning":
+      test "Check values":
+        let
+          ent = newEntityWith(A(val: 123), B(val: 123.456), C(val: "Hello"))
+          cloned = ent.clone()
+        check cloned.hasComponent A
+        check cloned.hasComponent B
+        check cloned.hasComponent C
+        check cloned.fetchComponent(A).val == 123
+        check cloned.fetchComponent(B).val == 123.456
+        check cloned.fetchComponent(C).val == "Hello"
 
-    test "Replace component during cloning":
-      let
-        ent = newEntityWith(A(val: 123), B(val: 123.456), C(val: "Hello"), ReplacedFrom(val: 123))
-        cloned = ent.clone
-      check cloned.hasComponent A
-      check cloned.hasComponent B
-      check cloned.hasComponent C
-      check cloned.hasComponent ReplacedTo
-      check cloned.fetchComponent(A).val == 123
-      check cloned.fetchComponent(B).val == 123.456
-      check cloned.fetchComponent(C).val == "Hello"
-      check cloned.fetchComponent(ReplacedTo).val == 123
+    suite "Events":
+
+      registerConstructor ReplacedFrom, proc(entity: EntityRef, component: Component, context: EntityRef): seq[Component] =
+        let rf = ReplacedFromRef(component).value
+        result.add ReplacedTo(val: rf.val)
+
+      registerPostConstructor ReplacedTo, proc(entity: EntityRef, component: ComponentRef, entities: var Entities) =
+        let rf = ReplacedToInstance(component.index)
+        rf.val *= 2
+
+      test "Replace component during construction":
+
+        let
+          templ: ConstructionTemplate = @[
+            cl(ReplacedFrom(val: 123))
+          ]
+          ents = templ.construct()
+
+        check not ents[0].hasComponent(ReplacedFrom)
+        check ents[0].hasComponent ReplacedTo
+        check ents[0].fetchComponent(ReplacedTo).val == 123 * 2
+        check ents[0] in sysTest3
+
+      registerCloneConstructor ReplacedFrom, proc(entity: EntityRef, component: ComponentRef): seq[Component] =
+        let rf = ReplacedFromInstance(component.index)
+        result.add ReplacedTo(val: rf.val)
+
+      test "Replace component during cloning":
+        let
+          ent = newEntityWith(A(val: 123), B(val: 123.456), C(val: "Hello"), ReplacedFrom(val: 123))
+          cloned = ent.clone
+        check cloned.hasComponent A
+        check cloned.hasComponent B
+        check cloned.hasComponent C
+        check cloned.hasComponent ReplacedTo
+        check cloned.fetchComponent(A).val == 123
+        check cloned.fetchComponent(B).val == 123.456
+        check cloned.fetchComponent(C).val == "Hello"
+        check cloned.fetchComponent(ReplacedTo).val == 123
+    
+    flushGenLog()
   
-  flushGenLog()
-
 when isMainModule:
-  runConstructAndClone()
+  import unittest
+  
+  const
+    entOpts = defaultEntityOptions
+    sysOpts = defaultSystemOptions
+    compOpts = defaultComponentOptions
+
+  echo sysOpts
+  from tables import hasKey
+
+  # Test private generation.
+  static:
+    defaultIdentity.set_private true
+  
+  block:
+    defineConstructAndClone(entOpts, compOpts, sysOpts)
+    runConstructAndClone()

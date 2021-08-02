@@ -59,6 +59,7 @@ type
   ECSCompItemStorage* = enum cisSeq, cisArray
   ECSCompRecyclerFormat* = enum crfSeq, crfArray
   ECSCompInvalidAccess* = enum iaIgnore, iaAssert
+
   ECSCompOptions* = object
     maxComponents*: Natural   ## Maximum amount of components for all component types in this prefix.
     componentStorageFormat*: ECSCompItemStorage ## Underlying storage format for components.
@@ -73,6 +74,7 @@ type
   ECSSysIndexFormat* = enum sifTable, sifArray, sifAllocatedSeq
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
+
   ECSSysOptions* = object
     maxEntities*: int ## Maximum entities this system can hold.
     storageFormat*: ECSSysStorage ## Underlying storage format for the system groups.
@@ -239,6 +241,10 @@ type
   PostConstructorProc* = proc (entity: EntityRef, component: ComponentRef, entities: var Entities)
   ## Constructor called when `clone` is invoked.
   CloneConstructorProc* = proc (entity: EntityRef, component: ComponentRef): seq[Component]
+
+type
+  EntityTransitionType* = enum ettUpdate, ettRemoveAdd
+
 
 # Fragmentation analysis.
 
