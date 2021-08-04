@@ -74,12 +74,16 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
     
     init:
       let initActivated = true
-    init: check initActivated == true
+    
+    init:
+      check initActivated == true
+    
     start:
       type State = enum None, Started, PreFinished, Finished
       var
         number: int
         state: State
+    
     start:
       state = Started
       let
@@ -103,6 +107,15 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
       dStream += 1
     
     check cStream + dStream <= sys.count
+
+    let mpPasses = 2
+    var mpCount: int
+    sys.streamRate = sys.count * mpPasses
+
+    stream multipass:
+      mpCount += 1
+    
+    check mpCount == sys.count * mpPasses
 
     # These finish blocks are run after the main body, and run
     # regardless of paused state.
