@@ -357,7 +357,7 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   # Append to the commitSystems order.
   id.add_systemOrder sysIndex
 
-  assert id.len_ecsOwnedComponents(sysIndex) == 0
+  assert id.len_ecsOwnedComponents(sysIndex) == 0, "Owned components are already initialised"
 
   for sys in ownedComponentIds:
     id.add_ecsOwnedComponents(sysIndex, sys)
@@ -875,16 +875,6 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
     typeName = name.capitalizeAscii
     typeIdent = ident(tupleName(typeName))
 
-    defineIdx =
-      if id.len_ecsOwnedComponents(sysIndex) > 0:
-        # Owner systems forgo the first item to keep parity
-        # with component storage and the mechanics of `valid`.
-        quote do:
-          var `idx` = 1
-      else:
-        quote do:
-          var `idx`: int
-    
     strictCatch = strictCatchCheck(cacheId)
     assertItem = id.assertItem(sysIndex)
     assertCheck = getAssertItem(assertItem, sys, groupIndex)
@@ -893,11 +883,13 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
     block:
       static:
         `cacheId`.set_inSystemAll true
+
       var
         `sysLen` = `sys`.count()
 
       if `sysLen` > 0:
-        `defineIdx`
+        var
+          `idx`: int
 
         while `idx` < `sysLen`:
           ## The entity this row started execution with.
@@ -1015,7 +1007,6 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
     sys = ident "sys"
     cacheId = quote do: EcsIdentity(`id`)
     groupIndex = ident "groupIndex"
-    idx = genSym(nskVar, "i")
     sysLen = ident "sysLen"
 
     # if `entity` != `item.entity` then this row has been removed.
@@ -1024,16 +1015,6 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
     typeName = name.capitalizeAscii
     typeIdent = ident(tupleName(typeName))
 
-    defineIdx =
-      if id.len_ecsOwnedComponents(sysIndex) > 0:
-        # Owner systems forgo the first item to keep parity
-        # with component storage and the mechanics of `valid`.
-        quote do:
-          var `idx` = 1
-      else:
-        quote do:
-          var `idx`: int
-    
     strictCatch = strictCatchCheck(cacheId)
     assertItem = id.assertItem(sysIndex)
     streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)

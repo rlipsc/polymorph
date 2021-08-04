@@ -666,6 +666,7 @@ proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo):
     fetch = newStmtList()
     fieldCounter = ident "fieldCounter"
     targetHigh = compInfo.lookFor.len
+    ownedInits {.used.} = newStmtList()
 
   if targetHigh > 0:
     let multipleFetches = targetHigh > 1
@@ -678,11 +679,14 @@ proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo):
     case id.componentStorageFormat
     of csSeq, csArray:
       # Loop through components and extract with a case statement.
-      var fetchCase = nnkCaseStmt.newTree()
       let
         fetchCompIdent = ident "curComp"
-        distinguisher = quote do: `fetchCompIdent`.typeId.int
-      fetchCase.add distinguisher
+      var
+        fetchCase = nnkCaseStmt.newTree()
+
+      fetchCase.add(quote do:
+        `fetchCompIdent`.typeId.int
+      )
 
       for typeId in compInfo.lookFor:
         let
@@ -690,9 +694,17 @@ proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo):
           fieldName = typeStr.toLowerAscii & instPostfix
           fieldIdent = ident fieldName
           instTypeIdent = ident typeStr.instanceTypeName
+          owner = id.systemOwner(typeId)
 
         # Create component variable to be populated by the fetch.
         compDecl.add genField(fieldName, false, instTypeIdent)
+
+        if owner != InvalidSystemIndex:
+          # Owned system fetched require initialisation as the uninitialised
+          # type will pass a `valid` check.
+          ownedInits.add(quote do:
+            `fieldIdent` = -1.`instTypeIdent`
+          )
 
         let
           getInstance = quote do:
@@ -733,6 +745,10 @@ proc buildFetch(id: EcsIdentity, entity: NimNode, compInfo: ComponentParamInfo):
         )
 
     result.add compDecl
+
+    if ownedInits.len > 0:
+      result.add ownedInits
+
     result.add fetch
 
 proc checkRequired(id: EcsIdentity, compInfo: ComponentParamInfo): NimNode =
@@ -1009,7 +1025,7 @@ proc makeAddComponents*(id: EcsIdentity): NimNode =
       inst = ident instanceTypeName(tyStr)
       owner = id.systemOwner(typeId)
 
-      # These single component operations cannot perform state updates
+      # These single component operations can't perform state updates
       # to systems with multiple owned components.
       skip = owner != InvalidSystemIndex and id.len_ecsOwnedComponents(owner) > 1
 
