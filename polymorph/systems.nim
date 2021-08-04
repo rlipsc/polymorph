@@ -1033,7 +1033,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
     error "Stream cannot be empty"
 
   let
-    processed = genSym(nskVar, "processed")
+    processed = ident "sysProcessed"
     finished = genSym(nskVar, "finished")
     randomValue = bindSym "rand"
 
@@ -1075,9 +1075,8 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         `sysLen` = `sys`.count()
         `processed`: int
         `finished` = `sysLen` == 0
-      `defineIdx`
       `initFirstRun`
-      while `finished` == false:
+      while not `finished`:
         let
           ## Current index into `groups`.
           `groupIndex` {.used, inject.} = `sys`.lastIndex
