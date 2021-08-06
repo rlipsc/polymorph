@@ -838,7 +838,6 @@ proc userSysRemoved*(id: EcsIdentity, systemIndex: SystemIndex, sys, rowIdent, e
   for typeId in id.ecsSysRequirements(systemIndex):
     let
       typeName = id.typeName(typeId)
-      #instType = ident instanceTypeName(typeName)
       fieldIdent = ident typeName.toLowerAscii()
       
       onRemoveAny = id.onRemoveAnySystemCodeNode(typeId)

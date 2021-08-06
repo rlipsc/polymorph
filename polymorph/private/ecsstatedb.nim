@@ -240,7 +240,7 @@ macro genLookupListStates(indexType1, indexType2, itemType: typedesc, listNames:
     id = ident "id"
     res = ident "result"
 
-    param1 = ident( toLowerAscii(indexTypeStr1[0]) & indexTypeStr2[1..^1] & "Value")
+    param1 = ident( toLowerAscii(indexTypeStr1[0]) & indexTypeStr1[1..^1] & "Value")
     param2 = ident( toLowerAscii(indexTypeStr2[0]) & indexTypeStr2[1..^1] & "Value")
 
   for listStr in listNames:
@@ -283,7 +283,7 @@ macro genLookupListStates(indexType1, indexType2, itemType: typedesc, listNames:
       # NOTE: Calling another generated access procs within this quote
       # statement may cause the key to be duplicated and therefore incorrect.
       key = quote do:
-        CacheSeq(`id`.string & `listKey` & `p1Key` & `p2key`)
+        CacheSeq(`id`.string & `listKey` & `p1Key` & "_" & `p2key`)
 
     if $itemType == "NimNode":
       # Extra convenience proc for NimNodes fpr wrapping with a
@@ -336,7 +336,7 @@ macro genItemStates(indexType, itemType: typedesc, itemNames: static[openarray[s
 
   for itemStr in itemNames:
     let
-      itemKey = newLit itemStr
+      itemKey = newLit itemStr & indexTypeStr
       getItem = ident itemStr
       setItem = ident "set" & itemStr
       value = ident "value"
@@ -344,7 +344,7 @@ macro genItemStates(indexType, itemType: typedesc, itemNames: static[openarray[s
       # NOTE: Calling another generated access procs within this quote
       # statement may cause the key to be duplicated and therefore incorrect.
       key = quote do:
-        CacheSeq(`id`.string & `itemKey` & `indexTypeStr` & $`param`.int)
+        CacheSeq(`id`.string & `itemKey` & $`param`.int)
 
       readNode =
         if accessType != nil:
