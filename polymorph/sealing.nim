@@ -271,7 +271,7 @@ proc makeFindComponent(id: EcsIdentity, entityId: NimNode, componentTypeId: Comp
       invalidRef =
         if id.systemOwner(componentTypeId) != InvalidSystemIndex:
           quote do:
-            (InvalidComponent, -1.ComponentIndex, InvalidComponentGeneration)
+            (InvalidComponent, (-1).ComponentIndex, InvalidComponentGeneration)
         else:
           quote do:
             InvalidComponentRef
@@ -548,7 +548,7 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
 
   let
     ettUpd = ident "ettUpdate"
-    ettRem = ident "ettRemove"
+    ettRem = ident "ettRemoveAdd"
 
   result = newStmtList( quote do:
 
