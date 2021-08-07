@@ -16,13 +16,15 @@
   - [Component utilities](#component-utilities)
     - [Matching run time `ComponentTypeId`](#matching-run-time-componenttypeid)
 - [Defining systems](#defining-systems)
-  - [Providing custom system fields](#providing-custom-system-fields)
   - [Committing systems](#committing-systems)
   - [System execution order](#system-execution-order)
+  - [Running systems at time intervals](#running-systems-at-time-intervals)
+  - [Adding fields to systems](#adding-fields-to-systems)
   - [Grouping systems](#grouping-systems)
   - [System anatomy](#system-anatomy)
     - [System scope blocks](#system-scope-blocks)
     - [Work item blocks](#work-item-blocks)
+    - [Execution control](#execution-control)
     - [Removing components during `all` or `stream` blocks](#removing-components-during-all-or-stream-blocks)
   - [System utilities](#system-utilities)
     - [`clear`](#clear)
@@ -66,6 +68,7 @@
   - [Deleting from owner systems](#deleting-from-owner-systems)
 - [ECS identities](#ecs-identities)
   - [Multiple ECS outputs with a single identity](#multiple-ecs-outputs-with-a-single-identity)
+  - [Private ECS](#private-ecs)
   - [Multiple identities](#multiple-identities)
 - [Future work](#future-work)
   - [Performance](#performance)
@@ -78,19 +81,19 @@ This library provides a lean abstraction for writing programs with the [entity-c
 
 ## ECS
 
-This pattern lets you create sets of data types at run time and dispatch code by type combinations.
+The ECS pattern lets you create sets of data types at run time and dispatch code for type combinations.
 
   - A set of types is an **entity**.
   - A data type is a **component**.
   - A **system** is program logic running over components.
 
-Advantages of using ECS include: design agility, run time composition, [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID), naturally decoupled and reusable systems, and high performance through cache friendly batch processing.
+Advantages of using ECS include: high design agility, natively asynchronous, run time composition, [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID), naturally decoupled and reusable system code, encouraging machine friendly data oriented designs, and high performance through cache friendly batch processing.
 
 ## Polymorph
 
 This library takes a generative, system oriented approach to ECS.
 
-Systems store execution state and require no work to iterate. Adding or removing components outputs code to directly update the compile time inferred systems. ECS functionality is generated from the relationship between systems and components.
+Systems store execution state and require no work to iterate. Adding or removing components generates code to directly update the compile time inferred systems. ECS functionality is built ad hoc to perform the minimum run time work according to the relationship between systems and components.
 
 The output is statically dispatched with a sequential flow, optimised to each system/component design.
 
@@ -108,7 +111,7 @@ The output is statically dispatched with a sequential flow, optimised to each sy
 import polymorph
 
 # Create some components.
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Position = object
       x, y: int
@@ -116,16 +119,16 @@ registerComponents(defaultCompOpts):
       x, y: int
 
 # Define logic to operate on a set of components.
-makeSystem("move", [Position, Velocity]):
+makeSystem "move", [Position, Velocity]:
   all:
     item.position.x += item.velocity.x
     item.position.y += item.velocity.y
 
-# Generate the ECS interface.
+# Generate the ECS.
 makeEcs()
 
 # Output defined systems and choose name of execution proc.
-commitSystems("run")
+commitSystems "run"
 
 # Create an entity to use the "move" system.
 let
@@ -137,8 +140,10 @@ let
 # Runs the "move" system once.
 run()
 
-# Check the new component values.
-let pos = movingEntity.fetch Position
+# Check the updated component values.
+let
+  pos = movingEntity.fetch Position
+
 assert pos.x == 3 and pos.y == 0
 ```
 
@@ -207,11 +212,11 @@ import polymorph
 
 # Design stage.
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     MyComponent = object
 
-makeSystem("mySystem", [MyComponent]):
+makeSystem "mySystem", [MyComponent]:
   all:
     echo "MyComponent: ", item.myComponent
 
@@ -220,7 +225,7 @@ makeSystem("mySystem", [MyComponent]):
 makeEcs()
 
 # Output the system code.
-commitSystems("runSystems")
+commitSystems "runSystems"
 
 # Run the committed systems in the order they're defined.
 runSystems()
@@ -248,42 +253,46 @@ Once all the components and systems have been defined, the `makeEcs` macro gener
 
 # Defining components
 
-Creating components is as simple as wrapping their type definition with `registerComponents`. This will process any `typedef` and pass the block through unaltered.
+Components are the data and attributes that make up the program state. They act as the parameters to dispatch systems, and therefore define the granularity of program behaviour. Whilst system program code is fixed at compile time, entities can freely change components to drive system execution.
+
+Component design is conceptually flexible. They may contain all or part of the raw data for systems to process, act as program events, orchestrate collections of entities, modify behaviour as dataless tags, serve as descriptive annotations, and so on as required.
+
+Creating components is as simple as wrapping type definitions with `registerComponents`. This will process any `typedef` and pass the block through unaltered.
 
 `registerComponents` takes two parameters:
 
 * An `ECSCompOptions` object. This controls code generation for these components.
-* A block of code with typedefs in it.
+* A block of code with type definitions.
 
 For example, to create three components, `A`, `B`, and `C`.
 
 ```nim
 import polymorph
 
-# 'defaultCompOpts' and other ECS option types are defined in
-# 'sharedTypes.nim'.
-registerComponents(defaultCompOpts):
+# Create components with the default options.
+registerComponents defaultCompOpts:
   type
     A = object
+
     B = object
       text: string
+
     C = object
       value: int
 ```
 
-You can use `registerComponents` multiple times before actually constructing the ECS, for example to split component definitions over separate modules.
+You can use `registerComponents` multiple times before actually constructing the ECS, for example to split component definitions over separate modules. Each `registerComponents` may have separate options.
 
-Each `registerComponents` may have separate options.
-
-As a special case, you can include type definitions in `registerComponents` that should not be made into components with the `{.notComponent.}` pragma. This can be useful when you want to refer to types within component definitions, but can't define them externally to the type block.
+As a special case, you can include type definitions in `registerComponents` that should not be made into components with the `{.notComponent.}` pragma. This can be useful when you want to refer to types within component definitions, but can't (or don't want to) define them externally to the type block.
 
 ```nim
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
-    Data {.notComponent.} = object
-      value: int
-    E = object
-      data: Data
+    SubData {.notComponent.} = object
+      contents: seq[int]
+
+    Data = object
+      value: SubData
 ```
 
 ## `registerComponents` generated types
@@ -307,7 +316,7 @@ Polymorph implements the dot accessors `.` and `.=` for instance types so that f
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Foo = object
       text: string
@@ -373,7 +382,7 @@ Instance types are always defined as the component type name postfixed with "Ins
 
 ```nim
 # Parse and generate instance types.
-registerComponents(10):
+registerComponents defaultCompOpts:
   type
     A = object
       b: BInstance
@@ -428,7 +437,7 @@ Example of use:
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type Comp1 = object
 
 makeEcs()
@@ -442,7 +451,9 @@ caseComponent compList[0].typeId:
 
 # Defining systems
 
-Systems perform all the program logic for an ECS. Each system is essentially a proc which loops over a set of components to perform some work.
+Systems dispatch code over entities with a specific set of components, and program behaviour is directed by the composition of entities. Systems may be completely stand alone, or work together through components as data pipelines.
+
+Systems are efficient: their state is incrementally updated by entity changes so they don't perform work to iterate, and they execute as batch operations without call overhead. Even single line systems can be powerful processing tools.
 
 For systems to participate in an ECS, they must first be defined with `defineSystem` by passing the name of the system along with the component types it uses. This allows `makeEcs` to create ECS operations based on how systems and components interact.
 
@@ -461,22 +472,22 @@ Once a system is defined (whether using `defineSystem` or `makeSystem`), the sys
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Comp1 = object
     Comp2 = object
 
 # Define a system.
-defineSystem("mySystem1", [Comp1])
+defineSystem "mySystem1", [Comp1]
 
 # Access the instantiated system.
 assert sysMySystem1.count == 0
 
 # Define a system and pass compile options to it.
-defineSystem("mySystem2", [Comp1, Comp2], defaultSysOpts)
+defineSystem "mySystem2", [Comp1, Comp2], defaultSysOpts
 
 # Define a system and code body at the same time.
-makeSystem("mySystem3", [Comp1, Comp2]):
+makeSystem "mySystem3", [Comp1, Comp2]:
   all:
     echo "Comp1: ", item.comp1
 
@@ -484,56 +495,15 @@ makeSystem("mySystem3", [Comp1, Comp2]):
 makeEcs()
 
 # Define a code body for a previously defined system.
-makeSystemBody("mySystem1"):
+makeSystemBody "mySystem1":
   all:
     echo "Comp1: ", item.comp1
 
 # Define a code body for a previously defined system with makeSystem.
 # Options are retrieved from the system's defineSystem.
-makeSystem("mySystem2", [Comp1, Comp2]):
+makeSystem "mySystem2", [Comp1, Comp2]:
   all:
     echo "Comp1: ", item.comp1
-```
-
-## Providing custom system fields
-
-Passing field definitions to `defineSystem` will add them to the system variable declaration.
-
-```nim
-const sysOpts = EcsSysOptions()
-
-defineSystem("mySystem", [Comp1], sysOpts):
-  myFieldStr: string
-
-sysMySystem.myFieldStr = "Foo"
-
-makeSystemBody("mySystem"):
-  echo "myFieldStr = ", sys.myFieldStr
-```
-
-These fields can also be initialised at system creation.
-
-```nim
-defineSystem("mySystem", [Comp1], sysOpts):
-  myFieldStr = "Foo"
-```
-
-When the type cannot be inferred but needs to be initialised, you can explicitly define it.
-
-Since `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
-
-```nim
-defineSystem("mySystem", [Comp1], sysOpts):
-  myFieldStr -> string = "Foo"
-```
-
-Fields can also be added when defining a system and its body with `makeSystem` by using the `fields` block. If the system has already been defined these fields are checked to match the definition.
-
-```nim
-makeSystem("mySystem", [Comp1]):
-  fields:
-    myFieldInt: int
-  echo "This system has a custom field: ", sys.myFieldInt
 ```
 
 ## Committing systems
@@ -550,7 +520,7 @@ Separating `makeEcs` and `commitSystems` allows for more design flexibility, for
 ```nim
 # CommitSystems uses the string parameter to create a wrapper proc that
 # runs the systems it outputs in order.
-commitSystems("runMySystems")
+commitSystems "runMySystems"
 
 # Run systems output by `commitSystems` above.
 runMySystems()
@@ -572,23 +542,23 @@ import polymorph
 
 var executionOrder: seq[string]
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type Foo = object
 
 # The order systems are defined sets the order they're run when output
 # by `commitSystems`.
-defineSystem("a", [Foo], EcsSysOptions(maxEntities: 1))
-defineSystem("b", [Foo])
+defineSystem "a", [Foo], EcsSysOptions(maxEntities: 1)
+defineSystem "b", [Foo]
 
 # Define the system "c" and also add a code body.
-makeSystem("c", [Foo]):
+makeSystem "c", [Foo]:
   executionOrder.add sys.name
 
 # Seal and generate the ECS.
 makeEcs()
 
 # Define the code body for "a".
-makeSystemBody("a"):
+makeSystemBody "a":
   executionOrder.add sys.name
 
 # Both "c" and "a" have bodies waiting to be committed, but "b" doesn't
@@ -596,14 +566,14 @@ makeSystemBody("a"):
 #
 # As systems are run in the order they're defined, the output proc will
 # run "a" then "c".
-commitSystems("runAC")
+commitSystems "runAC"
 
 # Define the body for "b". This will be included in the next `commitSystems`.
-makeSystemBody("b"):
+makeSystemBody "b":
   executionOrder.add sys.name
 
 # Only "b" has an uncommitted code body so the output will just run "b".
-commitSystems("runB")
+commitSystems "runB"
 
 # Execute the two run procs.
 runAC()
@@ -611,6 +581,123 @@ runB()
 
 # Check the order of execution is as expected.
 assert executionOrder == @["a", "c", "b"]
+```
+
+## Running systems at time intervals
+
+The `timings` field in `EcsSysOptions` lets you control the type of timing code the system uses:
+
+- `stNone`: the default is to not insert timing code.
+
+- `stRunEvery`: insert code to allow the system to run at intervals.
+
+  Inserts the following fields into the system:
+  - `lastTick`: keeps track of the last time a system was executed.
+  - `runEvery`: when this field is non-zero, the system will only trigger after this many seconds.
+    A value of zero runs the system without delay as if it were defined with `stNone`.
+
+- `stProfiling`: implies `stRunEvery` and adds fields for measuring system performance.
+  
+  The following procedures access per run timings:
+
+  - `timePerRun`: time taken for the last system run.
+  - `timePerItem`: the `timePerRun` divided by the number of items in the system.
+
+  Min/max timing procedures return accumulated times over multiple system runs:
+  
+  - `minTimePerItem`: the minimum time recorded for a single item so far.
+  - `maxTimePerItem`: the maximum time recorded for a single item so far.
+  - `minTimePerRun`: the minimum time recorded for a system run so far.
+  - `maxTimePerRun`: the maximum time recorded for a system run so far.
+  
+  These timings can be manually reset with the `resetMinMax` procedure.
+ 
+
+
+```nim
+import polymorph, os, times
+
+registerComponents defaultCompOpts:
+  type Foo = object
+    seen: int
+
+makeSystemOpts "runEvery", [Foo], EcsSysOptions(timings: stRunEvery):
+  all: item.foo.seen += 1
+
+makeSystemOpts "sleepy", [Foo], EcsSysOptions(timings: stProfiling):
+  all: sleep(10)
+
+makeEcs()
+commitSystems "run"
+
+sysRunEvery.runEvery = 0.1
+
+let entity = newEntityWith(Foo())
+
+for i in 0 ..< 200:
+  run()
+
+echo "Last: ", sysSleepy.timePerRun
+echo " Min: ", sysSleepy.minTimePerRun
+echo " Max: ", sysSleepy.maxTimePerRun
+
+let
+  start = cpuTime()
+
+while cpuTime() - start < 1.0:
+  run()
+
+echo "Seen: ", entity.fetch Foo
+```
+
+Output (timings will vary as `sleep` works with OS time slices):
+
+```
+Last: 0.016
+ Min: 0.015
+ Max: 0.025
+Seen: (seen: 37)
+```
+
+## Adding fields to systems
+
+Passing field definitions to `defineSystem` will add them to the system variable declaration.
+
+```nim
+const sysOpts = EcsSysOptions()
+
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr: string
+
+sysMySystem.myFieldStr = "Foo"
+
+makeSystemBody "mySystem":
+  echo "myFieldStr = ", sys.myFieldStr
+```
+
+These fields can also be initialised at system creation.
+
+```nim
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr = "Foo"
+```
+
+When the type cannot be inferred but needs to be initialised, you can explicitly define it.
+
+Since `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
+
+```nim
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr -> string = "Foo"
+```
+
+Fields can also be added when defining a system and its body with `makeSystem` by using the `fields` block. If the system has already been defined these fields are checked to match the definition.
+
+```nim
+makeSystem "mySystem", [Comp1]:
+  fields:
+    myFieldInt: int
+  echo "This system has a custom field: ", sys.myFieldInt
 ```
 
 ## Grouping systems
@@ -632,22 +719,22 @@ Group names are case insensitive.
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type Comp1 = object
 
-makeSystem("g1a", [Comp1]): discard
-makeSystem("g1b", [Comp1]): discard
+makeSystem "g1a", [Comp1]: discard
+makeSystem "g1b", [Comp1]: discard
 
 # Gather previously defined systems into a group.
 defineGroup "group1"
 
-makeSystem("g2a", [Comp1]): discard
-makeSystem("g2b", [Comp1]): discard
+makeSystem "g2a", [Comp1]: discard
+makeSystem "g2b", [Comp1]: discard
 
 # Add specific systems to a group.
 defineGroup "group2", ["g2a", "g2b"]
 
-makeSystem("ungrouped", [Comp1]): discard
+makeSystem "ungrouped", [Comp1]: discard
 
 makeEcs()
 
@@ -663,83 +750,157 @@ runUngrouped()
 
 ## System anatomy
 
-Systems offer several labelled blocks that allow executing code in particular contexts. These are classified into two categories: system scope blocks and work item blocks.
+Systems offer several labelled blocks that allow executing code in different contexts. These are classified into two categories: *system scope* blocks and *work item* blocks.
 
-System scope blocks (`init`, `start`, `finish`) are run at specific points in a system's execution. They may be written at any point in the root of the system's body, but are *extracted* from the body and pieced together in the order they're written, to be executed within the appropriate scope.
+*System scope* blocks (`init`, `start`, and `finish`) are run at specific points in a system's execution. They may be written at any point in the root of the system's body, but are *extracted* from the body and pieced together in the order they're written, to be executed within the appropriate scope.
 
-Work item blocks (`all`, `stream`) are run for items in the system's work list. These blocks are expanded in place within the system body. Multiple occurrences of these blocks are run as they are encountered within the system body and allow multiple passes of the system's work list, potentially with other code executed between them.
-
-Systems can be disabled by setting `disabled = true` in the system variable. When disabled, a system will not perform any blocks, even `init`, until `disabled = false`.
-
-Systems can be paused by setting `paused = true` in the system variable. When paused, the system scope blocks `init`, `start`, and `finish` are still executed. This allows control of paused state within these blocks.
+*Work item* blocks (`all` and `stream`) are run for items in the system's work list. These blocks are expanded in place within the system body, allowing multiple processing passes within a system.
 
 Code in the root of a system body is executed when the system is run and `paused` and `disabled` are `false`.
 
 Within a system the `sys` template refers to the variable for the current system.
+
 ### System scope blocks
 
-- `init:` this is run when the system's `initialised` flag is unset. After this block is run the system's `initialised` boolean is set to true. You can set `initialised` to false to re-trigger this block.
-- `start:` executed every time a non-disabled system begins running, before the check for `sys.paused`. The `start` block is in the same scope as the system body and the `all`, `stream`, and `finish` blocks, so variables and data defined in `start` can be used within these blocks. The `start` block can also be useful to change `sys.paused` according to some condition to inhibit or allow the system body to run.
-- `finish:` run after a system body has finished executing, regardless of `sys.paused` state. This can be useful for cleaning up or changing `sys.paused` state.
+- `init:` run when the system's `initialised` field is `false`. After execution, `initialised` is set to `true`.
+- `start:` executed every time a non-disabled system begins running, before the check for `sys.paused`.
+  
+  The `start` block is in the same scope as the system body and the `all`, `stream`, and `finish` blocks, so variables and data defined in `start` can be used within these blocks.
+
+- `finish:` run after a system body has finished executing, regardless of `sys.paused` state.
 
 ### Work item blocks
 
 These block include an `item` template to access the current row entity's components. This template provides access to the entity being processed as `item.entity`, and components the system uses defined as the type name in lower case (eg; `item.myComponent`).
 
-- `all:` this is usually where most processing is performed and is executed for each entity/component combination in the system's work list.
+- `all:` run for every entity in the system.
 
-- `stream:` process a portion of the entities in the system. This has several variations:
-  - `stream:` process `sys.streamRate` entities. If `sys.streamRate` is zero, all entities are processed as if this were an `all` block.
-  - `stream N:` the same as `stream`, but overrides `sys.streamRate` to fix the number of entities processed per run to `N`.
-  - `stream multipass:` the same as `stream`, but will force `sys.streamRate` entities to be processed per run. If the number of entities is less than `sys.streamRate`, they will be reprocessed until `sys.streamRate` is met.
-  - `stream multipass N:` the same as `stream multipass` but overrides `sys.streamRate` to `N` entities.
-  - `stream stochastic:` processes `sys.streamRate` entities selected at random from the system.
-  - `stream stochastic N:` the same as `stream stochastic` but overrides `sys.streamRate` to `N` entities.
+- `stream:` run for an arbitrary number of entities in the system:
+
+  - `stream:` run for up to `sys.streamRate` entities in order. If `sys.streamRate` is zero, all entities are processed as if this were an `all` block.
+  - `stream N:` run for up to `N` entities in order.
+  - `stream multipass:` run for `sys.streamRate` entities, reprocessing entities in order if necessary.
+  - `stream multipass N:` run for `N` entities, reprocessing entities in order if necessary.
+  - `stream stochastic:` selects `sys.streamRate` entities, may select entities multiple times.
+  - `stream stochastic N:` selects `N` entities, may select entities multiple times.
+
+```nim
+import polymorph, random
+
+registerComponents defaultCompOpts:
+  type DemoBlocks = object
+
+makeSystem "allTheBlocks", [DemoBlocks]:
+  init:
+    echo "Init: first run for ", sys.name
+    randomize()
+
+  start:
+    echo "Start: system entities: ", sys.count
+  
+  echo "System running..."
+
+  template entId: string = "entity " & $item.entity.entityId.int
+  let srStr = "(rate: " & $sys.streamRate & ")"
+
+  all:
+    echo "  All: ", entId
+
+  stream:
+    echo "  Stream: ", srStr," ", entId
+
+  let itemCount = 3
+  stream itemCount:
+    echo "  Stream up to ", itemCount, ": ", entId
+
+  stream multipass 4:
+    echo "  Stream multipass 4: ", entId
+
+  stream stochastic 2:
+    echo "  Stream stochastic 2: ", entId
+
+  stream stochastic:
+    echo "  Stream stochastic ", srStr, ": ", entId
+
+  echo "System completed."
+
+  start:
+    sys.streamRate = 1
+    echo "Start: set stream rate to ", sys.streamRate
+
+  finish:
+    echo "Finish: finished execution for ", sys.name
+  
+makeEcs()
+commitSystems "run"
+for i in 0 ..< 3:
+  discard newEntityWith(DemoBlocks())
+run()
+```
+
+The above outputs (stochastic blocks may vary):
+```
+Init: first run for allTheBlocks
+Start: system entities: 3
+Start: set stream rate to 1
+System running...
+  All: entity 1
+  All: entity 2
+  All: entity 3
+  Stream: (rate: 1) entity 1
+  Stream up to 3: entity 2
+  Stream up to 3: entity 3
+  Stream multipass 4: entity 1
+  Stream multipass 4: entity 2
+  Stream multipass 4: entity 3
+  Stream multipass 4: entity 1
+  Stream stochastic 2: entity 2
+  Stream stochastic 2: entity 1
+  Stream stochastic (rate: 1): entity 3
+System completed.
+Finish: finished execution for allTheBlocks
+```
+
+### Execution control
+
+Systems can be paused by setting the system `paused` field to `true`.
+
+When paused, the system body doesn't run, but *system scope* blocks are still executed. This can be useful for things like self pausing "fire once" systems and conditional system execution.
+
+Systems can be disabled by setting the system `disabled` field to `true`. When disabled a system performs no work until `disabled` is `false`.
 
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
-  type Comp1 = object
+registerComponents defaultCompOpts:
+  type DemoExecCtrl = object
 
-makeSystem("allTheBlocks", [Comp1]):
-  init:
-    echo "Init: first run for ", sys.name
+makeSystem "fireOnce", [DemoExecCtrl]:
+  finish: sys.paused = true
+
+  echo "One time."
+
+makeSystem "fireAlt", [DemoExecCtrl]:
+  fields:
+    ticks: int
   start:
-    echo "Start: beginning execution for ", sys.name
-  
-  echo "Body: this system has started running!"
-  
-  all:
-    echo "All: running for entity ", item.entity.entityId.int
-  
-  echo "Body: the all block has finished!"
-  
-  stream:
-    echo "Stream: running for entity ", item.entity.entityId.int
-  
-  echo "Body: the stream block has finished!"
+    sys.paused = sys.ticks mod 3 == 0
+    sys.ticks += 1
 
-  finish: echo "Finish: finished execution for ", sys.name
-  start: echo "Start: still beginning execution for ", sys.name
+  echo "Alternating: ", sys.ticks
 
 makeEcs()
-commitSystems("run")
-let entity = newEntityWith(Comp1())
-run()
+commitSystems "run"
+
+for i in 0 ..< 5: run()
 ```
 
-The above outputs:
+Outputs:
 ```
-Init: first run for allTheBlocks
-Start: beginning execution for allTheBlocks
-Start: still beginning execution for allTheBlocks
-Body: this system has started running!
-All: running for entity 1
-Body: the all block has finished!
-Stream: running for entity 1
-Body: the stream block has finished!
-Finish: finished execution for allTheBlocks
+One time.
+Alternating: 2
+Alternating: 3
+Alternating: 5
 ```
 
 ### Removing components during `all` or `stream` blocks
@@ -755,7 +916,7 @@ Alternatively, to perform compile time checking with destructive iteration pass 
 To help with these cases without needing run time or compile time checks, the `entity` variable accessible in these blocks references the entity that the row *originally* started with, regardless of the system state. This can be useful when you want to perform destructive operations to the row without worrying about the `item` being invalidated:
 
   ```nim
-  makeSystem("processEntities", [SomeComponent]):
+  makeSystem "processEntities", [SomeComponent]:
     all:
       # Removing a component used by the system will remove
       # the row and invalidates `item`.
@@ -774,7 +935,7 @@ To see information about which system iteration loops are affected by removes/de
 Another option for deleting entities is to use the system's `deleteList`. Any entity added to this `seq` will be removed after the `finish` block is executed, and the list is then cleared. These deletes don't affect iteration, but simple appending may cause a heap allocation and potentially memory moving as part of the standard `seq` operation. For extensive use of `deleteList`, it may be worth setting the capacity at the start of system execution.
 
 ```nim
-makeSystem("deleteEntities", [SomeComponent]):
+makeSystem "deleteEntities", [SomeComponent]:
   all:
     sys.deleteList.add entity
 ```
@@ -802,7 +963,7 @@ mySystem.remove Comp1, Comp2, Comp3
 Within system blocks you can use the `sys` template with these utilities to act on the current system:
 
 ```nim
-makeSystem("removeComp1", Comp1):
+makeSystem "removeComp1", [Comp1]:
   finish: sys.remove Comp1
 ```
 
@@ -837,7 +998,7 @@ In particular, `newEntityWith` can be a very performant way to create entities, 
 This means that the output code consists of simply updating the entity's internal list and producing static system updates only where parameter components fully satisfy systems. No conditional work is required.
 
 ```nim
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Comp1 = object
       value: int
@@ -846,7 +1007,7 @@ registerComponents(defaultCompOpts):
     Comp3 = object
       value: float
 
-makeSystem("mySystem", [Comp1, Comp2]):
+makeSystem "mySystem", [Comp1, Comp2]:
   all: discard
 
 makeEcs()
@@ -919,7 +1080,7 @@ entity.remove Comp1, Comp2
 
 ## Deleting entities
 
-Entities are deleting using the `delete` operation. This operation is fully run time bound, as components cannot be determined at compile time. However, like other operations, it is generated as a static proc from your design at compile time, so fewer components in a design will generate less code.
+Entities are deleting using the `delete` operation. This operation is fully run time bound, as components cannot be determined at compile time. However, like other operations, it is generated as a static procedure from your design at compile time, so fewer components in a design will generate less code.
 
 In general, the performance of `delete` depends on how many components the entity has. Deleting also doesn't need to bookkeep the components being removed like `remove` does.
 
@@ -971,7 +1132,7 @@ This macro lets you mix the original component types and `ref` container types, 
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Comp1 = object
       value: int
@@ -1051,7 +1212,7 @@ This comes in two flavours:
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     A = object
       value: int
@@ -1163,7 +1324,7 @@ This can be useful when you want to define logic that uses the ECS and must be a
 In particular, this is invaluable for library components/systems, where some initialisation or utility procedures may use the ECS, but the library doesn't have control over when `makeEcs` is run.
 
 ```nim
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type Counter = object
     value: int
 
@@ -1225,7 +1386,7 @@ Another example is for meta-components. One component can contain information th
   Components are added by appending to the `seq[Component]` result. It's possible to add any number of components to the result, as long as there aren't any repeated types. It's also valid to not add to the result and elide the component from the entity.
 
   ```nim
-  registerComponents(defaultCompOpts):
+  registerComponents defaultCompOpts:
     type
       Original = object
         data: int
@@ -1304,11 +1465,11 @@ import polymorph
 template defineSay*(compOpts: EcsCompOptions, sysOpts: EcsSysOptions) {.dirty.} =
   # The {.dirty.} pragma passes the code through for outside access.
 
-  registerComponents(compOpts):
+  registerComponents compOpts:
     type Say* = object
       text*: string
 
-  makeSystemOpts("sayer", [Say], sysOpts):
+  makeSystemOpts "sayer", [Say], sysOpts:
     all: echo item.say.text
     finish: sys.remove Say
 ```
@@ -1327,26 +1488,26 @@ defineSay(compOpts, sysOpts)
 
 # Add our own component and system.
 
-registerComponents(compOpts):
+registerComponents compOpts:
   type
-    SayEvery = object
+    SayOnTick = object
       current, ticks: Natural
 
-makeSystemOpts("echoTicks", [SayEvery], sysOpts):
+makeSystemOpts "sayTicks", [SayOnTick], sysOpts:
   all:
-    let say = item.sayEvery
-    if say.current mod say.ticks == 0:
-      entity.add Say(text: $say.current)
-    say.current += 1
+    let sot = item.sayOnTick
+    if sot.current mod sot.ticks == 0:
+      entity.add Say(text: $sot.current)
+    sot.current += 1
 
 # Seal and generate.
 
 makeEcs()
-commitSystems("run")
+commitSystems "run"
 
 # Try out the ECS.
 
-let entity = newEntityWith(SayEvery(ticks: 25))
+let entity = newEntityWith(SayOnTick(ticks: 25))
 for i in 0 ..< 100: run()
 ```
 The following output is emitted:
@@ -1528,10 +1689,10 @@ This runs through each memory access the system is making and records the differ
 ```nim
 import polymorph, random
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type Comp1 = object
 
-makeSystem("frag", [Comp1]):
+makeSystem "frag", [Comp1]:
   all: discard
 
 makeEcs()
@@ -1629,7 +1790,7 @@ Analysis for frag (100 rows of 1 components):
 
 # Owned components and removing indirection
 
-System can 'inline' component data into their work list, ensuring that each system item contains component data side by side in memory. Systems that own all of their components have no indirection and process memory in a forward access pattern. This offers a theoretically higher iteration speed, fewer cache misses, and potentially SIMD optimisations.
+Systems can 'inline' component data into their work list, ensuring that each system item contains component data side by side in memory. Systems that own all of their components have no indirection and process memory in a forward access pattern. This offers a theoretically higher iteration speed, fewer cache misses, and potentially SIMD optimisations.
 
 The practical performance advantages from this, however, depend on the nature of the system's work, the size of the components, and whether all or only some of the component data is used. This guarantee only applies to the owning system.
 
@@ -1640,7 +1801,7 @@ For components that are to be added and removed often from entities, owned compo
 To declare component ownership the system must be defined using `defineSystemOwner`. This takes a secondary set of components that the system will manage. Owned components must be components the system uses.
 
 ```nim
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     A = object
     B = object
@@ -1648,7 +1809,7 @@ registerComponents(defaultCompOpts):
 
 # This system uses components A, B, and C, and owns the storage for
 # components A and C.
-defineSystemOwner("owns", [A, B, C], [A, C], defaultSysOpts)
+defineSystemOwner "owns", [A, B, C], [A, C], defaultSysOpts
 ```
 
 > **Note:** A component type can only be owned by a single system.
@@ -1661,7 +1822,7 @@ References to owned components outside of the owning system itself, such as in o
 
 > **Note:** Owned components have the same semantics as the source type when accessed within the owning system:
 > ```nim
-> makeSystemBody("owns"):
+> makeSystemBody "owns":
 >   all:
 >     # Component instances used for non-owned components have reference
 >     # semantics; copies of the instance will refer to the same memory
@@ -1687,13 +1848,13 @@ For example:
 ```nim
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     A = object
     B = object
     C = object
 
-defineSystemOwner("fullyOwned", [A, B, C], [A, B, C], defaultSysOpts)
+defineSystemOwner "fullyOwned", [A, B, C], [A, B, C], defaultSysOpts
 
 makeEcs()
 
@@ -1722,15 +1883,15 @@ For example:
 
 ```nim
 # The "fullyOwned" system holds the storage for A, B, C, and D.
-defineSystemOwner("fullyOwned", [A, B, C, D], [A, B, C, D], sysOpts)
+defineSystemOwner "fullyOwned", [A, B, C, D], [A, B, C, D], sysOpts
 
 # Both these systems rely on `fullyOwned` to exist as they use its components.
-defineSystem("refToOwned1", [A, B, C, D], sysOpts)
-defineSystem("refToOwned2", [A, B], sysOpts)
+defineSystem "refToOwned1", [A, B, C, D], sysOpts
+defineSystem "refToOwned2", [A, B], sysOpts
 
 # This system requires owned components C, and D from `fullyOwned` and
 # also has its own owned components, E and F.
-defineSystemOwner("partiallyOwned", [C, D, E, F], [E, F], sysOpts)
+defineSystemOwner "partiallyOwned", [C, D, E, F], [E, F], sysOpts
 
 makeEcs()
 
@@ -1765,48 +1926,109 @@ After `makeEcs` has completed generating the ECS from the identity, the state is
 
 This allows the same identity (such as the default identity) to generate multiple different ECS outputs in serial.
 
-The resultant ECS outputs are incompatible and must be generated in separate modules, otherwise the type names will clash. This means you can't use entities from multiple ECS together, though you can communicate by sharing memory outside of entities.
+The resultant ECS outputs are incompatible and must be generated in separate modules, otherwise the type names will clash as, by default, they are exported. This means you can't use entities from multiple ECS together, though you can communicate by standard means outside of the ECS.
 
 The `ComponentTypeId` for components created in `registerComponents` is consecutively allocated by identity, so whilst the multiple ECS outputs are incompatible directly, the `typeId` will be unique for each component defined through the same identity.
 
-You therefore must provide unique names for components and systems that use the same identity.
+You must provide unique names for components and systems that use the same identity.
 
-For example:
+Here's a contrived example:
 
 ```nim
-# Module1
+# Module multipleecs1
 
 import polymorph
 
-registerComponents(defaultCompOpts):
-  type Comp1 = object
+var someData*: int
 
-makeSystem("test1", [Comp1]):
-  all: discard
+registerComponents defaultCompOpts:
+  type Comp1* = object
+    value: int
+
+makeSystem "test1", [Comp1]:
+  all: item.comp1.value += 1
 
 makeEcs()
+commitSystems("run")
+
+let e = newEntityWith(Comp1(value: 2))
+
+run()
+someData = e.fetch(Comp1).value
 ```
 
 ```nim
-# Module2
+# Module multipleecs2
 
 import polymorph
 
-registerComponents(defaultCompOpts):
+var someData*: int
+
+registerComponents defaultCompOpts:
   type Comp2 = object
+    value: int
 
-makeSystem("test2", [Comp2]):
-  all: discard
+makeSystem "test2", [Comp2]:
+  all: item.comp2.value += 2
 
 makeEcs()
+commitSystems("run")
+
+let e = newEntityWith(Comp2(value: 2))
+
+run()
+someData = e.fetch(Comp2).value
+
 ```
 
 ```nim
-# Module3
+import multipleecs1, multipleecs2
 
-import module1, module2
+# Both ECS are generated and run.
 
-# Both ECS are generated.
+# Note that as both ECS export their types, operations would require
+# disambiguation internally to use in this module, which is not possible.
+
+assert multipleecs1.someData == 3
+assert multipleecs2.someData == 4
+```
+
+## Private ECS
+
+You can tell Polymorph to automatically strip export markers from generated code, allowing an ECS to be used within a private scope such as a block statement.
+
+To declare an ECS as private, the identity has to have the `private` option set. This can only be done in a compile time context such as `static` blocks.
+
+```nim
+import polymorph
+
+static: defaultIdentity.setPrivate true
+
+let result =
+  block:
+    registerComponents defaultCompOpts:
+      type Calc = object
+        data: int
+    
+    makeSystem "calc", [Calc]:
+      fields: value: int
+      all: sys.value += item.calc.data
+    
+    makeEcs()
+    commitSystems "run"
+
+    for i in 0 ..< 10:
+      discard newEntityWith(Calc(data: 123 * i))
+
+    run()
+
+    sysCalc.value
+
+echo result
+```
+Output:
+```
+5535
 ```
 
 ## Multiple identities
@@ -1819,15 +2041,14 @@ However, it can be useful to create separate ECS identities to fully isolate an 
 ```nim
 import polymorph
 
-const myId = newEcsIdentity("myId")
+const myId = newEcsIdentity "myId"
 
-myId.registerComponents(defaultCompOpts):
+myId.registerComponents defaultCompOpts:
   type Comp1 = object
 
-myId.makeSystem("test1", [Comp1]):
-  all: discard
+myId.makeSystem "test1", [Comp1]: discard
 
-myId.makeEcs(defaultEntOpts)
+myId.makeEcs defaultEntOpts
 ```
 
 # Future work
@@ -1835,7 +2056,7 @@ myId.makeEcs(defaultEntOpts)
 ## Performance
 
 - Optimise component metadata management.
-- Allow component storage to select between 'array of struct' and 'struct of array'.
+- Provide an option to split component storage into separate lists per field.
 - Heuristics for inserting components and systems to minimise fragmentation with high system churn.
 - Automatically group systems that interact into threads (see the [automated threading](https://github.com/rlipsc/polymorph/issues/4) issue).
 
