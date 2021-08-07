@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.1 2021-8-7
+
+### Added
+
+- Private scope ECS generation.
+- `sysProcessed` can be used within `stream` blocks to get the number of rows/entities the block has processed.
+
+### Fixed
+
+- `defineSystemOwner` wasn't passing custom fields.
+- `stream multipass` and `stream stochastic` no longer produce unknown identifier errors.
+- `stream` blocks starting at the last item no longer skip to the first item.
+- Streaming owner systems no longer process an extra row.
+- Using non-component types in system requirements now produces a compile error.
+- `useSet` now includes components to the set.
+- The correct ident is now used internally for `transition`.
+- The `onSystemAddTo` and `onSystemRemoveFrom` events no longer fail to compile in rare cases.
+
+### Improved
+
+- System stream parameters can be unordered.
+- More features documented in the `README.md`.
+
+### Changed
+
+- Owner systems now index from zero. Owned component instances are **`valid` when uninitialised**, and `fetch` returns an instance set to `-1` when it cannot find an owned component.
+
 ## v0.2.0 2021-7-23
 
 This release is a complete internal restructuring to support system-owned components, new events, and a macrocache backend. Whilst effort has been made to maintain the current API, there are some significant changes.
@@ -133,7 +160,7 @@ This release is a complete internal restructuring to support system-owned compon
   
   - `ecsStrict` includes a check at compile time to catch accessing `item` after a remove or delete has affected the system (which can potentially change what `item` refers to).
 
-### Changes
+### Changed
 
 - The library now uses the `macrocache` module to store the ECS state instead of `{.compileTime.}` variables.
 
