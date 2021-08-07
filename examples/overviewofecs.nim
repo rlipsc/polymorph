@@ -2,11 +2,11 @@ import polymorph
 
 # Design stage.
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     MyComponent = object
 
-makeSystem("mySystem", [MyComponent]):
+makeSystem "mySystem", [MyComponent]:
   all:
     echo "MyComponent: ", item.myComponent
 
@@ -15,7 +15,7 @@ makeSystem("mySystem", [MyComponent]):
 makeEcs()
 
 # Output the system code.
-commitSystems("runSystems")
+commitSystems "runSystems"
 
 # Run the committed systems in the order they exist in the code.
 runSystems()

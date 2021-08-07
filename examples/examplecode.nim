@@ -1,7 +1,7 @@
 import polymorph
 
 # Define components types.
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Position = object
       x, y: int
@@ -9,7 +9,7 @@ registerComponents(defaultCompOpts):
       x, y: int
 
 # Define logic to operate on a set of components.
-makeSystem("move", [Position, Velocity]):
+makeSystem "move", [Position, Velocity]:
   all:
     item.position.x += item.velocity.x
     item.position.y += item.velocity.y
@@ -18,7 +18,7 @@ makeSystem("move", [Position, Velocity]):
 makeEcs()
 
 # Output defined systems, executed with a proc named `run`.
-commitSystems("run")
+commitSystems "run"
 
 # Create an entity to use the "move" system.
 let

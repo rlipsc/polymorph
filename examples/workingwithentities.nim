@@ -9,7 +9,7 @@ registerComponents(defaultCompOpts):
     Comp3* = object
       value*: float
 
-makeSystem("mySystem", [Comp1, Comp2]):
+makeSystem "mySystem", [Comp1, Comp2]:
   all: discard
 
 makeEcs()

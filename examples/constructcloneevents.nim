@@ -1,6 +1,6 @@
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     Original = object
       data: int

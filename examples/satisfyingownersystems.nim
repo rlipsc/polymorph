@@ -1,12 +1,12 @@
 import polymorph
 
-registerComponents(defaultCompOpts):
+registerComponents defaultCompOpts:
   type
     A = object
     B = object
     C = object
 
-defineSystemOwner("fullyOwned", [A, B, C], [A, B, C], defaultSysOpts)
+defineSystemOwner "fullyOwned", [A, B, C], [A, B, C], defaultSysOpts
 
 makeEcs()
 
