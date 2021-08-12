@@ -1,5 +1,5 @@
 - [Project overview](#project-overview)
-  - [ECS](#ecs)
+  - [Entity-component-systems](#entity-component-systems)
   - [Polymorph](#polymorph)
   - [Project goals](#project-goals)
   - [Example code](#example-code)
@@ -54,11 +54,8 @@
 - [Writing component libraries](#writing-component-libraries)
 - [Code generation options](#code-generation-options)
   - [EcsCompOptions](#ecscompoptions)
-    - [EcsCompOptions fields](#ecscompoptions-fields)
   - [EcsSysOptions](#ecssysoptions)
-    - [EcsSysOptions fields](#ecssysoptions-fields)
   - [EcsEntityOptions](#ecsentityoptions)
-    - [EcsEntityOptions fields](#ecsentityoptions-fields)
 - [Compile switches](#compile-switches)
 - [Performance considerations](#performance-considerations)
   - [Memory access patterns](#memory-access-patterns)
@@ -77,17 +74,28 @@
 
 # Project overview
 
-This library provides a lean abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern (or ECS for short).
+This library provides a lean, generative abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern.
 
-## ECS
+## Entity-component-systems
 
-The ECS pattern lets you create sets of data types at run time and dispatch code for type combinations.
+This pattern, often abbreviated as ECS, lets you create sets of data types at run time and dispatch code over type combinations.
 
-  - A set of types is an **entity**.
-  - A data type is a **component**.
-  - A **system** is program logic running over components.
+- A set of types is an **entity**.
+- A data type is a **component**.
+- A **system** is program logic running over components.
 
-Advantages of using ECS include: high design agility, natively asynchronous, run time composition, [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID), naturally decoupled and reusable system code, encouraging machine friendly data oriented designs, and high performance through cache friendly batch processing.
+Entity-component-systems offer a way to structure programs 'bottom up' using run time composition and declarative dispatch without inheritance.
+
+Advantages of this pattern include:
+- [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID),
+- [inversion of control](https://en.wikipedia.org/wiki/Inversion_of_control),
+- removing [ambiguities, coupling, dependencies](https://en.wikipedia.org/wiki/Multiple_inheritance#The_diamond_problem) and slow virtual calls of inheritance trees,
+- avoiding the "conceptual crystallisation" of top down, class/object based design,
+- composing behaviour at run time for excellent design agility and rapid prototyping,
+- naturally isolated, decoupled, and reusable system code,
+- natively asynchronous,
+- encouraging machine friendly data oriented designs,
+- high performance through microarchitecture friendly batch processing over uniform lists.
 
 ## Polymorph
 
@@ -149,11 +157,11 @@ assert pos.x == 3 and pos.y == 0
 
 ## Compile time focus
 
-Adding and removing components generate updates for system lists based on the static types involved. These system state changes do the minimum run time work the system/component design allows for.
+When adding and removing components, the static type of the components involved is used to generate optimised code to directly update system lists. These system state changes do the minimum run time work the system/component design allows for.
 
 Functionality such as building entities from blueprints, cloning entities, and debugging utilities are also fully generated from your types and system design at compile time.
 
-The more that state can be determined at compile time, the less run time work is needed. Creating a new entity with a set of components fully specifies the entity state, and systems are unconditionally matched at compile time. Any system updates required are then output directly without any run time speculative work.
+The more that state can be determined at compile time, the less run time work is needed. Creating a new entity with a set of components fully specifies the entity state, and systems are unconditionally matched at compile time. Any system updates required are then generated as direct, static updates, without any run time speculative work.
 
 Adding and removing multiple components at once is also minimised at compile time, outputting single pass inline operations.
 
@@ -172,7 +180,7 @@ Adding and removing multiple components at once is also minimised at compile tim
 
 The language is extremely portable, compiling to C, C++, ObjC, and JavaScript, along with good Python interop. Nim's static typing and high level abstractions can be shared across domain boundaries and interface with a huge variety of ecosystems.
 
-Extensibility is a core philosophy, with hygienic macros using the language in a VM to process abstract syntax trees directly. Nim's compile time evaluation and well supported macros make this library possible.
+Extensibility is a core philosophy, with hygienic macros using the language in a VM to process abstract syntax trees directly. Nim's compile time evaluation and well supported metaprogramming make this library possible.
 
 ## Polymers companion library
 
@@ -192,7 +200,7 @@ Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) fo
   - [A console database browser](https://github.com/rlipsc/polymers/blob/master/demos/dbbrowser.nim).
   - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/demos/particledemo.nim).
   - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/demos/particlelife.nim).
-  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/demos/simplegame.nim).
+  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/demos/spaceshooter.nim).
   - [A simple web server](https://github.com/rlipsc/polymers/blob/master/demos/simplewebsite.nim).
 
 # Overview of building an ECS
@@ -301,7 +309,7 @@ Each type passed to `registerComponents` creates two other types to support its 
 
 1) An instance type, generated with the `Instance` postfix. This is used to point to a specific component's data in storage.
 
-2) A container type, generated with the `Ref` postfix. This is inherited from the `Container` type, and allows `seq[Component]` with different component types for [`construct`](#constructing-entities-at-run-time) to build arbitrary entities at run time.
+2) A container type, generated with the `Ref` postfix. This is inherited from the `Component` supertype, and allows `seq[Component]` with different component types for [`construct`](#constructing-entities-at-run-time) to build arbitrary entities at run time.
 
 ## Components and instance types
 
@@ -1526,7 +1534,7 @@ Polymorph offers three configuration types to control how code is generated.
 
 When passed to `registerComponents`, this object controls how these components are generated at compile time.
 
-### EcsCompOptions fields
+**EcsCompOptions fields:**
 
 - `maxComponents`: maximum amount of components when `cisArray` is selected for storage.
 - `componentStorageFormat`: Underlying storage format for components.
@@ -1543,7 +1551,7 @@ When passed to `registerComponents`, this object controls how these components a
 
 When passed to `defineSystem`, `defineSystemOwner`, or `makeSystem`, this object controls how systems are generated at compile time.
 
-### EcsSysOptions fields
+**EcsSysOptions fields:**
 
 - `maxEntities`: maximum entities this system can hold for `ssArray` storage, and for indexes set to `sifArray` or `sifAllocatedSeq`.
 - `storageFormat`: underlying storage format for the system groups.
@@ -1568,7 +1576,7 @@ When passed to `defineSystem`, `defineSystemOwner`, or `makeSystem`, this object
 
 When passed to `makeEcs`, this object controls how entities are generated at compile time.
 
-### EcsEntityOptions fields
+**EcsEntityOptions fields:**
 
 - `maxEntities`: controls the maximum amount of entities for fixed size formats (ignored for `esSeq`).
 - `componentStorageFormat`: choose the format of the component list in entity items.
