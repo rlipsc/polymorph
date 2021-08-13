@@ -28,6 +28,7 @@ type
     errCaseComponent*: ECSErrorResponse
     errCaseSystem*: ECSErrorResponse  # TODO
     errIncompleteOwned*: ECSErrorResponse
+  ECSStrDefault* = enum sdShowData, sdHideData
 
   ECSEntityOptions* = object
     ## Controls code generation for entities.
@@ -53,6 +54,7 @@ type
     # start of an entity's list rather than the end.
     useSet*: bool ## Use a set for hasComponent.
     errors*: ECSErrorResponses  ## Control how errors are generated.
+    strDefault*: ECSStrDefault ## Defines if the `$` operator should default to displaying component field data or just listing the components.
 
   # Component storage options
   ECSAccessMethod* = enum amDotOp

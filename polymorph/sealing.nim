@@ -461,6 +461,10 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     # compName matches the template provided by caseComponent.
     compName = ident "componentName"
     showData = ident "showData"
+    showDataDefault =
+      case id.strDefault
+      of sdHideData: ident "false"
+      of sdShowData: ident "true"
   var
     componentCount: int
   
@@ -498,7 +502,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       componentId.caseComponent:
         `res` = `compName`()
 
-    proc toString*(componentRef: ComponentRef, `showData`: bool = true): string =
+    proc toString*(componentRef: ComponentRef, `showData`: bool = `showDataDefault`): string =
       ## Display the name, type and data for a component reference.
       let tId = componentRef.typeId
       tId.caseComponent:
@@ -510,9 +514,9 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
           except:
             `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & $(componentInstanceType().componentCount).int & ")>\n"
 
-    proc `strOp`*(componentRef: ComponentRef, `showData`: bool = true): string = componentRef.toString(`showData`)
+    proc `strOp`*(componentRef: ComponentRef, `showData`: bool = `showDataDefault`): string = componentRef.toString(`showData`)
 
-    proc toString*(comp: Component, `showData` = true): string =
+    proc toString*(comp: Component, `showData` = `showDataDefault`): string =
       ## `$` function for dynamic component superclass.
       ## Displays the sub-class data according to the component's `typeId`.
       caseComponent comp.typeId:
@@ -522,7 +526,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     
     proc `strOp`*(comp: Component): string = comp.toString
 
-    proc toString*(componentList: ComponentList, `showData`: bool = true): string =
+    proc toString*(componentList: ComponentList, `showData`: bool = `showDataDefault`): string =
       ## `$` for listing construction templates.
       let maxIdx = componentList.high
       for i, item in componentList:
@@ -534,7 +538,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     
     proc `strOp`*(componentList: ComponentList): string = componentList.toString
 
-    proc toString*(construction: ConstructionTemplate, `showData`: bool = true): string =
+    proc toString*(construction: ConstructionTemplate, `showData`: bool = `showDataDefault`): string =
       for i, item in construction:
         `res` &= `strOp`(i) & ": " & item.toString(`showData`) & "\n"
 
@@ -643,6 +647,12 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
     entOpts = id.entityOptions
     maxEntId = entityIdUpperBound(entOpts.entityStorageFormat)
     sysStr = bindSym "systemStr"
+    showDataDefault =
+      case entOpts.strDefault
+      of sdHideData:
+        ident "false"
+      of sdShowData:
+        ident "true"
 
   # Build static array of system components.
   var ownedComponents = nnkBracket.newTree()
@@ -653,7 +663,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
   result = newStmtList()
 
   result.add(quote do:
-    proc listComponents*(entity: EntityRef, showData = true): string =
+    proc listComponents*(entity: EntityRef, showData = `showDataDefault`): string =
       ## List all components attached to an entity.
       ## The parameter `showData` controls whether the component's data is included in the output.
       if entity.alive:
@@ -694,7 +704,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
 
       else: `res` &= "[Entity not alive, no component item entry]\n"
 
-    proc `strOp`*(`entity`: EntityRef, showData = true): string =
+    proc `strOp`*(`entity`: EntityRef, showData = `showDataDefault`): string =
       ## `$` function for `EntityRef`.
       ## List all components and what systems the entity uses.
       ## By default adds data inside components with `repr`.
