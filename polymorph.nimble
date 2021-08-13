@@ -3,7 +3,7 @@ version       = "0.2.1"
 author        = "Ryan Lipscombe"
 description   = "An entity-component-system generator"
 license       = "Apache License 2.0"
-skipDirs      = @["examples"]
+skipDirs      = @["examples", "tests"]
 
 requires "nim >= 1.4.2"
 
