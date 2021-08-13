@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.2 2021-8-13
+
+### Added
+
+- `EcsEntityOptions` includes a `strDefault` option to define the default behaviour of the `$` operator for entities and components between displaying component data and just listing components.
+
+### Fixed
+
+- Updated mention of `Container` to `Component` in the `README.md`.
+- Updated link in `README.md` for the Polymers `spaceshooter` demo.
+
+### Improved
+
+- Expanded the ECS introduction in the `README.md` and some clean up of headings for options.
+- Nimble doesn't mention an invalid project structure.
+
 ## v0.2.1 2021-8-7
 
 ### Added

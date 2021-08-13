@@ -1,5 +1,5 @@
 packageName   = "polymorph"
-version       = "0.2.1"
+version       = "0.2.2"
 author        = "Ryan Lipscombe"
 description   = "A compile time focused entity-component-system generator"
 license       = "Apache License 2.0"
