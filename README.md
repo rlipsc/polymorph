@@ -196,12 +196,12 @@ The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-m
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
   - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
 
-Included in the [demos](https://github.com/rlipsc/polymers/tree/master/demos) folder are examples combining different components from Polymers.
-  - [A console database browser](https://github.com/rlipsc/polymers/blob/master/demos/dbbrowser.nim).
-  - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/demos/particledemo.nim).
-  - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/demos/particlelife.nim).
-  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/demos/spaceshooter.nim).
-  - [A simple web server](https://github.com/rlipsc/polymers/blob/master/demos/simplewebsite.nim).
+Included in the [demos](https://github.com/rlipsc/polymers/tree/master/polymers/demos) folder are examples combining different components from Polymers.
+  - [A console database browser](https://github.com/rlipsc/polymers/blob/master/polymers/demos/dbbrowser.nim).
+  - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/polymers/demos/particledemo.nim).
+  - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/polymers/demos/particlelife.nim).
+  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/polymers/demos/spaceshooter.nim).
+  - [A simple web server](https://github.com/rlipsc/polymers/blob/master/polymers/demos/simplewebsite.nim).
 
 # Overview of building an ECS
 
