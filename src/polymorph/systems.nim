@@ -272,6 +272,49 @@ proc matchesTypeProvided(node: NimNode): bool =
   ## Tests to see if we're doing `field -> type`.
   node.kind == nnkInfix and node[0].kind == nnkIdent and node[0].strVal == "->"
 
+
+proc unpackComponentArg(id: EcsIdentity, node: NimNode): tuple[
+    typeName: string,
+    typeId: ComponentTypeId,
+    negate: bool] =
+
+  # Parse <typedesc> and <not typedesc>
+
+  const
+    sysPre = "System components "
+
+  case node.kind
+    
+    of nnkIdent, nnkSym:
+      (
+        typeName: node.strVal,
+        typeId: id.typeStringToId node.strVal,
+        negate: false
+      )
+    
+    of nnkPrefix:
+      if node[1].kind != nnkIdent:
+        error sysPre & "expected a type ident for negation but got " & $node.kind & ": '" & node.repr & "'"
+      
+      if node[0].strVal != "not":
+        error sysPre & "cannot process a type modifier of '" & node[0].repr & "'"
+      
+      (
+        typeName: node[1].strVal,
+        typeId: id.typeStringToId node[1].strVal,
+        negate: true
+      )
+
+    else:
+      error sysPre & "expected 'type' or 'not type' but got " &
+        $node.kind & ": '" & node.repr & "'"
+      (
+        typeName: "",
+        typeId: InvalidComponent,
+        negate: false
+      )
+
+
 proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedComponents: NimNode, extraFields: NimNode, sysOptions: ECSSysOptions): NimNode =
   ## Create a tuple to hold the required combination of types for this system.
   result = newStmtList()
@@ -292,24 +335,35 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
 
   var
     passedComponentIds: seq[ComponentTypeId]
+    passedNegationIds: seq[ComponentTypeId]
 
   for item in componentTypes:
     let
-      typeId = id.typeStringToId($item)
+      uArg = id.unpackComponentArg(item)
+      typeId = uArg.typeId
       typeName = id.typeName(typeId)
-
-    if typeId in id.ecsSealedComponents:
-      error "Component " & typeName &
-        " has already been sealed with makeEcs and cannot be extended to system \"" &
-        sysName &
-        "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
 
     if typeId in passedComponentIds:
       error "Component '" & typeName & "' is included multiple times for system \"" & sysName & "\""
 
-    passedComponentIds.add typeId
+    if uArg.negate:
+      passedNegationIds.add typeId
+    else:
+      # Check the component isn't already part of a sealed ECS.
+
+      if typeId in id.ecsSealedComponents:
+        error "Component " & typeName &
+          " has already been sealed with makeEcs and cannot be extended to system \"" &
+          sysName &
+          "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
+
+      passedComponentIds.add typeId
+
+  if passedComponentIds.len == 0:
+    error "Systems must use at least one component"
 
   # Process owned components.
+
   var
     ownedComponentIds: seq[ComponentTypeId]
 
@@ -360,7 +414,10 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   assert id.len_ecsOwnedComponents(sysIndex) == 0, "Owned components are already initialised"
 
   for sys in ownedComponentIds:
-    id.add_ecsOwnedComponents(sysIndex, sys)
+    id.add_ecsOwnedComponents sysIndex, sys
+
+  for compId in passedNegationIds:
+    id.add_ecsSysNegations sysIndex, compId
 
   # Build tuple type of components for this system.
   var
@@ -473,23 +530,23 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
-macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system and providing extra fields.
   result = id.createSysTuple(name, componentTypes, ownedComponents, extraFields, options)
 
-macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system.
   result = id.createSysTuple(name, componentTypes, ownedComponents, nil, options)
 
-macro defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+macro defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system and its types using an ECS identity, providing extra fields to incorporate into the resultant system instance.
   result = id.createSysTuple(name, componentTypes, nil, extraFields, options)
 
-template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions]): untyped =
   ## Define a system and its types using an ECS identity with specific options.
   defineSystem(id, name, componentTypes, options, nil)
 
-template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[typedesc]): untyped =
+template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped): untyped =
   ## Define a system and its types using an ECS identity with default system options.
   defineSystem(id, name, componentTypes, defaultSystemOptions, nil)
 
@@ -497,23 +554,23 @@ template defineSystem*(id: static[EcsIdentity], name: static[string], componentT
 # Convenience templates for using a default identity
 #---------------------------------------------------
 
-template defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+template defineSystem*(name: static[string], componentTypes: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system and its types using the default ECS identity, providing extra fields to incorporate into the resultant system instance.
   defaultIdentity.defineSystem(name, componentTypes, options, extraFields)
 
-template defineSystem*(name: static[string], componentTypes: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+template defineSystem*(name: static[string], componentTypes: untyped, options: static[ECSSysOptions]): untyped =
   ## Define a system and its types using the default ECS identity with specific options.
   defaultIdentity.defineSystem(name, componentTypes, options)
 
-template defineSystem*(name: static[string], componentTypes: openarray[typedesc]): untyped =
+template defineSystem*(name: static[string], componentTypes: untyped): untyped =
   ## Define a system and its types using the default ECS identity with default system options.
   defaultIdentity.defineSystem(name, componentTypes)
 
-template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
+template defineSystemOwner*(name: static[string], componentTypes: untyped, ownedComponents: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options, extraFields)
 
-template defineSystemOwner*(name: static[string], componentTypes: openarray[typedesc], ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
+template defineSystemOwner*(name: static[string], componentTypes: untyped, ownedComponents: untyped, options: static[ECSSysOptions]): untyped =
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options)
 
@@ -1157,12 +1214,27 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
   # `repr` may give mangled type names when creating a private ECS
   # inside a block.
-  var componentTypesStr: string
+  var
+    componentTypesStr: string
+  
   for t in componentTypes:
-    if t.kind in [nnkSym, nnkOpenSymChoice]:
-      componentTypesStr &= $t
+  
+    let
+      uArg = id.unpackComponentArg(t)
+      tName =
+        if uArg.negate:
+          "not " & uArg.typeName
+        else:
+          uArg.typeName
+
+    if uArg.typeName.len == 0:
+      error "Cannot resolve type from " & t.repr
+
+    if componentTypesStr.len > 0:
+      componentTypesStr &= ", " & tName
     else:
-      componentTypesStr &= t.repr
+      componentTypesStr = tName
+
 
   if sysIdxSearch.found:
     # This system has already been defined.
@@ -1188,23 +1260,36 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     let
       expectedTypes = id.ecsSysRequirements existingSysIdx
       existingOpts = id.getOptions existingSysIdx
+      negations = id.ecsSysNegations(existingSysIdx)
+
 
     if componentTypes.len > 0:
       # Check the components given to makeSystem match defineSystem.
-      template errMsg =
-        error "Components passed to makeSystem \"" & name &
-          "\" " & componentTypesStr &
-          " in conflict with previous definition in defineSystem: [" &
-          id.commaSeparate(expectedTypes) & "]"
       
-      if componentTypes.len != expectedTypes.len:
-        errMsg()
+      template errMsg = error "Components passed to makeSystem \"" & name &
+        "\" [" & componentTypesStr &
+        "] in conflict with previous definition in defineSystem: [" &
+        id.commaSeparate(expectedTypes) & "]" &
+        (if negations.len > 0: " and not [" & id.commaSeparate(negations) & "]"
+          else: "")
+      
+      # Check given types match the original definition.
 
-      for i, givenType in componentTypes:
-        # Types must be given in the same order.
-        if typeStringToId(id, $givenType) != expectedTypes[i]:
-          errMsg()
+      var
+        expIdx: int
       
+      for givenType in componentTypes:
+        let
+          uArg = id.unpackComponentArg(givenType)
+
+        if uArg.negate and uArg.typeId notin negations:
+          errMsg()
+        elif expIdx < expectedTypes.len:
+          if uArg.typeId != expectedTypes[expIdx]:
+            errMsg()
+          else:
+            expIdx += 1
+
     # Options must match with the original definition.
     if existingOpts != options:
       error "Options don't match with previous definition for system \"" &
@@ -1226,6 +1311,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     
     # Use the new SystemIndex.
     sysIndex = sysIdxSearch.index
+
 
   var
     initBodies = newStmtList()
@@ -1587,14 +1673,14 @@ proc sysOptionsOrDefault(id: EcsIdentity, name: string): tuple[found: bool, opti
   else:
     (false, defaultSysOpts)
 
-macro makeSystem*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], systemBody: untyped): untyped =
+macro makeSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using an ECS identity.
   ## 
   ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
   let opts = id.sysOptionsOrDefault name
   generateSystem(id, name, componentTypes, opts.options, systemBody, newEmptyNode())
 
-template makeSystem*(name: static[string], componentTypes: openarray[untyped], systemBody: untyped): untyped =
+template makeSystem*(name: static[string], componentTypes: untyped, systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using the default ECS identity.
   ## 
   ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.

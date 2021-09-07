@@ -544,7 +544,7 @@ genItemStates(ComponentTypeId, EcsCompInvalidAccess, ["invalidAccess"])
 # System properties
 genItemStates(SystemIndex, bool, ["sealed", "useThreadVar", "bodyDefined"])
 genItemStates(SystemIndex, NimNode, ["instantiation", "definition", "extraFields"])
-genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents"])
+genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents", "ecsSysNegations"])
 
 # System groups
 genListStates(string, SystemIndex, ["groupSystems"])  # Group to list of systems.

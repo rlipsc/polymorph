@@ -572,18 +572,9 @@ proc addSysTuple*(id: EcsIdentity, entity: NimNode, sys: SystemIndex, components
     # Code for updating the system index.
     entIdIdent = quote do: `entity`.entityId
     row = quote do: `sysVar`.high
-    updateIndex = sysVar.indexWrite(entIdIdent, row, id.indexFormat(sys))
 
+    updateIndex = sysVar.indexWrite(entIdIdent, row, id.indexFormat(sys))
     userAddedEvents = id.userSysAdded(sys, row)
-    # userAddedCBEvents =
-    #   if id.len_onAddedCallback(sys) > 0:
-    #     let
-    #       sysName = id.getSystemName sys
-    #       cbName = ident systemAddedCBName(sysName)
-    #     quote do:
-    #       `cbName`(`sysVar`, `row`)
-    #   else:
-    #     newStmtList()
 
   result.sysUpdates = quote do:
     `updateOwnedState`

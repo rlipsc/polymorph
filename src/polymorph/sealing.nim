@@ -1024,7 +1024,6 @@ proc makeListSystem(id: EcsIdentity): NimNode =
     res = ident "result"
     innards = newStmtList()
     entIdent = ident "entity"
-  innards.add(quote do: `res` = "")
   
   for sysId in id.unsealedSystems:
     let
@@ -1032,21 +1031,49 @@ proc makeListSystem(id: EcsIdentity): NimNode =
       sysName = id.getSystemName(sysId)
       sysStr = newLit systemStr(sysName)
       sys = id.instantiation sysId
+      inSys = genSym(nskVar, "inSys")
       entId = entIdent.newDotExpr(ident "entityId")
-      hasKey = indexHasKey(sys, entId, options.indexFormat)
+      doHasKey = indexHasKey(sys, entId, options.indexFormat)
       reqs = id.ecsSysRequirements(sysId)
+      negs = id.ecsSysNegations(sysId)
+
+    # Verify component/system relationships.
 
     innards.add(quote do:
-      var inSys = true
+      var
+        `inSys` = true
+      
       for req in `reqs`:
         if req.ComponentTypeId notin `entIdent`:
-          inSys = false
+          `inSys` = false
           break
-      if inSys:
-        if `hasKey`:
-          `res` &= `sysStr` & " \n"
-        else:
-          `res` &= `sysStr` & " Sync issue: entity contains components but is missing from this system's index\n"
+    )
+
+    if negs.len > 0:
+      innards.add(quote do:
+        for neg in `negs`:
+          if neg.ComponentTypeId in `entIdent`:
+            `inSys` = false
+            break
+      )
+
+    # Output string.
+
+    innards.add(quote do:
+      let
+        hasKey = `doHasKey`
+      
+      if `inSys` == hasKey:
+        `res` &= `sysStr` & " \n"
+      else:
+        let
+          issue =
+            if `inSys`:
+              "entity contains the required components but is missing from the system index"
+            else:
+              "the system index references this entity but the entity doesn't have the required components"
+        `res` &= `sysStr` & " Sync issue: " & issue & "\n"
+
       )
 
   result = quote do:
