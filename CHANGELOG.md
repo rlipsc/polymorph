@@ -1,5 +1,268 @@
 # Changelog
 
+## v0.3.0 2022-2-5
+
+
+### Goals
+
+- Support component negation for systems.
+- Add compile time checks for event consistency.
+- Modularise state change internals.
+
+### Added
+
+- System requirements allow component negation with the `not` prefix.
+
+  For example:
+      makeSystem "mySystem", [Comp1, not Comp2]
+
+- Events now perform static analysis to ensure that embedded mutations
+  don't invalidate other events expected within a state change. This
+  means you can more safely mutate entities within events whilst having
+  your design checked when you compile.
+
+  When event mutations clash with coherent state changes a reason is
+  output along with traces for both the calling event stack, and the
+  event that cause the clashing mutation.
+
+  This means you can write code like this:
+  
+      MyComponent.onAdd:
+        entity.remove MyComponent
+  
+  But this raises a compile time error:
+
+      MyComponent.onAdd:
+        entity.remove MyComponent
+      MyComponent.onAddCallback:
+        echo "T"
+
+  To turn this feature off, compile with `-d:ecsPermissive`.
+
+- System owned components can be declared with the `own` prefix.
+
+  For example:
+      makeSystem "mySystem", [Comp1, own Comp2]
+
+- `all` and `stream` blocks can now be used at any level of code within
+  the system body and not just at the top level.
+
+- `all` and `stream` blocks will raise a compile time error if they
+  have been embedded within themselves (this was not possible before
+  as only the top level was checked).
+
+- Systems can now be defined with no components, allowing general
+  purpose code in the system workflow.
+  
+  These systems have the same control features, like pausing and
+  extracting to groups, but cannot use blocks that rely on entities
+  such as `all`, `stream`, or add/remove events, since they don't have
+  a `groups` field to store component data.
+
+- Events now allow accessing the current entity and system with
+  `entity` and `sys`, as well as `curEntity` and `curSystem`.
+
+- The compile log (e.g., `-d:ecsLog`) now includes the source file and
+  line of system definitions.
+
+- Errors for field/option mismatch with `makeSystem` now show the
+  source file and line of the original `defineSystem`.
+
+- The error for attempting to redefine a system body with `makeSystem`
+  now show the source file and line of the original `makeSystem`.
+
+- `construct` is now `{.discardable.}`.
+
+- `construct(quantity: int)` allows easier repeat construction of a
+  `ComponentList`.
+
+- `hasAny` takes multiple component types and returns true when any of
+  them exist on the entity.
+
+- `fetch` now supports returning multiple components to a tuple like
+  the `add` operation.
+
+- `accessType` template returns the source component type from an
+  instance type.
+
+- Improved error message when existing components are added.
+
+- Systems now have a type class for generic access to all systems.
+
+- `register` can be used instead of `registerComponents`.
+
+- `makeEcsCommit` performs `makeEcs`, then `commitSystems`.
+
+- Comping with `-d:ecsLogDetails` is now much, much more detailed.
+  Operations now list their compile time invocation history, including
+  output of entity mutations by operation.
+
+- `EcsSysOptions` now includes a `threading` field that, when set to
+  `sthDistribute`, will set up a `threads` `seq`. This is set to the
+  number of cores when the system is instantiated. Spawning threads and
+  joining them is currently up to the user. Future versions will manage
+  threads for you when this option is enabled.
+
+- All ECS operations are mangled with a unique identifier to avoid
+  variable collisions and allow better operation nesting.
+
+  Pass `-d:ecsNoMangle` to output code without appending a signature -
+  Useful with `-d:ecsLogCode` to make the logged code easier to read.
+
+- Improvements and additions to test suites such as negation testing.
+
+### Changes
+
+- Streamlined and standardised events. More data access within events.
+  All relevant events now include `entity` access, and component events
+  involving systems now get access to the system row with `item`.
+
+- Events that have access to the `item` template now include asserts
+  from `assertItem` and static `ecsStrict` checks.
+
+- Deleting the host/calling entity within an event is now a compile
+  time error. Other entities within events can still be deleted.
+
+- `has` can now take multiple arguments: `echo entity.has(A, B, C)`.
+
+- `delete` now parses the entity's components for systems to query,
+  instead of querying all the systems.
+  
+  This makes destruction do work proportional to the number of run time
+  components, instead of the number of compile time systems. This
+  should mean `delete` is faster.
+
+- Only `delete`, `construct` and `clone` are now generated as procs, as
+  these state changes are fixed to the design. All other state changes
+  are lazily constructed through generics and macros.
+  
+  This offers two benefits: state changes can be interleaved in events,
+  and there's no time wasted on unused procs during compilation.
+
+  The original assumption with generating procs for 'commonly used'
+  operations such as 'addComponent Type()' would save compilation time
+  over running a macro to generate. However, the opposite was often
+  true; compile times were increased by generating procedures that
+  weren't used.
+
+- System compile time errors are checked before any macrocache updates.
+  This change means you can use `when not compiles(...)` with defining
+  a system without create partial system entries.
+
+- `makeSystem` for a system previously defined with `defineSystem` now
+  ignores component order when checking matching requirements.
+  Note that the definition order is still semantically significant when
+  a system is first defined, as this informs the order of fields within
+  the system's item type.
+
+- Component events that involve systems are announced as system events
+  when `echoRunning` is active.
+
+- Component system events for missing systems create an `error` instead
+  of using `doAssert` for a cleaner message.
+
+- Strict checking outputs specific messages for removing and deleting.
+
+- `addComponent` is now a `template` and only constructed when used.
+  This reduces the need to build the code for every single combination
+  of singular adds to an entity which can constrain compilation for
+  some designs.
+
+- `EcsSysOptions.assertItem` for `defaultSystemOptions` is set to the
+  value of `compileOptions("assertions")`. This means by default debug
+  builds will assert valid state within `item`.
+
+### Fixed
+
+- The `onDelete` event is now properly exported.
+
+- Multiple callback bodies such as `onAddCallback`,`onRemoveCallback`,
+  now append to statements within a single callback proc instead of
+  trying to compile multiple procs with clashing names.
+
+- `onEcsBuilt` is now reset at the end of `makeEcs` so that future
+  ECS outputs using the same identity don't output the code again.
+  Unfortunately this isn't possible with `onEntityChange` because
+  state changes require access after `makeEcs` has completed.
+
+- Running systems at time intervals now applies to the entire system
+  body, and will process multiple `all` or `stream` blocks.
+  Previously, each `all`/`stream` would reset timings, meaning only the
+  first block would be run.
+
+### Removed
+
+- Unused reference to `inSystemDeleteRow` macrocache entry.
+
+- `commit` has been removed from the intercept update event (see
+  breaking changes).
+
+- Removed `newEntityTemplate` and `initComponents` as these are
+  better supported by `cl()`.
+
+### Breaking changes
+
+- `ecsStrict` is now the default. To disable strict item checking, pass
+  `-d:ecsPermissive`.
+
+  Strict checking will produce a compile time error if a system/event
+  context accesses `item` after doing something that has a possibility
+  to remove/invalidate the host context. However, this check doesn't
+  understand control flow or conditional statements, merely top to
+  bottom evaluation, and fully run time bound operations such as
+  `construct`, `clone`, `transition`, and `delete` count as affecting
+  all components.
+
+- Similarly, trying to `delete` the `entity` that invokes an event will
+  now halt compilation with an error. This feature helps maintains
+  state integrity when events remove the calling entity.
+
+- The `onUpdate` event has changed:
+  
+  1) the `commit` proc has been removed. This event no longer allows
+  ignoring data updates when `commit` is not called.
+  
+  The intention of the `commit` mechanism was to give the user explicit
+  control over whether to apply given component data. There is an
+  argument that this kind of mid-state data discarding invalidates the
+  transactional data integrity of state changes for seemingly little
+  value.
+
+  The unique semantics of this event is also a potential for bugs,
+  since if `commit` is not called, the data is dropped.
+
+  Finally, the cancelling special case hasn't come up (anecdotally),
+  and is probably better served with a specific buffer mechanism at the
+  component level.
+
+  2) this event is now only called when `update` is used on a component
+  instance, and not in other contexts like new entities (for which you
+  should use `onInit` or `onAdd`/`onAddCallback`).
+
+- Events are now performed separately from system/entity state changes
+  and should be more lenient to embedding ECS state changes within
+  events. Event invocation order may differ slightly from previous
+  versions.
+
+- Within `caseSystem`, the `SystemTupleType` template was renamed
+  to `ItemType`.
+  
+- Generation history for components with `seq` storage are now lost
+  when the last item is deleted. Technically this was true before,
+  however it was possible for the `seq` to be extended and if no
+  reallocation was performed for old instance values, to remain and be
+  incremented. This was undefined behaviour.
+  
+  Now, when a `seq` component slot is removed and added again, the new
+  value starts at `1.ComponentGeneration`.
+  
+  Note that this means when storing component references for volatile
+  entities, `seq` may cause reused slots at the end of the `seq` can
+  clash with stored component references.
+
+- When system timing options are set, the `sys.lastTick` field has been
+  renamed to `sys.lastRun`.
+
 ## v0.2.2 2021-8-13
 
 ### Added
