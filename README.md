@@ -73,7 +73,9 @@
   - [Performance](#performance)
 
 
-# Project overview
+# Polymorph project overview
+
+![pmsmaller](https://user-images.githubusercontent.com/36367371/152643501-b32e45a9-da45-4a0b-ad53-490c500cf780.png)
 
 This library provides a lean, generative abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern.
 
