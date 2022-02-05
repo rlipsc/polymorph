@@ -14,258 +14,139 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, private/[utils, ecsstatedb], sharedtypes, tables
-from strutils import toLowerAscii
+import macros, private/[utils, ecsstatedb, statechangeutils, statechangegen, eventutils]
+import sharedtypes, tables, sets
 
-proc buildConstructionCaseStmt(id: EcsIdentity, entity: NimNode, cloning: bool): tuple[core, userDecls, userCode: NimNode] =
+
+type
+  SystemReqSets* = Table[SystemIndex, tuple[req, neg: ComponentSet]]
+
+proc allSysReq*(id: EcsIdentity): SystemReqSets =
+  ## Precalculate sets for system requirements and negations.
+  let
+    allSys = id.allUnsealedSystems
+  
+  for index in allSys:
+    result[index] = (
+      req: id.ecsSysRequirements(index).toHashSet,
+      neg: id.ecsSysNegations(index).toHashSet
+    )
+
+
+proc buildConstructionCaseStmt(id: EcsIdentity,
+    sysReq: SystemReqSets,
+    kind: StateChangeDetailsKind,
+    entityIdent, sysProcessed, getTypeIdent, getCompIdx: NimNode,
+    compAccess, compValue: ComponentAccessProc, compValid: ComponentValidProc): tuple[sysCase, eventCase: NimNode] =
+
   ## Build a case statement to handle updating systems linked to any component
   ## found in the input list.
+  
   let
-    compIndexInfo = ident "curCompInfo"
-    visited = ident "visited"
-    types = ident "types"
+    allComponents = id.allUnsealedComponents
+    suffix =
+      if defined(ecsNoMangle): ""
+      else: sysProcessed.signatureHash
 
-  var
-    compCase = nnkCaseStmt.newTree()
-    userCode = newStmtList()
-    userCodeBoolDecls: Table[SystemIndex, NimNode]
+  result.sysCase = nnkCaseStmt.newTree(getTypeIdent)
+  result.eventCase = nnkCaseStmt.newTree(getTypeIdent)
 
-  # Select on typeId.
-  compCase.add(quote do: `compIndexInfo`[0].int)
-
-  for typeId in id.unsealedComponents:
-
+  proc compHasKey(typeInfo: ComponentBuildInfo, suffix: string): NimNode {.locks:0.} =
     let
-      linkedSystems = id.linked typeId
-      typeName = id.typeName(typeId)
-      ofInstType = ident typeName.instanceTypeName
+      id = newLit typeInfo.typeId.int
+    quote do:
+      types.hasKey(`id`)
+
+  for c in id.building allComponents:
+    # Populate case statements for events and each component.
+
     var
-      addToSystems = newStmtList()
-      ofBranch = nnkOfBranch.newTree()
-      ofStmts = newStmtList()
-      onAddCallback = id.onAddCallbackNode(typeId)
-      onAddToEntCode = id.onAddToEntCodeNode(typeId)
-      
-      userAddComponent = newStmtList()
+      details = newStateChangeDetails(kind, compAccess, compHasKey)
 
-    ofBranch.add newLit typeId.int
+    details.values = nnkBracket.newTree()
+    details.passed = @[c.typeId]
+
+    if c.isOwned:
+      # Pass values for owned construction.
+
+      details.values.add compValue(c, suffix)
+      
+      var
+        required = id.inclDependents(sysReq[c.owner].req)
+      
+      required.excl c.typeId
+
+      for owned in id.building(required):
+        details.passed.add owned.typeId
+        details.values.add compValue(owned, suffix)
+    
+    details.passedSet = details.passed.toHashSet
+    details.suffix = suffix
 
     let
-      source = 
-        if cloning:
-          quote do: `compIndexInfo`[1]
-        else:
-          quote do: `compIndexInfo`[1][1]
-      typeOwner = id.systemOwner(typeId)
+      instTy = c.instanceTy
 
-    # User callback.
-    if onAddCallback.len > 0:
-      # Check for this type's initialiser.
-      let cbProcName = ident addCallbackName(typeName)
-      userAddComponent.add(quote do:
-        `cbProcName`(`entity`, `ofInstType`(`source`))
+    details.iterating = quote do:
+      `instTy`(`getCompIdx`)
+    details.sysProcessed = sysProcessed
+
+    for sys in id.building(id.linked(c.typeId)):
+      id.applyChange(entityIdent, details, SystemChange(
+        kind: sckAdd,
+        sys: sys.index,
+        checkIncl: sysReq[sys.index].req,
+        checkExcl: sysReq[sys.index].neg,
+        )
+      )
+      
+    # Generate code for adding this component.
+    id.buildStateChange entityIdent, details
+
+    let
+      sysUpdates = details.systemUpdates
+      postFetches = details.postFetches
+
+    if details.systemUpdates.len > 0:
+      result.sysCase.add nnkOfBranch.newTree(
+        newLit c.typeId.int,
+        quote do:
+          `postFetches`     # Includes run time ownership checks.
+          `sysUpdates`
+      )
+    
+    if details.allEvents.len > 0:
+      result.eventCase.add nnkOfBranch.newTree(
+        newLit c.typeId.int,
+        details.allEvents
       )
 
-    if typeOwner == InvalidSystemIndex:
-      # TODO: This needs to be removed to a collected event processing proc.
-      # Component add user code.
-      if onAddToEntCode.len > 0:
-        userAddComponent.add(quote do:
-          block:
-            ## Current component being added to entity. 
-            template curComponent: untyped {.used.} = `ofInstType`(`source`)
-            `onAddToEntCode`
-        )
+  let
+    disc = nnkDiscardStmt.newTree(newEmptyNode())
 
-    for sys in linkedSystems:
-      let
-        requiredCompsLen = id.len_ecsSysRequirements sys
-        systemStr = id.getSystemName sys
-        sysTupleType = ident tupleName(systemStr)
-        sysTupleVar = ident tupleName(systemStr).toLowerAscii
-        systemNode = id.instantiation sys
-        newRow = ident "newRow"
-        # This is recorded in the match block and used for user events.
-        sysUserCodeIdx = ident "run" & systemStr & "UserCodeIdx"
+  if result.eventCase.len > 1:
+    result.eventCase.add nnkElse.newTree(disc)
+  
+  if result.sysCase.len > 1:
+    result.sysCase.add nnkElse.newTree(disc)
 
-      var
-        matchList = newSeqOfCap[NimNode](requiredCompsLen)
-        sysFields = newStmtList()
-        stateUpdates = newStmtList()
-        assertions = newStmtList()
-        userSysAddCode = newStmtList()
-
-      if requiredCompsLen > 0:
-        # Generate code to check the system is satisfied,
-        # and code to do the assignment of the tuple elements.
-
-        for comp in id.ecsSysRequirements(sys):
-          let
-            typeStr = id.typeName(comp)
-            typeField = ident typeStr.toLowerAscii
-            instType = ident typeStr.instanceTypeName
-            refType = ident typeStr.refTypeName
-            ownedByThisSystem = id.systemOwner(comp) == sys
-            neededByOwnedSystem = typeOwner == sys and comp != typeId
-            compId = comp.int
-
-          if neededByOwnedSystem and not cloning:
-            # It's a run time error to not specify all the owned components.
-            # We can elide the check for cloned entities since existing
-            # entities must already have satisfied owner systems.
-            assertions.add quote do:
-              assert `types`.hasKey(`comp`),
-                "Cannot construct: Specified owned component \"" & `typeName` &
-                "\" also needs owned component \"" & `typeStr` & "\""
-          
-          if comp != typeId:
-            # Fragment of if statement clause.
-            matchList.add quote do:
-              `types`.hasKey(`comp`)
-
-          let source =
-            if comp == typeId:
-              quote do: `compIndexInfo`[1]
-            else:
-              quote do: `types`[`compId`]
-
-          id.addUserCompAddToSys(userSysAddCode, entity, sys, comp, quote do:
-            `systemNode`.groups[`sysUserCodeIdx`].`typeField`)
-
-          # Assignment of the tuple field for this component.
-          if not cloning:
-            # Construct.
-            if ownedByThisSystem:
-              # Owned fields also need their state initialised.
-              stateUpdates.add updateOwnedComponentState(id, comp, sys, newRow)
-              # Fetch any user init for owned types.
-              let
-                typeAccess = quote do:
-                  `refType`(`source`[0]).value
-                (ownedOnAddEvent, ownedUserInitEvent, ownedUpdateEvent) =
-                  id.ownedUserInitEvents(sys, sysTupleVar, typeAccess, comp, entity, typeAccess)
-              sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `typeAccess`)
-              if ownedByThisSystem:
-                sysFields.add(quote do:
-                  `ownedOnAddEvent`
-                  `ownedUserInitEvent`
-                  `ownedUpdateEvent`)
-            else:
-              # We already have the Instance type stored for unowned components.
-              sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `instType`(`source`[1]))
-          
-          else:
-            # Clone.
-            if ownedByThisSystem:
-              # Owned fields also need their state initialised.
-              stateUpdates.add updateOwnedComponentState(id, comp, sys, newRow)
-              # Fetch any user init for owned types.
-              let
-                typeInst = newCall(instType, source)
-                typeAccess = newDotExpr(typeInst, ident "access")
-                (ownedOnAddEvent, ownedUserInitEvent, ownedUpdateEvent) =
-                  id.ownedUserInitEvents(sys, sysTupleVar, typeInst, comp, entity, typeAccess)
-              sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `typeAccess`)
-              if ownedByThisSystem:
-                sysFields.add(quote do:
-                  `ownedOnAddEvent`
-                  `ownedUserInitEvent`
-                  `ownedUpdateEvent`)
-            else:
-              # We already have the Instance type stored for unowned components.
-              sysFields.add(quote do:
-                `sysTupleVar`.`typeField` = `instType`(`source`))
-
-      let
-        sysOpts = id.getOptions sys
-        updateIndex =id.updateIndex(entity, sys, newRow)
-        addToSystem = addToSystemTuple(systemNode, sysTupleVar, sysOpts)
-        hasUserAddToSysCode = userSysAddCode.len > 0
-        hasUserAddedCode = id.len_onAdded(sys) > 0
-        hasUserSystemCode = hasUserAddToSysCode or hasUserAddedCode
-
-        setUserCodeIdx =
-          if hasUserSystemCode: quote do:
-            `sysUserCodeIdx` = `newRow`
-          else: newStmtList()
-        
-        matchCode = quote do:
-          if not `visited`[`sys`.int]:
-            `visited`[`sys`.int] = true
-            var `sysTupleVar`: `sysTupleType`
-            `sysTupleVar`.entity = `entity`
-            `sysFields`
-            `addToSystem`
-            let `newRow` = `systemNode`.high
-            `updateIndex`
-            `stateUpdates`
-            `setUserCodeIdx`
-
-      if hasUserSystemCode and sys notin userCodeBoolDecls:
-        # Both events for adding to systems and the `added:` block within a system are invoked
-        # in their own block, after state construction.
-        userCodeBoolDecls[sys] = newIdentDefs(sysUserCodeIdx, ident "int", newLit -1)
-
-        let addedEvent = id.userSysAdded(sys, sysUserCodeIdx)
-
-        userCode.add(quote do:
-          if `sysUserCodeIdx` >= 0:
-            `addedEvent`
-            `userSysAddCode`
-        )
-
-      addToSystems.add assertions
-
-      if matchList.len > 0:
-        # TODO: Pare down checks so only one hash per system set.
-        # Wrap matchCode with if statement so we only add when the system is satisfied.
-        let sysMatchClause = genInfixes(matchList, "and")
-        addToSystems.add(newIfStmt( (sysMatchClause, matchCode) ))
-        
-      else:
-        # No conditions, always add to this system.
-        addToSystems.add matchCode
-    
-    let
-      hasSystems = addToSystems.len > 0
-      hasUserComponentEvents = userAddComponent.len > 0
-
-    # Only create an of branch for components with events.
-    if hasSystems or hasUserComponentEvents:
-      if hasSystems:
-        ofStmts.add addToSystems
-      if hasUserComponentEvents:
-        ofStmts.add userAddComponent
-      ofBranch.add ofStmts
-      compCase.add ofBranch
-
-  compCase.add nnkElse.newTree(quote do: discard)
-
-  var decls = nnkVarSection.newTree()
-  for node in userCodeBoolDecls.values:
-    decls.add node
-
-  (compCase, decls, userCode)
 
 proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
   ## Builds procedures for creating entities from component lists
   ## at run time.
+
   let
     cList = ident "componentList"
     construction = ident "construction"
     context = ident "context"
-    visited = ident "visited"
+    visitedConstruct = genSym(nskVar, "visited")
+    visitedClone = genSym(nskVar, "visited")
     types = ident "types"
     compIndexInfo = ident "curCompInfo"
 
-    maxSys = id.len_systems
     reference = ident "reference"
     res = ident "result"
-    entOpts = id.entityOptions
-    addToEnt = addComponentRef(res, reference, entOpts)
+    componentStorageFormat = id.componentStorageFormat
+    addToEnt = addComponentRef(res, reference, componentStorageFormat)
     tcIdent = ident typeClassName()
     iterVar = ident "i"
     component = ident "component"
@@ -273,24 +154,124 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     entity = ident "entity"
     typeId = ident "typeId"
     callback = ident "callback"
+    systemReqSets = id.allSysReq
 
-    constructCaseInfo = buildConstructionCaseStmt(id, res, false)
-    userConstructEvents = constructCaseInfo.userCode
-    userDecls = constructCaseInfo.userDecls
-    constructCase = constructCaseInfo.core
+  proc compAccessConstruct(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
+    let
+      typeId = newLit typeInfo.typeId.int
+      instTy = typeInfo.instanceTy
+    quote do:
+      `instTy`(`types`[`typeId`][1])
 
-    cloneCaseInfo = buildConstructionCaseStmt(id, res, true)
-    cloneCase = cloneCaseInfo.core
-    userCloneEvents = cloneCaseInfo.userCode
-    userCloneDecls = constructCaseInfo.userDecls
+  proc compValueConstruct(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
+    let
+      typeId = newLit typeInfo.typeId.int
+      refTy = ident refTypeName(typeInfo.name)
+    quote do:
+      `refTy`(`types`[`typeId`][0]).value
+
+  proc compHasKey(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
+    let
+      typeId = newLit typeInfo.typeId.int
+    quote do:
+      `types`.hasKey `typeId`
+
+  proc compAccessClone(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
+    let
+      typeId = newLit typeInfo.typeId.int
+      instTy = typeInfo.instanceTy
+    quote do:
+      `instTy`(`types`[`typeId`])
+
+  proc compValueClone(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
+    compAccessClone(typeInfo, suffix).newDotExpr ident"access"
+
+  let
+    sysSet = ident systemsEnumName()
+
+    constructCaseInfo = id.buildConstructionCaseStmt(
+      systemReqSets,
+      scdkConstruct,
+      res,
+      visitedConstruct,
+      quote do:
+        `compIndexInfo`[1].`component`.typeId.int,
+      quote do:
+        `compIndexInfo`[1].`compIdx`,
+      compAccessConstruct,
+      compValueConstruct,
+      compHasKey,
+    )
+
+    # Build the core construct process.
+    constructCase = constructCaseInfo.sysCase
+    constructLoop =
+      if constructCase.len > 1:
+        quote do:
+          for `compIndexInfo` in `types`.pairs:
+            `constructCase`
+          `visitedConstruct` = {}
+      else:
+        newStmtList()
+
+    eventCase = constructCaseInfo.eventCase
+
+    cloneCaseInfo = id.buildConstructionCaseStmt(
+      systemReqSets,
+      scdkClone,
+      res,
+      visitedClone,
+      quote do: `compIndexInfo`[0],
+      quote do: `compIndexInfo`[1],
+      compAccessClone,
+      compValueClone,
+      compHasKey
+    )
+    cloneCase = cloneCaseInfo.sysCase
+    userCloneEvents = cloneCaseInfo.eventCase
+
+    # Build the core clone process.
+    cloneLoop =
+      if cloneCase.len > 1:
+        quote do:
+          for `compIndexInfo` in `types`.pairs:
+            `cloneCase`
+      else:
+        newStmtList()
+
+  var
+    constructEvents = newStmtList()
+    cloneEvents = newStmtList()
 
     entId = quote do: `entity`.entityId
-    entCompCount = componentRefsLen(entId, entOpts)
+    entCompCount = componentRefsLen(entId, componentStorageFormat)
 
-    curEntTempl = 
+  # Entity events.
+  var
+    entContext = newEventContext(res)
+  
+  if eventCase.len > 1:
+    constructEvents.add(
       quote do:
-        template curEntity: EntityRef {.used.} = `res`
+        for `compIndexInfo` in `types`.pairs:
+          `eventCase`
+    )
+  if userCloneEvents.len > 1:
+    cloneEvents.add(
+      quote do:
+        for `compIndexInfo` in `types`.pairs:
+          `userCloneEvents`
+    )
 
+  constructEvents.invokeEvent(id, entContext, ekConstruct)
+  cloneEvents.invokeEvent(id, entContext, ekClone)
+
+  if constructEvents.len > 0:
+    constructEvents.trackMutation(id, ekConstruct, id.allUnsealedComponents, announce = false)
+  
+  if cloneEvents.len > 0:
+    cloneEvents.trackMutation(id, ekClone, id.allUnsealedComponents, announce = false)
+  
   # Find component type bounds for the current set of components.
   var
     lowCompId = id.ecsComponentsToBeSealed[^1].int
@@ -305,16 +286,13 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       highCompId = typeId.int
 
   let
-    userConstructStateChangeEvent = id.userStateChange(res, eceConstruct)
-    userCloneStateChangeEvent = id.userStateChange(res, eceClone)
-
     # Names of the arrays holding the different construction callbacks.
     manualConstruct = ident "manualConstruct"
     postConstruct = ident "postConstruct"
     cloneConstruct = ident "cloneConstruct"
 
     postConstruction =
-      case entOpts.componentStorageFormat
+      case componentStorageFormat
       of csSeq, csArray:
         quote do:
           var compIdx: int
@@ -376,8 +354,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       # up when checking systems.
       var
         `types`: Table[int, tuple[`component`: Component, `compIdx`: ComponentIndex]]
-        `visited` {.used.}: array[`maxSys`, bool]
-      `curEntTempl`
+        `visitedConstruct` {.used.}: set[`sysSet`]
 
       for compRef in `cList`:
         assert compRef.typeId != InvalidComponent, "Cannot construct: invalid component type id: " & $compRef.typeId.int
@@ -405,34 +382,53 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
                 when owningSystemIndex == InvalidSystemIndex:
                   `reference` = newInstance(componentRefType()(comp).value).toRef
                 else:
-                  # This reference isn't valid until we add the tuple in the second pass.
+                  # This reference isn't valid until we add the item row in the second pass.
+                  let
+                    c = owningSystem.count
+                    nextGen = 
+                      if c < componentGenerations().len:
+                        (componentGenerations()[c].int + 1).ComponentGeneration
+                      else:
+                        1.ComponentGeneration
+
                   `reference` = (
                     componentId(),
                     owningSystem.count.ComponentIndex,
-                    1.ComponentGeneration
+                    nextGen
                   )
                 `addToEnt`
                 `types`[comp.typeId.int] = (comp, `reference`.index)
+          
           else:
             when owningSystemIndex == InvalidSystemIndex:
               `reference` = newInstance(componentRefType()(compRef).value).toRef            
             else:
-              # This reference isn't valid until we add the tuple in the second pass.
+              # This reference isn't valid until we add the item row in the second pass.
+              let
+                c = owningSystem.count
+                nextGen = 
+                  if c < componentGenerations().len:
+                    (componentGenerations()[c].int + 1).ComponentGeneration
+                  else:
+                    1.ComponentGeneration
+              
               `reference` = (
                 componentId(),
                 owningSystem.count.ComponentIndex,
-                1.ComponentGeneration
+                nextGen
               )
             `addToEnt`
             `types`[compRef.typeId.int] = (compRef, `reference`.index)
 
-      # Update systems.
-      `userDecls`
-      for `compIndexInfo` in `types`.pairs:
-        `constructCase`
-      `userConstructEvents`
-      `userConstructStateChangeEvent`
-      static: endOperation(EcsIdentity(`id`))
+      `constructLoop`
+      `constructEvents`
+
+      static:
+        endOperation(EcsIdentity(`id`))
+
+    proc construct*(`construction`: ComponentList, amount: int, `context` = NO_ENTITY_REF): seq[EntityRef] {.discardable.} =
+      for i in 0 ..< amount:
+        result.add construct(`construction`, `context`)
 
     proc construct*(`construction`: ConstructionTemplate): seq[EntityRef] =
       ## Constructs multiple entities and returns their entity ids.
@@ -474,12 +470,14 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
         caseComponent(compRef.typeId):
           `res`[i] = componentInstanceType()(compRef.index).makeContainer()
 
-    proc clone*(`entity`: EntityRef): EntityRef =
+    proc clone*(entity: EntityRef): EntityRef =
       ## Copy an entity's components to a new entity.
       ## Note that copying objects with pointers/references can have undesirable results.
       ## For special setup, use `registerCloneConstructor` for the type. This gets passed
       ## the clone type it would have added. You can then add a modified component or 
       ## entirely different set of components, or ignore it by not adding anything.
+
+      let `entity` = entity
       assert `entity`.alive, "Cloning a dead entity"
       static: startOperation(EcsIdentity(`id`), "clone")
 
@@ -487,8 +485,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       # Build an index of component type to its instantiated instance.
       var
         `types`: Table[int, ComponentIndex]
-        `visited` {.used.}: array[`maxSys`, bool]
-      `curEntTempl`
+        `visitedClone` {.used.}: set[`sysSet`]
 
       for compRef in `entity`.components:
         assert compRef.typeId != InvalidComponent, "Cannot construct: invalid component type id: " & $compRef.typeId.int
@@ -517,23 +514,29 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
                 when owningSystemIndex == InvalidSystemIndex:
                   `reference` = newInstance(componentRefType()(comp).value).toRef
                 else:
-                  # This reference isn't valid until we add the tuple in the second pass.
-                  `reference` = compRef
+                  # This reference isn't valid until we add the item row in the second pass.
+                  
+                  #`reference` = compRef
+
+                  `reference` = (
+                    componentId(),
+                    owningSystem.count.ComponentIndex,
+                    1.ComponentGeneration # TODO: Update generation.
+                  )
+
                 `addToEnt`
                 `types`[comp.typeId.int] = `reference`.index
+
           else:
             when owningSystemIndex == InvalidSystemIndex:
               `reference` = newInstance(componentInstanceType()(compRef.index).access).toRef
             else:
-              # This reference isn't valid until we add the tuple in the second pass.
+              # This reference isn't valid until we add the item row in the second pass.
               `reference` = compRef
             `addToEnt`
             `types`[compRef.typeId.int] = `reference`.index
-            
+
       # Update systems.
-      `userCloneDecls`
-      for `compIndexInfo` in `types`.pairs:
-        `cloneCase`
-      `userCloneEvents`
-      `userCloneStateChangeEvent`
+      `cloneLoop`
+      `cloneEvents`
       static: endOperation(EcsIdentity(`id`))

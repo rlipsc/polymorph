@@ -1,6 +1,7 @@
-import polymorph, unittest
+import polymorph
 
-template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOptions) {.dirty.} =
+template testEvents*(componentOptions: ECSCompOptions, systemOptions: ECSSysOptions) {.dirty.} =
+
   registerComponents(componentOptions):
     type
       Test1* = object
@@ -11,7 +12,7 @@ template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
   defineSystem("a", [Test1], systemOptions)
   defineSystem("b", [Test1], systemOptions)
   defineSystem("c", [Test1], systemOptions)
-  defineSystemOwner("d", [Test1, Test2], [Test2], systemOptions)
+  defineSystem("d", [Test1, own Test2], systemOptions)
   
   type
     TestTypeKind = enum ttTest, ttTest2
@@ -19,8 +20,6 @@ template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
       case kind: TestTypeKind
       of ttTest: test: Test1
       of ttTest2: test2: Test2
-
-  import tables, strformat, strutils
 
   var
     compAdds: int
@@ -47,15 +46,17 @@ template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
   template log(str: string): untyped =
     log(str, 0)
   
-  proc doCheck[T](curComp: T, prefix: string, expectedKind: TestTypeKind) =
+  template doCheck(curComp: untyped, prefix: string, expectedKind: TestTypeKind) =
     var found: bool
     test "Event " & prefix & " got " & $curComp.type & ", expects " & $expectedKind:
       for i in countDown(expected.high, 0):
         if expected[i].kind == expectedKind:
           found = true
           when curComp is Test1Instance:
+            check curComp.valid
             check curComp.access == expected[i].test
           elif curComp is Test2Instance:
+            check curComp.valid
             check curComp.access == expected[i].test2
           elif curComp is Test1:
             check curComp == expected[i].test
@@ -64,87 +65,147 @@ template defineTest*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
           else:
             checkpoint "Unknown type for curComponent: " & $curComp.type
             fail()
-          return
+          break
       if not found:
-        checkpoint "Cannot find expected kind " & $expectedKind & " in expected list: " & $expected & ", curComponent TypeId " & $(curComp.repr)
+        checkpoint "Unexpected kind " & $expectedKind & " found. Expected list: " & $expected & ", curComponent TypeId " & $(curComp.repr)
       check found
 
   Test1.onInterceptUpdate:
+    let
+      lastVal {.inject.} = comp1Intercepts
     comp1Intercepts += 1
-    log "Intercepting adding Test1", 1
-    log &"Intercept count: {comp1Intercepts}", 1
-    commit(curValue)
+    log &"Intercepting update for Test1, count: {lastVal} -> {comp1Intercepts}", 1
+
   Test1.onAdd:
+    let
+      lastVal = compAdds
     curComponent.doCheck("onAdd", ttTest)
     compAdds += 1
-    log &"Entity: {curEntity.entityId.int} adding Test1, count: {compAdds}", 1
+    log &"Entity: {curEntity.entityId.int} adding Test1, count: {lastVal} -> {compAdds}", 1
+
   Test1.onRemove:
+    let
+      lastVal = compAdds
     curComponent.doCheck("onRemove", ttTest)
     compAdds -= 1
-    log &"Entity: {curEntity.entityId.int} removing Test1, count: {compAdds}", 1
+    log &"Entity: {curEntity.entityId.int} removing Test1, count: {lastVal} -> {compAdds}", 1
   
   Test1.onSystemAdd:
     curComponent.doCheck("onSystemAdd", ttTest)
-    let curVal = systemAdds.getOrDefault(curSystem.name)
-    systemAdds[curSystem.name] = curVal + 1
-    log &"Entity: {curEntity.entityId.int} Test1 adding to system {curSystem.name} count: {systemAdds[curSystem.name]}", 1
+    let lastVal = systemAdds.getOrDefault(curSystem.name)
+    systemAdds[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test1 adding to system {curSystem.name} count: {lastVal} -> {systemAdds[curSystem.name]}", 1
+
   Test1.onSystemAddTo "a":
     curComponent.doCheck("onSystemAddTo \"a\"", ttTest)
-    let curVal = systemAddTos.getOrDefault(curSystem.name)
-    systemAddTos[curSystem.name] = curVal + 1
-    log &"Entity: {curEntity.entityId.int} Test1 adding to specific system {curSystem.name} count: {systemAddTos[curSystem.name]}", 1
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test1 adding to specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+
+  Test1.onSystemAddTo "b":
+    curComponent.doCheck("onSystemAddTo \"b\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test1 adding to specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+
+  Test1.onSystemAddTo "c":
+    curComponent.doCheck("onSystemAddTo \"c\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test1 adding to specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+
+  Test1.onSystemAddTo "d":
+    curComponent.doCheck("onSystemAddTo \"d\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test1 adding to specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
   
   Test1.onSystemRemove:
     curComponent.doCheck("onSystemRemove", ttTest)
-    let curVal = systemAdds.getOrDefault(curSystem.name)
-    systemAdds[curSystem.name] = curVal - 1
-    log &"Entity: {curEntity.entityId.int} Test1 removing from system {curSystem.name} count: {systemAdds[curSystem.name]}", 1
+    let lastVal = systemAdds.getOrDefault(curSystem.name)
+    systemAdds[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test1 removing from system {curSystem.name} count: {lastVal} -> {systemAdds[curSystem.name]}", 1
+    check systemAddTos[curSystem.name] >= 0
+
   Test1.onSystemRemoveFrom "a":
     curComponent.doCheck("onSystemRemoveFrom \"a\"", ttTest)
-    let curVal = systemAddTos.getOrDefault(curSystem.name)
-    systemAddTos[curSystem.name] = curVal - 1
-    log &"Entity: {curEntity.entityId.int} Test1 removing from specific system {curSystem.name} count: {systemAddTos[curSystem.name]}", 1
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test1 removing from specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+    check systemAddTos[curSystem.name] >= 0
+    assert systemAddTos[curSystem.name] >= 0
+
+  Test1.onSystemRemoveFrom "b":
+    curComponent.doCheck("onSystemRemoveFrom \"b\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test1 removing from specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+    check systemAddTos[curSystem.name] >= 0
+
+  Test1.onSystemRemoveFrom "c":
+    curComponent.doCheck("onSystemRemoveFrom \"c\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test1 removing from specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+    check systemAddTos[curSystem.name] >= 0
+
+  Test1.onSystemRemoveFrom "d":
+    curComponent.doCheck("onSystemRemoveFrom \"d\"", ttTest)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test1 removing from specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
+    check systemAddTos[curSystem.name] >= 0
 
   Test2.onInterceptUpdate:
+    let
+      lastVal {.inject.} = comp2Intercepts
     comp2Intercepts += 1
-    log "Intercepting adding Test2"
-    log &"Intercept count: {comp2Intercepts}", 1
-    commit(curValue)
+    log &"ntercepting update for Test2, count: {lastVal} -> {comp1Intercepts}", 1
+
   Test2.onAdd:
+    let
+      lastVal = comp2Adds
     curComponent.doCheck("onAdd", ttTest2)
     comp2Adds += 1
-    log &"Entity: {curEntity.entityId.int} adding Test2, count: {comp2Adds}", 1
+    log &"Entity: {curEntity.entityId.int} adding Test2, count: {lastVal} -> {comp2Adds}", 1
+
   Test2.onRemove:
-    #echo curComponent.val
-    #echo curComponent.ownerSystem.count
+    let
+      lastVal = comp2Adds
     curComponent.doCheck("onRemove", ttTest2)
     comp2Adds -= 1
-    log &"Entity: {curEntity.entityId.int} removing Test2, count: {comp2Adds}", 1
+    log &"Entity: {curEntity.entityId.int} removing Test2, count: {lastVal} -> {comp2Adds}", 1
 
   Test2.onSystemAdd:
     curComponent.doCheck("onSystemAdd", ttTest2)
-    let curVal = systemAdds.getOrDefault(curSystem.name)
-    systemAdds[curSystem.name] = curVal + 1
-    log &"Entity: {curEntity.entityId.int} Test2 adding to system {curSystem.name} count: {systemAdds[curSystem.name]}", 1
+    let lastVal = systemAdds.getOrDefault(curSystem.name)
+    systemAdds[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test2 adding to system {curSystem.name} count: {lastVal} -> {systemAdds[curSystem.name]}", 1
+
   Test2.onSystemRemove:
     curComponent.doCheck("onSystemRemove", ttTest2)
-    let curVal = systemAdds.getOrDefault(curSystem.name)
-    systemAdds[curSystem.name] = curVal - 1
-    log &"Entity: {curEntity.entityId.int} Test2 removing from system {curSystem.name} count: {systemAdds[curSystem.name]}", 1
+    let lastVal = systemAdds.getOrDefault(curSystem.name)
+    systemAdds[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test2 removing from system {curSystem.name} count: {lastVal} -> {systemAdds[curSystem.name]}", 1
 
-import random
+  Test2.onSystemAddTo "d":
+    curComponent.doCheck("onSystemAddTo \"d\"", ttTest2)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal + 1
+    log &"Entity: {curEntity.entityId.int} Test2 adding to specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
 
-const
-  maxEnts = 100
-  compOpts = ECSCompOptions(maxComponents: maxEnts)
-  sysOpts = ECSSysOptions(maxEntities: maxEnts)
-  entOpts = ECSEntityOptions(maxEntities: maxEnts)
+  Test2.onSystemRemoveFrom "d":
+    curComponent.doCheck("onSystemRemoveFrom \"d\"", ttTest2)
+    let lastVal = systemAddTos.getOrDefault(curSystem.name)
+    systemAddTos[curSystem.name] = lastVal - 1
+    log &"Entity: {curEntity.entityId.int} Test2 removing from specific system {curSystem.name} count: {lastVal} -> {systemAddTos[curSystem.name]}", 1
 
-defineTest(compOpts, sysOpts)
-makeECS(entOpts)
-commitSystems("run")
+  const
+    maxEnts = 100
 
-proc runOnEvents* = 
+  makeECS(ECSEntityOptions(maxEntities: maxEnts))
+  commitSystems("run")
+
   var otherEnts: seq[EntityRef]
 
   comp2Intercepts = 0
@@ -172,14 +233,13 @@ proc runOnEvents* =
     e1, e2, e3: EntityRef
     expectedE1, expectedE2, expectedE3: seq[TestType]
   for i in 0 ..< entCount:
-    # Expecting x2 Test2 instances going through `update`.
     suite "e1 newEntityWith...":
       test "e1 newEntityWith":
         testVal = Test1(data: 1)
         expectedE1 = @[TestType(kind: ttTest, test: testVal)]
         expected = expectedE1
 
-        log "NewEntityWith:"
+        log "NewEntityWith Test1:"
         e1 = newEntityWith(
           testVal 
         )
@@ -187,18 +247,18 @@ proc runOnEvents* =
     suite "Other entity...":
       test "Other entity":
         expected = @[TestType(kind: ttTest, test: otherEntVal)]
-        log "NewEntityWith:"
+        log "NewEntityWith Test1:"
         otherEnts.add newEntityWith(Test1(data: 180))
 
     suite "e2 addComponents...":
-      test "e2 addComponents":
+      test "e2 addComponents Test1, Test2":
         e2 = newEntity()
         testVal = Test1(data: rand 10000)
         test2Val = Test2(val: rand 1.0)
         
         expectedE2 = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
         expected = expectedE2
-        log "AddComponents:"
+        log "AddComponents: Test1, Test2"
         discard e2.addComponents(testVal, test2Val)
 
     checkGroups("e2 addComponents")
@@ -212,17 +272,17 @@ proc runOnEvents* =
     checkGroups("e2 deleting")
 
     suite "e3 addComponent 1...":
-      test "e3 addComponent 1":
+      test "e3 addComponent 1 Test1":
         e3 = newEntity()
         testVal = Test1(data: 3)
         expectedE3 = @[TestType(kind: ttTest, test: testVal)]
         expected = expectedE3
 
         log "AddComponent Test1:"
-        discard e3.addComponent testVal
+        e3.addComponent testVal
       
     suite "e3 addComponent 2...":
-      test "e3 addComponent 2":
+      test "e3 addComponent 2 Test2":
         test2Val = Test2(val: rand 1.0)
         # The entity already had Test1 and so now matches "d", as such
         # we should expect two system add invocations for Test1 and Test1 2 being placed within "d".  
@@ -230,8 +290,18 @@ proc runOnEvents* =
         log "AddComponent Test2:"
         discard e3.addComponents test2Val
     
+    suite "e3 update":
+      test "e3 update Test1":
+        let
+          t1 = e3.fetch Test1
+          t2 = e3.fetch Test2
+        t1.update t1.access
+        t2.update t2.access
+        t1.update t1.access
+        t2.update t2.access
+    
     suite "e3 Removing component...":
-      test "e3 Removing component":
+      test "e3 Removing component Test1, (dependent) Test2":
         # This will trigger for both components in the "d" system as well as for each of the other
         # systems that take Test1.
         expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
@@ -256,7 +326,7 @@ proc runOnEvents* =
         e3.delete
         checkGroups("e3 deleting")
     suite "Construct":
-      test "Single component construction":
+      test "Single component construction: Test1":
         let
           testVal = Test1(data: 7)
 
@@ -274,19 +344,33 @@ proc runOnEvents* =
         check compAdds == otherEnts.len
         check comp2Adds == 0
 
-      test "Construction with an owned component":
+      test "Construction with an owned component: Test1, Test2":
 
         # Construction of owned type with multiple\n components.
         expected = @[TestType(kind: ttTest, test: testVal), TestType(kind: ttTest2, test2: test2Val)]
         let entity2 = @[testVal.makeContainer, test2Val.makeContainer].construct()
-
+        
         check compAdds == otherEnts.len + 1
         check comp2Adds == 1
+        let comp = entity2.fetch(Test1, Test2)
+        check:
+          comp.test1.valid
+          comp.test2.valid
+          entity2 in sysA
+          entity2 in sysB
+          entity2 in sysC
+          entity2 in sysD
+        
 
         entity2.delete
 
         check compAdds == otherEnts.len
         check comp2Adds == 0
+        check:
+          entity2 notin sysA
+          entity2 notin sysB
+          entity2 notin sysC
+          entity2 notin sysD
 
     log "---"
 
@@ -306,20 +390,28 @@ proc runOnEvents* =
         echo "System " & pair[0] & " has non-zero add count: " & $pair[1]
         return false
     true
+  
   test "Add to any system":
     check systemAdds.balanced
   test "Add to specific system":
     check systemAddTos.balanced
-  test "Intercept create unowned":
-    check comp1Intercepts == entCount * 6
-  test "Intercept create owned":
-    check comp2Intercepts == entCount * 3
+  test "Intercept update unowned":
+    check comp1Intercepts == entCount * 2
+  test "Intercept update owned":
+    check comp2Intercepts == entCount * 2
   
   when displayLog:
     echo "Log:"
-    for item in eventLog: echo item
+    for item in eventLog:
+      echo item
+  
   echo "Finish."
   flushGenLog()
 
 when isMainModule:
-  runOnEvents()
+  import tables, strformat, strutils, random, unittest
+
+  static:
+    defaultIdentity.set_private true
+  block:
+    testEvents(defaultCompOpts, defaultSysOpts)

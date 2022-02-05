@@ -15,25 +15,8 @@
 # limitations under the License.
 
 
-import macros, sharedtypes, private/[utils, ecsstatedb]
+import macros, tables, sharedtypes, private/[utils, ecsstatedb]
 
-proc genComponentSet(id: EcsIdentity): NimNode =
-  ## Generate an enum that covers all of the components seen so far.
-  var items = nnkEnumTy.newTree()
-  items.add newEmptyNode()
-  items.add(ident "ceInvalid")
-  
-  for tId in id.unsealedComponents:
-    items.add(
-      nnkEnumFieldDef.newTree(
-        ident "ce" & id.typeName tId,
-        newIntLitNode(tId.int)
-      )
-    )
-  let eName = ident enumName()
-
-  result = quote do:
-    type `eName`* {.used.} = `items`
 
 proc recyclerType(options: ECSEntityOptions): NimNode =
   case options.recyclerFormat
@@ -74,25 +57,16 @@ proc makeEntityItems*(id: EcsIdentity, options: EcsEntityOptions): NimNode =
     # Code to initialise entity state.
     entCompInit =
       case options.entityStorageFormat
-      of esSeq: newEmptyNode()
-      of esArray: newEmptyNode() # No work required to init array.
+      of esSeq: newStmtList()
+      of esArray: newStmtList()
       of esPtrArray:
         quote do:
           `initParamName`.entityComponents = cast[`entityStorageContainerName`](alloc0(sizeOf(`entityStorageContainerName`)))
-    componentSet = id.genComponentSet()
-    setType = ident enumName()
+    setType = ident componentsEnumName()
     recycler = recyclerType(options)
 
   # TODO: Check if already imported.
-  let tableImport =
-    if options.componentStorageFormat == csTable:
-      quote do:
-        import tables
-    else: newEmptyNode()
-
   result = quote do:
-    `tableImport`
-    `componentSet`
     type
       `entityStorageItem`* = object
         # The component indexes stored here are only used for fetchComponent and
@@ -142,6 +116,9 @@ proc makeEntityItems*(id: EcsIdentity, options: EcsEntityOptions): NimNode =
     let rLen = recyclerArrayLen()
     storageFields.add genField(rLen, false, ident "Natural")
   
+  # TODO Split 'componentRefs' into the smallest value for typeIds (byte/word) and an indexed matched list component index.
+  # Searching/fetching through typeId is common, we should be able to fit most component lists into a single cache line.
+
   case options.componentStorageFormat
   of csSeq:
     storageItemsFields.add genField(componentRefsStr, true, genSeq(ident "ComponentRef"))

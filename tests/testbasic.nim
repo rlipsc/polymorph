@@ -1,6 +1,8 @@
 import polymorph
 
-if not defined(debug): quit("Basic tests must be run in debug mode.")
+if not defined(debug):
+  quit("Basic tests must be run in debug mode.")
+
 template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts: ECSSysOptions) {.dirty.} =
 
   registerComponents(compOpts):
@@ -175,14 +177,15 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
         check not(e.fetch(AddOne).valid)
         check not(e.fetch(IntCont).valid)
 
-        e.addComponent IntCont(value: 5)
+        discard newEntityWith(IntCont())
+        discard e.add(IntCont(value: 5))
         
         check sysIncInt.count == lastCount
 
         e.fetchCheck IntCont:
           check comp.value == 5
 
-        e.addComponent AddOne()
+        e.add AddOne()
         check sysIncInt.count == lastCount + 1
 
       test "Add components":

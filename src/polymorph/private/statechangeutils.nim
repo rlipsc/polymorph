@@ -1,144 +1,318 @@
-## Tools for building ECS state change operations.
+# SPDX-License-Identifier: Apache-2.0
+
+# Copyright (c) 2020 Ryan Lipscombe
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#     http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+## Tools for building ECS state change operations:
+## 
+## - translating lists of components into system updates,
+## - generating code for fetching, conditionals, and building system rows.
 ## 
 
-import macros, strutils, sets
+
+import macros, strutils, sets, tables
 import ../sharedtypes, ecsstatedb, utils
 
+proc satisfied*(id: EcsIdentity, sysIndex: SystemIndex, compList: ComponentIterable): bool {.compileTime.} =
+  ## Returns true when a set of components matches a system's requirements.
 
-# -----------------
-# General utilities
-# -----------------
-
-iterator building*(id: EcsIdentity, systems: seq[SystemIndex] | HashSet[SystemIndex]): auto =
-  ## Iterates through `systems`, outputting standardised idents for use
-  ## in building operations.
-  for sys in systems:
-    let
-      sysName = id.getSystemName sys
-    
-    yield (
-      id: sys,
-      name: sysName,
-      inst: id.instantiation sys,
-      sysVar: ident systemVarName(sysName),
-      foundBool: ident sysName.toLower & "Found",
-      foundRow: ident sysName.toLower & "FoundRow"
-    )
-
-iterator building*(id: EcsIdentity, components: seq[ComponentTypeId] | HashSet[ComponentTypeId]): auto =
-  ## Iterates through `components`, outputting standardised idents for use
-  ## in building operations.
-  for typeId in components:
-    let
-      typeStr = id.typeName typeId
-      sysOwner = id.systemOwner(typeId)
-      instStr = typeStr.instanceTypeName
-    yield (
-      typeId: typeId,
-      typeName: typeStr,
-      instType: instStr,
-      instField: typeStr.toLowerAscii & instPostfix,
-      owner: sysOwner,
-      isOwned: sysOwner != InvalidSystemIndex,
-    )
-
-proc satisfied*(id: EcsIdentity, sysIndex: SystemIndex, compList: openarray[ComponentTypeId]): bool {.compileTime.} =
-  ## Returns true when a set of components matches a system.
-  ## Used to check static constraints at compile time.
   for req in id.ecsSysRequirements(sysIndex):
     if req notin compList:
       return false
-
+  
   for req in id.ecsSysNegations(sysIndex):
     if req in compList:
       return false
-
+  
   true
 
+iterator satisfiedSystems*(id: EcsIdentity, compList: ComponentIterable): SystemIndex =
+  ## Yields system indexes that are satisfied by `compList`.
 
-# -----------------
-# Entity operations
-# -----------------
+  var
+    sysProcessed: SystemSet
 
-proc buildInstanceVars*(id: EcsIdentity, entity: NimNode, components: seq[ComponentTypeId]): NimNode =
-  ## Defines and initialises instance variables for each component in `components`.
-  result = newStmtList()
+  for comp in compList:
+
+    for sys in id.systems comp:
+      
+      if sys notin sysProcessed:
+        sysProcessed.incl sys
+        
+        var found = true
+
+        for req in id.ecsSysRequirements(sys):
+          if req notin compList:
+            found = false
+            break
+    
+        if found:
+          for req in id.ecsSysNegations(sys):
+            if req in compList:
+              found = false
+              break
+          
+          if found:
+            yield sys
+
+
+type
+  SystemChangeKind* = enum sckAdd, sckRemove
+
+  SystemChange* = object
+    sys*: SystemIndex
+    fromNegation*: bool
+    case kind*: SystemChangeKind
+      of sckAdd:
+        checkIncl*, checkExcl*: ComponentSet
+      of sckRemove:
+        discard
+
+
+iterator addStateChanges*(id: EcsIdentity, given: seq[ComponentTypeId], givenSet: ComponentSet): SystemChange =
+  ## Iterates over systems that might be affected by the given components.
+  ## 
+  ## Yields possible systems and the conditions required.
   
   var
-    vars = nnkVarSection.newTree()
-    ownedInits = newStmtList()
+    processed: SystemSet
+  
+  for c in given:
+    for sys in id.linked c:
+      if sys notin processed:
+        processed.incl sys
 
-  for c in id.building(components):
-    vars.add genField(c.instField, false, ident c.instType)
+        let
+          req = id.ecsSysRequirements(sys).toHashSet
+          neg = id.ecsSysNegations(sys).toHashSet
+          own = id.ecsOwnedComponents(sys).toHashSet
+          mandatory = givenSet.intersection(own).len > 0
+
+        if own.len > 0:
+          if mandatory:
+            # This is the owner system for a passed owned component.
+            # Owned components cannot be stored without fully satisfying
+            # their owner systems.
+            let
+              givenNeg = neg.intersection givenSet
+
+            if givenNeg.len > 0:
+              error "Cannot instantiate owned component " & id.typeName(c) &
+                " because the system is negated with the passed components: " &
+                id.commaSeparate(givenNeg)
+            else:
+              if own <= givenSet:
+                # We have all the owned components we need to create a row,
+                # possibly pending other component conditions.
+                yield SystemChange(
+                  kind: sckAdd,
+                  sys: sys,
+                  checkIncl: req - givenSet,
+                  checkExcl: neg
+                )
+              else:
+                error "Cannot instantiate component " & id.typeName(c) &
+                  " as the owner system \"" & id.getSystemName(sys) &
+                  "\" requires other owned components: " &
+                  id.commaSeparate(own - givenSet)
+          else:
+            # This system doesn't match any conditions.
+            discard
+        else:
+          if neg.disjoint(givenSet):
+            # No passed negations affect this system.
+            # Negations might still exist on the entity.
+            let
+              inCommon = req.intersection givenSet
+            
+            if inCommon.len > 0:
+              yield SystemChange(
+                kind: sckAdd,
+                sys: sys,
+                checkIncl: req - inCommon,
+                checkExcl: neg
+              )
+            else:
+              # This system doesn't match any conditions.
+              discard
+          else:
+            # Adding these components negates this system (if present).
+            yield SystemChange(
+              sys: sys,
+              fromNegation: true,
+              kind: sckRemove,
+            )
+
+
+iterator removeStateChanges*(id: EcsIdentity, removing: seq[ComponentTypeId]): SystemChange =
+  ## Returns a set of systems that interact with these components.
+  
+  var
+    processed: SystemSet
+  let
+    removingSet = removing.toHashSet
+
+  for c in removing:
+
+    for sys in id.linked c:
+      if sys notin processed:
+        processed.incl sys
+
+        let
+          neg = id.ecsSysNegations(sys).toHashSet
+          req = id.ecsSysRequirements(sys).toHashSet
+          negIntersect = neg.intersection removingSet
+
+        if req.hasIntersection(removingSet):
+          # This system's requirements are invalidated by the remove. 
+          yield
+            SystemChange(
+              sys: sys,
+              kind: sckRemove
+            )
+        
+        else:
+          # The removed components haven't affected system requirements.
+
+          if negIntersect.len > 0:
+            # This remove might have satisfied a system's negations.
+
+            # Note: it's possible that any of these components have already
+            # been removed and the negation is already satisfied.
+            
+            if id.ecsOwnedComponents(sys).len == 0:
+              let
+                req = id.ecsSysRequirements(sys).toHashSet
+                neg = id.ecsSysNegations(sys).toHashSet
+                otherNegs = neg - negIntersect
+              
+              yield
+                SystemChange(
+                  sys: sys,
+                  fromNegation: true,
+                  kind: sckAdd,
+                  # Note: negIntersect is included to ensure negated component
+                  # are present to be removed in order for this state change
+                  # to occur. This handles remove ops where the component to
+                  # be removed isn't on the entity.
+                  checkIncl: req + negIntersect,
+                  checkExcl: otherNegs
+                )
+            else:
+              # An owner system that has one or more matching component
+              # negations.
+              #
+              # Since owned components can only be directly created in an add
+              # operation we cannot create a new row for this system.
+              discard
+          
+          else:
+            # There are no negations in common with this system, and no
+            # negations match either.
+            discard
+
+
+# --------------------
+# Component operations
+# --------------------
+
+
+proc buildVars*(node: var NimNode, id: EcsIdentity, components: ComponentIterable, suffix: string, compAccess: ComponentAccessProc) =
+  ## Create instance variables corresponding to a set of components.
+
+  if components.len == 0:
+    return
+
+  var
+    vars = nnkVarSection.newTree()
+  
+  for c in id.building components:
+    let
+      #field = c.fetchedIdent(suffix)
+      field = c.compAccess(suffix)
+      instTypeIdent = c.instanceTy
     
     if c.isOwned:
-      let
-        fieldIdent = ident c.instField
-        instTypeIdent = ident c.instType
-      ownedInits.add(quote do:
-        `fieldIdent` = -1.`instTypeIdent`
-      )
-  
+      vars.add newIdentDefs(field, newEmptyNode(), quote do: -1.`instTypeIdent`)
+    else:
+      vars.add newIdentDefs(field, instTypeIdent)
+
   if vars.len > 0:
-    result.add vars
-  if ownedInits.len > 0:
-    result.add ownedInits
+    node.add vars
 
 
-proc buildFetch*(id: EcsIdentity, entity: NimNode, components: seq[ComponentTypeId]): NimNode =
-  # Outputs fetches from `entity` for all `components`.
-  result = newStmtList()
+proc buildFetchComponents*(node: var NimNode, id: EcsIdentity, entity: NimNode, components: ComponentIterable,
+    suffix: string, earlyExit: bool, compAccess: ComponentAccessProc) =
+  ## Outputs code to populate component variables from `entity`.
 
-  result.add id.buildInstanceVars(entity, components)
+  if components.len == 0:
+    return
 
   case id.componentStorageFormat
     
     of csSeq, csArray:
-      # Seach the entity's component list for the given components.
+      # Builds a loop over the entity's components with a case statement
+      # to populate the given components.
+
+      node.buildVars(id, components, suffix, compAccess)
+      
       let
         totalComps = components.len
         multipleFetches = totalComps > 1
 
-        fieldCounter = ident "fieldCounter"
-        curComp = ident "curComp"
+        fieldCounter = genSym(nskVar, "fieldCounter")
+        curCompRef = genSym(nskForVar, "curCompRef")
 
       if totalComps > 0:
 
         let
           exitConditions =
-            if multipleFetches:
-              quote do:
-                `fieldCounter` += 1
-                if `fieldCounter` == `totalComps`:
+            if earlyExit:
+              if multipleFetches:
+                quote do:
+                  `fieldCounter` += 1
+                  if `fieldCounter` == `totalComps`:
+                    break
+              else:
+                quote do:
                   break
             else:
-              quote do:
-                break
+              newStmtList()
 
-        if multipleFetches:
-          result.add(quote do:
+        if earlyExit and multipleFetches:
+          node.add(quote do:
             var `fieldCounter`: int
           )
 
-        # Build a case statement with an 'of' branch for the given components.
-        
         var
           fetchCase = nnkCaseStmt.newTree(
             quote do:
-              `curComp`.typeId.int
+              `curCompRef`.typeId.int
           )
 
-        for c in id.building(components):
+        # Add 'of' branches.
+
+        for c in id.building components:
           let
-            field = ident c.instField
-            instType = ident c.instType
-            owner = id.systemOwner(c.typeId)
+            field = c.compAccess(suffix)
+            instType = c.instanceTy
 
           fetchCase.add nnkOfBranch.newTree(
-            newIntLitNode(c.typeId.int),
+            newLit c.typeId.int,
             newStmtList(quote do:
-                `field` = `instType`(`curComp`.index)
-                `exitConditions`
+              `field` = `instType`(`curCompRef`.index)
+              `exitConditions`
             )
           )
 
@@ -147,121 +321,29 @@ proc buildFetch*(id: EcsIdentity, entity: NimNode, components: seq[ComponentType
             discard
           )
 
-        result.add(quote do:
-          for `curComp` in entityData(`entity`.entityId).componentRefs:
+        node.add(quote do:
+          for `curCompRef` in `entity`:
             `fetchCase`
         )
 
     of csTable:
       # Output direct table lookups for the components.
-      result = newStmtList()
+      
+      let
+        entityId = quote do: `entity`.entityId
+        entityData = entAccess(id.entityStorageFormat, entityId)
 
-      for c in id.building(components):
+      for c in id.building components:
         let
           comp = c.typeId
-          instTyIdent = ident c.instType
-          fieldIdent = ident c.instField
-        
-        result.add(quote do:
-          let `fieldIdent` = `instTyIdent`(entityData(`entity`.entityId).componentRefs.getOrDefault(`comp`.ComponentTypeId).index)
+          instTyIdent = c.instanceTy
+          field = c.compAccess(suffix)
+          getComp = quote do:
+            `entityData`.componentRefs.getOrDefault(`comp`.ComponentTypeId)
+          
+        node.add(quote do:
+          let `field` = `instTyIdent`(`getComp`.index)
         )
-
-
-proc buildFetch2*(id: EcsIdentity, entity: NimNode, lookFor: seq[ComponentTypeId]): NimNode =
-  ## Outputs code to:
-  ##  - fetch a list of components from the entity's component list
-  ##  - place these into instance variables named after the type.
-
-  result = newStmtList()
-
-  var
-    # Create component variable to be populated by the fetch.
-    compDecl = id.buildInstanceVars(entity, lookFor)
-
-    fetch = newStmtList()
-    fieldCounter = ident "fieldCounter"
-    targetHigh = lookFor.len
-    ownedInits {.used.} = newStmtList()
-
-  if targetHigh > 0:
-    let multipleFetches = targetHigh > 1
-
-    if multipleFetches:
-      result.add(quote do:
-        var `fieldCounter`: int
-      )
-
-    case id.componentStorageFormat
-    of csSeq, csArray:
-      # Loop through components and extract with a case statement.
-      let
-        fetchCompIdent = ident "curComp"
-      var
-        fetchCase = nnkCaseStmt.newTree()
-
-      fetchCase.add(quote do:
-        `fetchCompIdent`.typeId.int
-      )
-
-      for typeId in lookFor:
-        let
-          typeStr = id.typeName typeId
-          fieldName = typeStr.toLowerAscii & instPostfix
-          fieldIdent = ident fieldName
-          instTypeIdent = ident typeStr.instanceTypeName
-          owner = id.systemOwner(typeId)
-
-        if owner != InvalidSystemIndex:
-          # Owned system fetched require initialisation as the uninitialised
-          # type will pass a `valid` check.
-          ownedInits.add(quote do:
-            `fieldIdent` = -1.`instTypeIdent`
-          )
-
-        let
-          getInstance = quote do:
-            `fetchCompIdent`.index
-          ofBranch = nnkOfBranch.newTree(newIntLitNode(typeId.int))
-          ofStmts = 
-            if not multipleFetches:
-              # With only one component to fetch we don't need to track count.
-              newStmtList(quote do:
-                `fieldIdent` = `instTypeIdent`(`getInstance`)
-                break
-              )
-            else:
-              newStmtList(quote do:
-                `fieldIdent` = `instTypeIdent`(`getInstance`)
-                `fieldCounter` += 1
-                if `fieldCounter` == `targetHigh`: break
-              )
-        ofBranch.add ofStmts
-        fetchCase.add ofBranch
-
-      fetchCase.add nnkElse.newTree(quote do: discard)
-      fetch.add(quote do:
-        for `fetchCompIdent` in entityData(`entity`.entityId).componentRefs:
-          `fetchCase`
-      )
-
-    of csTable:
-      ## Tables can directly fetch components.
-      for comp in lookFor:
-        let
-          typeStr = id.typeName comp
-          instTypeIdent = ident(typeStr.instanceTypeName)
-          fieldName = typeStr.toLowerAscii & instPostfix
-          fieldIdent = ident fieldName
-        fetch.add(quote do:
-          let `fieldIdent` = `instTypeIdent`(entityData(`entity`.entityId).componentRefs.getOrDefault(`comp`.ComponentTypeId).index)
-        )
-
-    result.add compDecl
-
-    if ownedInits.len > 0:
-      result.add ownedInits
-
-    result.add fetch
 
 
 # -----------------
@@ -269,71 +351,159 @@ proc buildFetch2*(id: EcsIdentity, entity: NimNode, lookFor: seq[ComponentTypeId
 # -----------------
 
 
-proc buildFindSystemVars*(id: EcsIdentity, systems: seq[SystemIndex] | HashSet[SystemIndex]): NimNode =
-  # Set up variables for populating a find boolean and row index for a set of systems.
-  assert systems.len > 0
-
-  result = nnkVarSection.newTree()
+proc buildVars*(id: EcsIdentity, systems: SystemIterable, typeNode: NimNode, suffix: string): NimNode =
+  ## Create variables corresponding to a set of systems.
   
-  for sys in id.building(systems):
+  if systems.len == 0:
+    return newStmtList()
+
+  result =
+    nnkVarSection.newTree()
   
-    result.add newIdentDefs(sys.foundBool, ident "bool")
-    result.add newIdentDefs(sys.foundRow, ident "int")
+  for sys in id.building systems:
+    result.add newIdentDefs(
+      sys.fetchedIdent(suffix),
+      typeNode)
 
 
-proc buildFindSystems*(id: EcsIdentity, entityRef: NimNode, systems: seq[SystemIndex] | HashSet[SystemIndex]): NimNode =
+proc buildFetchSystemsDecl*(node: var NimNode, id: EcsIdentity, systems: SystemIterable, suffix: string) =
+  node.add id.buildVars(systems, ident "SystemFetchResult", suffix)
+
+
+proc buildFetchSystemsExe*(node: var NimNode, id: EcsIdentity, entity: NimNode, systems: SystemIterable, suffix: string) =
   ## Fetch the system rows for the entity, if present.
   ## Expects `bool` and `int` find variables for each system as set up in `buildFindSystemVars`.
-  result = newStmtList()
-  
   let
-    entId = entityRef.newDotExpr(ident "entityId")
+    entityId = entity.newDotExpr(ident "entityId")
   
-  for sys in id.building(systems):
+  for sys in id.building systems:
     let
-      row = sys.foundRow
-      tryGetIndex = sys.inst.indexTryGet(
-        entId,
-        row,
-        id.indexFormat(sys.id))
-      found = sys.foundBool
+      # sysFound is of type `SystemFetchResult`.
+      sysFound = sys.fetchedIdent(suffix)
+      foundRow =  quote do:
+        `sysFound`.row
+
+      tryGetIndex = sys.variable.indexTryGet(
+        entityId,
+        foundRow,
+        id.indexFormat(sys.index)
+      )
     
-    result.add(quote do:
-      if `tryGetIndex`:
-        `found` = true
-        `row` = `row`
-    )
-
-
-proc buildRemoveSystemEvents*(id: EcsIdentity, entityRef: NimNode, systems: seq[SystemIndex] | HashSet[SystemIndex]): NimNode =
-  # Return user event handlers triggered on removal from a system.
-  result = newStmtList()
-
-  let
-    entId = entityRef.newDotExpr(ident "entityId")
-  
-  for sys in id.building(systems):
-    let
-      sysOpts = id.getOptions sys.id
-      userSysRemove = id.userSysRemoved(sys.id, sys.inst, sys.foundRow, entId, entityRef, sysOpts)
-    
-    if userSysRemove.len > 0:
-      let
-        found = sys.foundBool
-      
-      result.add(quote do:
-        if `found`:
-          `userSysRemove`
+    node.add(quote do:
+      `sysFound`.found = `tryGetIndex`
       )
 
 
-proc buildRemoveSystems*(id: EcsIdentity, entityRef: NimNode, systems: seq[SystemIndex] | HashSet[SystemIndex]): NimNode =
-  # Return code to remove the system rows.
-  result = newStmtList()
+proc buildFetchSystems*(node: var NimNode, id: EcsIdentity, entity: NimNode, systems: SystemIterable, suffix: string) =
+  node.buildFetchSystemsDecl(id, systems, suffix)
+  node.buildFetchSystemsExe(id, entity, systems, suffix)
+
+
+proc buildSysItem*(id: EcsIdentity, entity: NimNode, sys: SystemBuildInfo,
+    orderedRequirements, passedTypes: ComponentIterable, passedValues: NimNode,
+    suffix: string, compAccess: ComponentAccessProc): tuple[possible: bool, itemValue, ownedStateUpdates: NimNode] =
+  ## Build a new item row and assign the system requirements.
+  ## 
+  ## All owned components for this system must be included in
+  ## `passedValues` in order to create a row.
+
+  result.itemValue = nnkObjConstr.newTree()
+  result.itemValue.add ident itemTypeName(sys.name)
+  result.itemValue.add nnkExprColonExpr.newTree(ident "entity", entity)
+  result.ownedStateUpdates = newStmtList()
+  result.possible = true
+
   let
-    entId = entityRef.newDotExpr(ident "entityId")
+    sysVar = sys.variable
+
+  for c in id.building orderedRequirements:
+    if c.owner == sys.index:
+      # Owned components are directly assigned to the item from the parameter list.
+      
+      if passedValues.len == 0:
+        result.possible = false
+        break
+
+      let
+        ownedIndex = passedTypes.find c.typeId
+
+      if ownedIndex < 0:
+        result.possible = false
+        break
+
+      result.itemValue.add nnkExprColonExpr.newTree(
+        ident c.lcName,
+        passedValues[ownedIndex]
+      )
+
+      result.ownedStateUpdates.add id.appendOwnedComponentState(c.typeId, sysVar.newDotExpr(ident "high"))
+    
+    else:
+      # Use the externally fetched instance value for the field.
+      result.itemValue.add nnkExprColonExpr.newTree(
+        ident c.lcName,
+        c.compAccess(suffix)
+      )
+
+
+proc buildSysCheck*(id: EcsIdentity, requirements, negations: ComponentIterable, suffix: string, compValid: ComponentValidProc): NimNode =
+  ## Returns the infix for an 'if' statement from the system requirements.
+  ## For example: `comp1 and comp2 and not(comp3)`.
+
+  var
+    reqElements: seq[NimNode]
   
-  for sys in id.building(systems):
-    result.add removeSysReference(id, sys.id, sys.sysVar, sys.foundBool, sys.foundRow, entId, entityRef)
+  for c in id.building requirements:
+    reqElements.add c.compValid(suffix)
+
+  for c in id.building negations:
+    let
+      isValid = c.compValid suffix
+
+    reqElements.add(quote do:
+      (not `isValid`)
+    )
+
+  genInfixes(reqElements, "and")
+
+
+proc checkRequired*(id: EcsIdentity, entity: NimNode, sysIndex: SystemIndex, req, neg: ComponentSet, suffix: string,
+    compValid: ComponentValidProc): NimNode =
+  ## Run time check to ensure required components exist to satisfy owned systems.
+  result = newStmtList()
+
+  if req.len == 0 and neg.len == 0:
+    return
+
+  let
+    matchesSystem = id.buildSysCheck(req, neg, suffix, compValid)
+  
+  var
+    reqStr = id.commaSeparate(req)
+
+  if neg.len > 0:
+    reqStr &= " and not " & id.commaSeparate(neg)
+
+  let
+    unsatisfiedErrStr =
+      newLit "Cannot complete this add operation because one or more passed components " &
+      "are owned but the the owner system '" & id.getSystemName(sysIndex) &
+      "' cannot be fully satisfied. System requirements: [" & reqStr & "], entity's components: "
+
+  result.add(
+    case id.errIncompleteOwned
+    of erAssert:
+      quote do:
+        {.line.}:
+          assert `matchesSystem`, `unsatisfiedErrStr` & (
+            if `entity`.componentCount == 0: "<none>"
+            else: "\n" & `entity`.listComponents(showData = false))
+    
+    of erRaise:
+      quote do:
+        if not(`matchesSystem`):
+          {.line.}:
+            raise newException(ValueError, `unsatisfiedErrStr`)
+  )
 
 

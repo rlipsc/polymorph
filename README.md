@@ -16,6 +16,8 @@
   - [Component utilities](#component-utilities)
     - [Matching run time `ComponentTypeId`](#matching-run-time-componenttypeid)
 - [Defining systems](#defining-systems)
+  - [System component negation](#system-component-negation)
+  - [Systems without components](#systems-without-components)
   - [Committing systems](#committing-systems)
   - [System execution order](#system-execution-order)
   - [Running systems at time intervals](#running-systems-at-time-intervals)
@@ -46,7 +48,7 @@
 - [Events](#events)
   - [Inline events](#inline-events)
   - [System events](#system-events)
-    - [Mutating entities within inline system events](#mutating-entities-within-inline-system-events)
+  - [Mutating entities within events](#mutating-entities-within-events)
   - [Change events](#change-events)
   - [`onEcsBuilt`](#onecsbuilt)
   - [Construction and clone events](#construction-and-clone-events)
@@ -69,7 +71,6 @@
   - [Multiple identities](#multiple-identities)
 - [Future work](#future-work)
   - [Performance](#performance)
-  - [Utility](#utility)
 
 
 # Project overview
@@ -78,7 +79,7 @@ This library provides a lean, generative abstraction for writing programs with t
 
 ## Entity-component-systems
 
-This pattern, often abbreviated as ECS, lets you create sets of data types at run time and dispatch code over type combinations.
+This pattern, often abbreviated as ECS, lets you create sets of data at run time, and dispatch code for sets with particular combinations.
 
 - A set of types is an **entity**.
 - A data type is a **component**.
@@ -118,41 +119,37 @@ The output is statically dispatched with a sequential flow, optimised to each sy
 ```nim
 import polymorph
 
-# Create some components.
-registerComponents defaultCompOpts:
+# Define component data.
+register defaultCompOpts:
   type
-    Position = object
+    Pos = object
       x, y: int
-    Velocity = object
+    Vel = object
       x, y: int
 
-# Define logic to operate on a set of components.
-makeSystem "move", [Position, Velocity]:
+# Act on components.
+makeSystem "move", [Pos, Vel]:
   all:
-    item.position.x += item.velocity.x
-    item.position.y += item.velocity.y
+    item.pos.x += item.vel.x
+    item.pos.y += item.vel.y
 
-# Generate the ECS.
-makeEcs()
+# Generate the ECS and systems.
+makeEcsCommit "runSystems"
 
-# Output defined systems and choose name of execution proc.
-commitSystems "run"
-
-# Create an entity to use the "move" system.
+# Use the "move" system.
 let
-  movingEntity = newEntityWith(
-    Position(x: 1, y: 1),
-    Velocity(x: 2, y: -1),
+  moving = newEntityWith(
+    Pos(x: 0, y: 0),
+    Vel(x: 1, y: 1)
   )
 
-# Runs the "move" system once.
-run()
+# Execute "move" a number of times.
+for i in 0 ..< 4:
+  runSystems()
 
-# Check the updated component values.
-let
-  pos = movingEntity.fetch Position
-
-assert pos.x == 3 and pos.y == 0
+# Check the new component values
+let pos = moving.fetch Pos
+assert pos.x == 4 and pos.y == 4
 ```
 
 ## Compile time focus
@@ -195,13 +192,6 @@ The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-m
     - JSON RPC over HTTP.
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
   - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
-
-Included in the [demos](https://github.com/rlipsc/polymers/tree/master/polymers/demos) folder are examples combining different components from Polymers.
-  - [A console database browser](https://github.com/rlipsc/polymers/blob/master/polymers/demos/dbbrowser.nim).
-  - [Swish around 250,000 colour changing particles with your mouse](https://github.com/rlipsc/polymers/blob/master/polymers/demos/particledemo.nim).
-  - [A particle life simulation](https://github.com/rlipsc/polymers/blob/master/polymers/demos/particlelife.nim).
-  - [A simple 2D game using OpenGL](https://github.com/rlipsc/polymers/blob/master/polymers/demos/spaceshooter.nim).
-  - [A simple web server](https://github.com/rlipsc/polymers/blob/master/polymers/demos/simplewebsite.nim).
 
 # Overview of building an ECS
 
@@ -514,6 +504,26 @@ makeSystem "mySystem2", [Comp1, Comp2]:
     echo "Comp1: ", item.comp1
 ```
 
+## System component negation
+
+Systems can also be defined to only match when components are not present:
+
+```nim
+makeSystem "notB", [A, not B]:
+  discard
+```
+
+## Systems without components
+
+Systems can be defined without components in order to run code within the system workflow:
+
+```nim
+makeSystem "noComponents":
+  echo "Runs within the expect system order"
+```
+
+These systems cannot use `all` or `stream` blocks, since they don't store components to process.
+
 ## Committing systems
 
 Once committed, each system is output as a procedure named after the system, prefixed with "`do`".
@@ -543,7 +553,7 @@ The order systems are run is key in determining how your ECS operates.
 
 Systems are added to the output of `commitSystems` in the order `defineSystem` is encountered.
 
-When no matching `defineSystem` is present, `makeSystem` will invoke `defineSystem` for you, defining the order as it's encountered in the source code.
+When no matching `defineSystem` is present, `makeSystem` will invoke `defineSystem` for you, setting the order as it's encountered in the source code.
 
 ```nim
 import polymorph
@@ -1262,7 +1272,7 @@ entity.update cl(
 
 # Events
 
-Polymorph includes a variety of events for different situations. Most of these are 'inline' and are included ad hoc when required in the output code. All events are called immediately at the point of invocation.
+Polymorph includes a variety of events for different situations. Most of these are 'inline' and are composed ad hoc when required in the output code. All events are called immediately at the point of invocation.
 
 In general, events are invoked *after* the state has been fully resolved for events that trigger when 'adding' and *before* the state has been resolved for 'removing' events.
 
@@ -1271,9 +1281,6 @@ In general, events are invoked *after* the state has been fully resolved for eve
 These events are directly injected during a state change without any call overhead. This makes them great for component initialisations/deinitialisations, monitoring, and other light work.
 
 Each event *appends* code, which is run in the order the event code is added. This allows extending events on components even if they already have existing event code.
-
-Note: as these events are defined during `makeEcs` they *do not have access to the sealed ECS*.
-This is important because it means you ***cannot add or remove components*** within these events.
 
 | Event | Parameters | Triggered |
 |---|---|---|
@@ -1286,11 +1293,7 @@ This is important because it means you ***cannot add or remove components*** wit
 
 ## System events
 
-Additionally, there are two important system events which offer access to all the components involved in a system. These come in two flavours, inline and callbacks.
-
-These events allow using the sealed ECS, such that you can add or remove components from entities within the events themselves.
-
-    Note: whilst being able to change entities during active events can be extremely useful, it can dramatically reduce transparency and increase complexity - particularly if your system is used externally, such as in a library.
+These events are invoked when system rows are added or removed, and can use the `item` template to access components within the system row that's affected.
 
 | Event | Triggered |
 |---|---|
@@ -1299,15 +1302,28 @@ These events allow using the sealed ECS, such that you can add or remove compone
 | `addedCallback` | Call a procedure when a new row is added to the system |
 | `removedCallback` | Call a procedure when a row is removed from the system |
 
-### Mutating entities within inline system events
+## Mutating entities within events
 
-Inline events are expanded by the compiler and can therefore create cycles at compile time. For example, if your `added` event for a system adds a component that directly or indirectly ends up triggering the original `added` event again, code generation would get stuck in a cycle.
+Events are allowed to add or remove components from their host/calling entity, as long as they don't invalidate other registered events.
 
-Polymorph guards against event cycles at compile time and will fail with an error message when events of the same type invoke the same system more than once. However this is limited to code expansion, not semantic analysis. It cannot determine conditional event triggers, for example.
+In other words, event execution is **immutable**: once a state change occurs, such as adding a component, all the events associated with that state change *must* be allowed to execute.
 
-This caveat only applies to inline system events `added` and `removed`. Callback events such as `addedCallback` and `removedCallback` do not require expansion in this way, and so offer the benefits of manipulating entities without the potential for compile time cycles.
+As long as this condition is respected, events are allowed to freely mutate entities.
 
-It's worth being aware of how events affect a design, particularly if your systems are being used by other developers who may use their own events which could be triggered along with, or inside, your event code.
+This means, for example, events are free to remove the component being added within an `onAdd` event, as long as, say, an `onAddCallback` event isn't registered for the same component.
+
+Polymorph guards against these conflict conditions at compile time:
+
+1. Removing components that invalidate a future event from the same state change (as above).
+2. Event cycles, even if called indirectly through other events.
+3. Deleting the host/caller entity.
+4. Recursive events, for example an `onAdd` that removes a component, coupled with an `onRemove` event that adds the same component.
+
+However this analysis is currently limited to code expansion, not semantic analysis. This means it cannot determine conditional event triggers, for example.
+
+Events are a powerful feature, and it's worth being aware of how they affect a design, particularly if your systems are being used by other developers who may use their own events which could be triggered along with, or inside, your event code.
+
+You can see the flow of event expansion by compiling with the `-d:ecsLogDetails` switch.
 
 ## Change events
 
@@ -2065,9 +2081,5 @@ myId.makeEcs defaultEntOpts
 
 - Optimise component metadata management.
 - Provide an option to split component storage into separate lists per field.
-- Heuristics for inserting components and systems to minimise fragmentation with high system churn.
-- Automatically group systems that interact into threads (see the [automated threading](https://github.com/rlipsc/polymorph/issues/4) issue).
-
-## Utility
-
-- Allow run time component and system definitions to support plugin architectures.
+- Heuristics for inserting components and systems to minimise fragmentation in non-owner systems with high system churn.
+- Automatically group systems that interact into threads.

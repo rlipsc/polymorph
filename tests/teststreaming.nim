@@ -21,7 +21,6 @@ template defineStreaming* {.dirty.} =
       processed += 1
     check processed == min(fixedStreamRate, sys.groups.len)
 
-
   makeSystem("streamMulti", [StreamA, StreamB]):
     var processed: int
     sys.streamRate = 50

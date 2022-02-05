@@ -15,45 +15,74 @@
 # limitations under the License.
 
 import macros, ecsstatedb
+from strutils import repeat
 
 when defined(ecsLogDetails):
   from strutils import capitalizeAscii
 
-proc startOperation*(id: EcsIdentity, op: string) {.compileTime.} = 
 
-  id.set_ecsCurrentOperation op
-
+proc debugMessage*(id: EcsIdentity, op: string, extraIndent = 0): int {.compileTime, discardable.} = 
   when defined(ecsLogDetails):
     let
-      curOp = id.ecsCurrentOperation()
-      curIndent = id.ecsCurrentOperationIndent()
-      newIndent = curIndent & "  "
-    id.set_ecsCurrentOperationIndent newIndent
-    debugEcho curIndent & "[ ", capitalizeAscii(curOp) & " ]"
+      curIndent = id.ecsCurrentOperation.len
+      identStr = "  ".repeat curIndent + extraIndent
+
+    debugEcho identStr & "[ " & capitalizeAscii(op) & " ]"
+    curIndent
+  else:
+    discard
+
+proc startOperation*(id: EcsIdentity, op: string) {.compileTime.} = 
+  when defined(ecsLogDetails) or defined(ecsPerformanceHints):
+    var curOps = id.ecsCurrentOperation
+
+    when defined(ecsLogDetails):
+      id.debugMessage(capitalizeAscii(op))
+
+    if curOps.len == 0:
+      curOps = nnkBracket.newTree()
+    curOps.add newLit(op)
+    id.set_ecsCurrentOperation curOps
+
+  else:
+    discard
 
 proc endOperation*(id: EcsIdentity) {.compileTime.} = 
+  when defined(ecsLogDetails) or defined(ecsPerformanceHints):
+    var
+      curOps = id.ecsCurrentOperation.copy
 
-  when defined(ecsLogDetails):
-    let
-      curIndent = id.ecsCurrentOperationIndent()
-      newIndent =
-        if curIndent.len > 2:
-          curIndent[2..^1]
-        else:
-          ""
-    id.set_ecsCurrentOperationIndent newIndent
+    curOps.expectKind nnkBracket
+    if curOps.len == 0:
+      error "Internal error: trying to end an operation when no operations exist"
 
-  id.set_ecsCurrentOperation ""
+    if curOps.len == 1:
+      # Space out final operations.
+      debugEcho ""
+    #   let
+    #     lastOp = curOps[^1].strVal
+      
+    #   id.debugMessage "End " & lastOp, cr = true
+
+    curOps.del curOps.len - 1
+    id.set_ecsCurrentOperation curOps
+  else:
+    discard
+
 
 template debugPerformance*(id: EcsIdentity, msg: string) =
   when defined(ecsPerformanceHints):
-    debugEcho "Performance: " & id.ecsCurrentOperationIndent() & msg
+    const curIndent = id.ecsCurrentOperation.len()
+    debugMessage(id, "Performance: " & "  ".repeat(curIndent) & msg)
+
 
 proc ecsOperation*(id: EcsIdentity, opName: string, code: NimNode): NimNode =
-  quote do:
-    static: startOperation(EcsIdentity(`id`), `opName`)
-    `code`
-    static: endOperation(EcsIdentity(`id`))
+  when defined(ecsLogDetails) or defined(ecsPerformanceHints):
+    quote do:
+      static: startOperation(EcsIdentity(`id`), `opName`)
+      `code`
+      static: endOperation(EcsIdentity(`id`))
+
 
 template ecsBuildOperation*(id: EcsIdentity, opName: string, code: untyped): untyped =
   startOperation(id, opName)

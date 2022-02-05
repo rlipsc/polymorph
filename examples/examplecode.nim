@@ -1,35 +1,33 @@
 import polymorph
 
-# Define components types.
-registerComponents defaultCompOpts:
+# Define component data
+register defaultCompOpts:
   type
-    Position = object
+    Pos = object
       x, y: int
-    Velocity = object
+    Vel = object
       x, y: int
 
-# Define logic to operate on a set of components.
-makeSystem "move", [Position, Velocity]:
+# Act on components
+makeSystem "move", [Pos, Vel]:
   all:
-    item.position.x += item.velocity.x
-    item.position.y += item.velocity.y
+    item.pos.x += item.vel.x
+    item.pos.y += item.vel.y
 
-# Generate the ECS API.
-makeEcs()
+# Generate the framework and execution procedure
+makeEcsCommit "run"
 
-# Output defined systems, executed with a proc named `run`.
-commitSystems "run"
-
-# Create an entity to use the "move" system.
+# Create entities to use the "move" system
 let
-  movingEntity = newEntityWith(
-    Position(x: 1, y: 1),
-    Velocity(x: 2, y: -1),
+  moving = newEntityWith(
+    Pos(x: 0, y: 0),
+    Vel(x: 1, y: 1)
   )
 
-# Run "move" once.
-run()
+# Execute "move" a number of times
+for i in 0 ..< 4:
+  run()
 
-# Check the new component values.
-let pos = movingEntity.fetch Position
-assert pos.x == 3 and pos.y == 0
+# Check the new component values
+let pos = moving.fetch Pos
+assert pos.x == 4 and pos.y == 4

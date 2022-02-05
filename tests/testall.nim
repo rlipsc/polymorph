@@ -1,8 +1,10 @@
 import polymorph
 
-import basic, forwardDecl/forwardDeclTest as fdcl, onevents,
-  constructandclone, streaming, groupsandorder, transitioncomponents,
-  tables, unittest
+import testbasic, forwardDecl/forwardDeclTest as fdcl, testonevents,
+  testeventspectrum, testownedcomponents, testconstructandclone,
+  teststreaming, testgroupsandorder, testtransitioncomponents,
+  testcrossownership, testnegation,
+  tables, unittest, strutils, strformat, random
 
 const
   compOpts = ECSCompOptions()
@@ -28,13 +30,28 @@ block:
 block:
   testTransitionComponents()
 block:
+  defineCrossOwnership()
+block:
+  testNegation()
+block:
+  testOwnedComponents()
+block:
   defineStreaming()
   testStreaming()
-
+block:
+  runForwardDecl()
+block:
+  testEvents(defaultCompOpts, defaultSysOpts)
+block:
+  const
+    cOpts = fixedSizeComponents(100)
+    sOpts = fixedSizeSystem(100)
+    eOpts = fixedSizeEntities(100)
+  # This test uses onEntityChange which would affect other tests, and
+  # so must be run last.
+  defineEventSpectrum(cOpts, sOpts, eOpts)  
 static:
   defaultIdentity.set_private false
 
-runForwardDecl()
-runOnEvents()
 
 flushGenLog()

@@ -14,18 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import
-  macros, sharedtypes, private/[utils, ecsstatedb], components, entities,
-  statechanges, runtimeconstruction
+  macros, sharedtypes, private/[utils, ecsstatedb, eventutils]
+import components, entities, statechanges, runtimeconstruction
 import tables, strutils, stats, sets
-from typetraits import tupleLen
+
 
 export
   onAddCallback, onRemoveCallback,
-  onAdd, onRemove, onInit, onInterceptUpdate, onUpdate,
+  onAdd, onRemove, onInit, onInterceptUpdate, onUpdate, onDelete,
   onSystemAdd, onSystemAddTo, onSystemRemove, onSystemRemoveFrom,
   onEntityChange,
   ecsstatedb
+
 
 proc makeEntityState(options: ECSEntityOptions): NimNode =
   ## Instantiate the variable that holds the entity component state information,
@@ -37,7 +39,7 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
     initEntityStorageType = ident initEntityStorageTypeName()
     storageType = ident entityStorageTypeName()
     entIdNode = ident "entityId"
-    entAccess = entAccess(options, entIdNode)
+    entAccess = entAccess(options.entityStorageFormat, entIdNode)
     typeClass = ident typeClassName()
     maxEntId = entityIdUpperBound(options.entityStorageFormat)
 
@@ -74,10 +76,11 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
       entity.valid and entity.int >= 1 and
         entity.int <= `maxEntId` and
         entityData(entity).setup
-    ## For an EntityRef, alive checks that the instance matches the referenced entity, ie; if
-    ## the entity has been deleted/recreated since the reference was made, as well as checking
-    ## if the entity itself is valid and initialised.
     template alive*(entRef: EntityRef): bool =
+      ## Checks that the instance matches the referenced entity, ie; if
+      ## the entity has been deleted/recreated since the reference was
+      ## made, as well as checking if the entity itself is valid and
+      ## initialised.
       entRef.entityId.alive and entityData(entRef.entityId).instance.int == entRef.instance.int
     template components*(entity: EntityRef, index: int): untyped =
       ## Access to entity's components.
@@ -88,6 +91,7 @@ proc makeEntityState(options: ECSEntityOptions): NimNode =
         let component {.inject.} = entity.fetchComponent(t)
         actions
 
+
 proc makeEntitySupport(entOpts: ECSEntityOptions): NimNode =
   let
     entity = ident "entity"
@@ -96,7 +100,7 @@ proc makeEntitySupport(entOpts: ECSEntityOptions): NimNode =
     typeClass = ident typeClassName()
     hasCore = 
       if entOpts.useSet:
-        let setType = ident enumName()
+        let setType = ident componentsEnumName()
         quote do:
           return `componentTypeId`.`setType` in entityData(`entIdNode`).exists
       else:
@@ -133,74 +137,96 @@ proc makeEntitySupport(entOpts: ECSEntityOptions): NimNode =
     template hasComponent*(entity: EntityRef, t: typedesc[`typeClass`]): untyped =
       # TODO: doesn't support components that aren't objects, eg `registerComponent: MyComp = seq[T]`.
       entity.hasComponent t.typeId
-    
-    template has*(entity: EntityRef, t: typedesc[`typeClass`]): untyped =
-      entity.hasComponent t
 
-    template contains*(entity: EntityRef, `componentTypeId`: ComponentTypeId): bool = entity.hasComponent(`componentTypeId`)
+    template has*(entity: EntityRef, t: typedesc[`typeClass`]): untyped =
+      ## Returns true if the entity contains `t`.
+      entity.hasComponent t
+    
+    template has*(entity: EntityRef, t: varargs[untyped]): untyped =
+      ## Returns true if the entity contains all of the components listed in `t`.
+      let fetched = entity.fetch t
+      var r: bool
+      block hasMain:
+        for field, value in fetched.fieldPairs:
+          if not value.valid:
+            break hasMain
+        r = true
+      r
+
+    template hasAny*(entity: EntityRef, t: varargs[untyped]): untyped =
+      ## Returns true if the entity contains any of the components listed in `t`.
+      let fetched = entity.fetch t
+      var r: bool
+      block hasMain:
+        for field, value in fetched.fieldPairs:
+          if value.valid:
+            r = true
+            break hasMain
+      r
+
+    proc contains*(entity: EntityRef, `componentTypeId`: ComponentTypeId): bool {.inline.} =
+      entity.hasComponent(`componentTypeId`)
     
     template contains*(entity: EntityRef, t: typedesc[`typeClass`]): untyped =
       entity.hasComponent(t.typeId)
   )
+  
+  let
+    entCompRefLen = entIdNode.componentRefsLen entOpts.componentStorageFormat
 
   case entOpts.componentStorageFormat
   of csSeq:
     result.add(quote do:
       
-      iterator components*(entityId: EntityId): ComponentRef =
-        # Iterate through components. Different methods are required for different storage strategies.
-        for item in entityData(entityId).componentRefs:
+      iterator components*(`entIdNode`: EntityId): ComponentRef =
+        ## Iterate through components.
+        for item in entityData(`entIdNode`).componentRefs:
           yield item
       
-      iterator pairs*(entityId: EntityId): (int, ComponentRef) =
-        # Iterate through components. Different methods are required for different storage strategies.
-        for i, item in entityData(entityId).componentRefs.pairs:
+      iterator pairs*(`entIdNode`: EntityId): (int, ComponentRef) =
+        ## Iterate through components.
+        for i, item in entityData(`entIdNode`).componentRefs.pairs:
           yield (i, item)
 
-      proc componentCount*(entityId: EntityId): int = entityData(entityId).componentRefs.len
-      
-      proc componentCount*(entityRef: EntityRef): int = entityData(entityRef.entityId).componentRefs.len
+      proc componentCount*(`entIdNode`: EntityId): int = `entCompRefLen`
     )
   of csArray:
     result.add(quote do:
       
-      iterator components*(entityId: EntityId): ComponentRef =
-        # Iterate through components. Different methods are required for different storage strategies.
-        let length = entityData(entityId).nextCompIdx
+      iterator components*(`entIdNode`: EntityId): ComponentRef =
+        ## Iterate through components.
+        let length = `entCompRefLen`
         for i in 0 ..< length:
-          yield entityData(entityId).componentRefs[i]
+          yield entityData(`entIdNode`).componentRefs[i]
       
-      iterator pairs*(entityId: EntityId): (int, ComponentRef) =
-        # Iterate through components. Different methods are required for different storage strategies.
-        let length = entityData(entityId).nextCompIdx
+      iterator pairs*(`entIdNode`: EntityId): (int, ComponentRef) =
+        ## Iterate through components.
+        let length = `entCompRefLen`
         for i in 0 ..< length:
-          yield (i, entityData(entityId).componentRefs[i])
+          yield (i, entityData(`entIdNode`).componentRefs[i])
       
-      proc componentCount*(entityId: EntityId): int = entityData(entityId).nextCompIdx
-      
-      proc componentCount*(entityRef: EntityRef): int = entityData(entityRef.entityId).nextCompIdx
+      proc componentCount*(`entIdNode`: EntityId): int = `entCompRefLen`
     )
   of csTable:
     result.add(quote do:
 
-      iterator components*(entityId: EntityId): ComponentRef =
-        # Iterate through components. Different methods are required for different storage strategies.
-        for item in entityData(entityId).componentRefs.values:
+      iterator components*(`entIdNode`: EntityId): ComponentRef =
+        ## Iterate through components.
+        for item in entityData(`entIdNode`).componentRefs.values:
           yield item
       
-      iterator pairs*(entityId: EntityId): (int, ComponentRef) =
-        # Iterate through components. Different methods are required for different storage strategies.
+      iterator pairs*(`entIdNode`: EntityId): (int, ComponentRef) =
+        ## Iterate through components.
         var i: int
-        for item in entityData(entityId).componentRefs.values:
+        for item in entityData(`entIdNode`).componentRefs.values:
           yield (i, item)
           i += 1
       
-      proc componentCount*(entityId: EntityId): int = entityData(entityId).componentRefs.len
-      
-      proc componentCount*(entityRef: EntityRef): int = entityData(entityRef.entityId).componentRefs.len
+      proc componentCount*(`entIdNode`: EntityId): int = `entCompRefLen`
     )
 
   result.add(quote do:
+    proc componentCount*(entityRef: EntityRef): int = entityRef.entityId.componentCount
 
     template components*(entity: EntityRef): untyped = entity.entityId.components
     
@@ -225,6 +251,7 @@ proc makeEntitySupport(entOpts: ECSEntityOptions): NimNode =
         pos += 1
   )
 
+
 proc recyclerHasData(ecStateNode: NimNode, options: ECSEntityOptions): NimNode =
   case options.recyclerFormat
   of rfSeq:
@@ -233,6 +260,7 @@ proc recyclerHasData(ecStateNode: NimNode, options: ECSEntityOptions): NimNode =
     let rLen = ident recyclerArrayLen()
     quote do:
       `ecStateNode`.`rLen` > 0
+
 
 proc recyclerGet(ecStateNode: NimNode, options: ECSEntityOptions): NimNode =
   case options.recyclerFormat
@@ -246,78 +274,6 @@ proc recyclerGet(ecStateNode: NimNode, options: ECSEntityOptions): NimNode =
       `ecStateNode`.`rLen` = curIdx
       r
 
-proc makeFindComponent(id: EcsIdentity, entityId: NimNode, componentTypeId: ComponentTypeId): NimNode =
-  ## Generate code fragment for fetching a ComponentTypeId depending on entity options.
-  let
-    returnType = ident instanceTypeName(id.typeName componentTypeId)
-    res = genSym(nskVar, "res")
-    options = id.entityOptions
-  case options.componentStorageFormat
-  of csTable:
-    quote do: `returnType`(entityData(`entityId`).componentRefs.getOrDefault(`componentTypeId`.ComponentTypeId).index)
-  of csSeq, csArray:
-    # We have to search the component list one by one. For small lists, this may be faster than a table
-    # due to data locality. Seq is usually in heap, is more indirected than array but is more memory efficient.
-    # Ideally, we would have the most commonly looked up components closer to the start of the list (added first).
-    # TODO: Further investigate the performance of ordering. initial investigations with a binary insert
-    # seems to be slower in the overall case, but potentially could be improved by ordering type ids by
-    # use or offering some priority tagging to keep those components closer to the start of lists.
-    let
-      length =
-        if options.componentStorageFormat == csSeq:
-          quote: entityData(`entityId`).componentRefs.len
-        else:
-          quote: entityData(`entityId`).nextCompIdx
-      invalidRef =
-        if id.systemOwner(componentTypeId) != InvalidSystemIndex:
-          quote do:
-            (InvalidComponent, (-1).ComponentIndex, InvalidComponentGeneration)
-        else:
-          quote do:
-            InvalidComponentRef
-
-    quote do:
-      var `res`: ComponentRef = `invalidRef`
-      for i in 0 ..< `length`:
-        if entityData(`entityId`).componentRefs[i].typeId == `componentTypeId`.ComponentTypeId:
-          `res` = entityData(`entityId`).componentRefs[i]
-          break
-      `returnType`(`res`.index)
-
-proc makeFetchComponent(id: EcsIdentity): NimNode =
-  ## Generate `fetchComponent` for all types not processed so far.
-  result = newStmtList()
-  
-  for typeId in id.unsealedComponents:
-
-    var
-      tyName = id.typeName typeId
-      typeNode = ident tyName
-      instanceNode = ident instanceTypeName(tyName)
-      tid = typeStringToId(id, tyName)
-      entIdent = ident "entity"
-      entIdIdent = ident "entityId"
-      findComp = makeFindComponent(id, entIdIdent, tid)
-      # Needs to be an ident (rather than a sym if typed in the `quote`) to bind later.
-      alive = ident "alive"
-
-    assert tid != InvalidComponent
-    result.add(quote do:
-      proc fetchComponent*(`entIdent`: EntityRef, t: typedesc[`typeNode`]): `instanceNode` =
-        ## Looks up and returns the instance of the component, which allows direct field access.
-        ## Returns default no component index if the component cannot be found.
-        ## Eg;
-        ##   let comp = entity.fetchComponent CompType  # Will be of type CompTypeInstance
-        ##   comp.x = 3 # Edit some supposed fields for this component.
-        assert `entIdent`.`alive`, "Fetch component on a dead entity. Entity ID: " & $`entIdent`.entityId.int &
-          ", Instance: " & $`entIdent`.instance.int
-        let `entIdIdent` = `entIdent`.entityId
-        `findComp`
-      
-      template fetch*(`entIdent`: EntityRef, t: typedesc[`typeNode`]): `instanceNode` =
-        fetchComponent(`entIdent`, t)
-
-    )
 
 proc makeNewEntity(options: ECSEntityOptions): NimNode =
   result = newStmtList()
@@ -333,7 +289,7 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
           quote do:
             GC_Ref(entityData(`entityId`).componentRefs)
         else:
-          newEmptyNode()
+          newStmtList()
       of csArray:
         quote do:
           entityData(`entityId`).nextCompIdx = 0
@@ -347,7 +303,7 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
             entityData(`entityId`).componentRefs.clear
 
   let
-    maxEntLen = maxEntLen(options)
+    maxEntLen = maxEntLen(options.entityStorageFormat)
 
     maxLenCheck =
       case options.entityStorageFormat
@@ -355,11 +311,13 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
         case options.errors.errEntityOverflow:
         of erAssert:
           quote do:
-            assert `entStorage`.nextEntityId.IdBaseType < `maxEntLen`, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1)
+            {.line.}:
+              assert `entStorage`.nextEntityId.IdBaseType < `maxEntLen`, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1)
         of erRaise:
           quote do:
             if `entStorage`.nextEntityId.IdBaseType >= `maxEntLen`:
-              raise newException(EntityOverflow, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1))
+              {.line.}:
+                raise newException(EntityOverflow, "Exceeded entity limit: newEntity's maximum entity count is " & $(`maxEntLen` - 1))
       of esSeq:
         newStmtList()
 
@@ -379,7 +337,7 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
     setOp =
       if options.useSet: quote do:
         entityData(`entityId`).exists = {}        
-      else: newEmptyNode()
+      else: newStmtList()
 
   result.add(quote do:
     proc newEntity*: EntityRef =
@@ -411,6 +369,7 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
 
 import algorithm
 
+
 proc getComponentUpdatePerformance(id: EcsIdentity): seq[ComponentUpdatePerfTuple] {.compileTime.} =
   ## Internal procedure to return the number of systems each component accesses during an update.
   ## The result is sorted.
@@ -427,6 +386,7 @@ proc getComponentUpdatePerformance(id: EcsIdentity): seq[ComponentUpdatePerfTupl
     cmp(y.systemsUpdated, x.systemsUpdated)
   r
 
+
 macro componentUpdatePerformance*(id: static[EcsIdentity]): untyped =
   ## Generates a static sequence of components by the number of systems they update,
   ## ordered by increasing system accesses.
@@ -439,6 +399,7 @@ macro componentUpdatePerformance*(id: static[EcsIdentity]): untyped =
     bracket.add(quote do: `item`)
   result = newStmtList(nnkPrefix.newTree(ident "@", bracket))
 
+
 proc makeEntities(id: EcsIdentity): NimNode =
   # Create entity state.
   var r = newStmtList()
@@ -449,10 +410,10 @@ proc makeEntities(id: EcsIdentity): NimNode =
   r.add makeEntityItems(id, entOpts)
   r.add makeEntityState(entOpts)
   r.add makeEntitySupport(entOpts)
+
   r.add makeNewEntity(entOpts)
   r
 
-# Runtime systems
 
 proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
   let
@@ -465,20 +426,14 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       case id.strDefault
       of sdHideData: ident "false"
       of sdShowData: ident "true"
-  var
-    componentCount: int
+    componentCount = id.unsealedComponentCount
   
-  result = newStmtList()
-
-  # String operator for instance types.
-  for c in id.unsealedComponents:
-    componentCount += 1
-
   let
     compCount = newIntLitNode componentCount
     tc = ident instanceTypeClassName()
 
-  result.add(quote do:
+  result = quote do:
+
     # ------
     # Tools
     # ------
@@ -512,7 +467,8 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
           try:
             `res` &= `strOp`(componentInstanceType()(componentRef.index.int).access)
           except:
-            `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " & $(componentInstanceType().componentCount).int & ")>\n"
+            `res` &= "<ERROR ACCESSING (index: " & `strOp`(componentRef.index.int) & ", count: " &
+              $(componentInstanceType().componentCount).int & ")>\n"
 
     proc `strOp`*(componentRef: ComponentRef, `showData`: bool = `showDataDefault`): string = componentRef.toString(`showData`)
 
@@ -520,9 +476,9 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       ## `$` function for dynamic component superclass.
       ## Displays the sub-class data according to the component's `typeId`.
       caseComponent comp.typeId:
-        result &= `compName`()
+        `res` &= `compName`()
         if `showData`:
-          result &= ":\n" & $componentRefType()(comp).value & "\n"
+          `res` &= ":\n" & $componentRefType()(comp).value & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
@@ -532,9 +488,9 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       for i, item in componentList:
         let s = item.toString(`showData`)
         if i < maxIdx and not `showData`:
-          result &= s & ", "
+          `res` &= s & ", "
         else:
-          result &= s
+          `res` &= s
     
     proc `strOp`*(componentList: ComponentList): string = componentList.toString
 
@@ -546,7 +502,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
 
     ## Count of components defined for this ECS.
     proc componentCount*: int = `compCount`
-  )
+
 
 proc makeRuntimeTools(id: EcsIdentity): NimNode =
 
@@ -554,10 +510,10 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
     ettUpd = ident "ettUpdate"
     ettRem = ident "ettRemoveAdd"
 
-  result = newStmtList( quote do:
+  result = quote do:
 
     template matchToSystems*(componentTypeId: ComponentTypeId, actions: untyped): untyped =
-      # Match a runtime componentTypeId with its systems. Has to check all systems at runtime, so is slow.
+      # Match a runtime componentTypeId with its systems. Has to check all systems at runtime.
       # This is intended for aiding debugging.
       forAllSystems:
         if componentTypeId in system.requirements:
@@ -626,7 +582,7 @@ proc makeRuntimeTools(id: EcsIdentity): NimNode =
       ## Removes components in `prevState` that aren't in `newState` and
       ## adds or updates components in `newState`.
       transition(entity, prevState, newState, `ettUpd`)
-  )
+
 
 proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
   let
@@ -639,7 +595,6 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
 
     # Bind these symbols here so the user doesn't have to import them.
     statsPush = bindSym("push", brClosed)
-    tupleLen = bindSym("tupleLen", brClosed)
     fmtFloat = bindSym("formatFloat", brClosed)
     fmtSize = bindSym("formatSize", brClosed)
     spaces = bindSym("spaces", brClosed)
@@ -777,23 +732,23 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
           address = value.unsafeAddr
         cast[int](address)
 
+
       const
-        # Even if groups.len == 0, we can still retrieve the type.
-        tupleLen = `tupleLen`(sys.groups[0].type)
-        # The tuple's entity field isn't included.
-        compCount = tupleLen - 1
+        # The item's entity field isn't included.
+        compCount = sys.requirements.len
+      
       `res`.components.setLen compCount
       `res`.entities = sys.count
 
       template component(idx): untyped = `res`.components[idx]
 
       var
-        # Dummy tuple to iterate field details.
-        sysTuple: sys.tupleType
+        # Dummy item to iterate field details.
+        sysItem: sys.itemType
         fieldIdx = 0
 
-      # Gather system tuple field info.
-      for field, value in sysTuple.fieldPairs:
+      # Gather system item field info.
+      for field, value in sysItem.fieldPairs:
         when not(value is EntityRef):
           when value is `componentIndexTC`:
             # Indirection to component.
@@ -813,7 +768,7 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
             if jumpThreshold == 0:
               # For owned components, the minimum jump size is the
               # next group item.
-              if value.isOwnedComponent: sysTuple.sizeOf
+              if value.isOwnedComponent: sysItem.sizeOf
               else: valueSize
             else:
               jumpThreshold
@@ -1019,19 +974,23 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
             indent & "  <No data>\n"
   )
 
+
 proc makeListSystem(id: EcsIdentity): NimNode =
   var
     res = ident "result"
     innards = newStmtList()
     entIdent = ident "entity"
-  
+    hasSystems: bool
+
   for sysId in id.unsealedSystems:
+    hasSystems = true
+
     let
       options = id.getOptions sysId
       sysName = id.getSystemName(sysId)
       sysStr = newLit systemStr(sysName)
       sys = id.instantiation sysId
-      inSys = genSym(nskVar, "inSys")
+      matchesEnt = genSym(nskVar, "matchesEnt")
       entId = entIdent.newDotExpr(ident "entityId")
       doHasKey = indexHasKey(sys, entId, options.indexFormat)
       reqs = id.ecsSysRequirements(sysId)
@@ -1039,42 +998,44 @@ proc makeListSystem(id: EcsIdentity): NimNode =
 
     # Verify component/system relationships.
 
-    innards.add(quote do:
-      var
-        `inSys` = true
-      
-      for req in `reqs`:
-        if req.ComponentTypeId notin `entIdent`:
-          `inSys` = false
-          break
-    )
+    if reqs.len > 0:
 
-    if negs.len > 0:
       innards.add(quote do:
-        for neg in `negs`:
-          if neg.ComponentTypeId in `entIdent`:
-            `inSys` = false
+        var
+          `matchesEnt` = true
+
+        for req in `reqs`:
+          if req.ComponentTypeId notin `entIdent`:
+            `matchesEnt` = false
             break
       )
+      if negs.len > 0:
+        innards.add(quote do:
+          for req in `negs`:
+            if req.ComponentTypeId in `entIdent`:
+              `matchesEnt` = false
+              break
+        )
 
-    # Output string.
+      # Output string.
 
-    innards.add(quote do:
-      let
-        hasKey = `doHasKey`
-      
-      if `inSys` == hasKey:
-        `res` &= `sysStr` & " \n"
-      else:
+      innards.add(quote do:
         let
-          issue =
-            if `inSys`:
-              "entity contains the required components but is missing from the system index"
-            else:
-              "the system index references this entity but the entity doesn't have the required components"
-        `res` &= `sysStr` & " Sync issue: " & issue & "\n"
+          inSys = `doHasKey`
 
-      )
+        if `matchesEnt` != inSys:
+          let
+            issue =
+              if `matchesEnt`:
+                "[System]: entity contains the required components but is missing from the system index"
+              else:
+                "[Entity]: the system index references this entity but the entity doesn't have the required components"
+
+          `res` &= `sysStr` & " Sync issue " & issue & "\n"
+        elif inSys:
+          `res` &= `sysStr` & " \n"
+
+        )
 
   result = quote do:
     proc listSystems*(`entIdent`: EntityRef): string =
@@ -1085,6 +1046,7 @@ proc makeListSystem(id: EcsIdentity): NimNode =
           `res` = "<Entity is NO_ENTITY_REF>"
         else:
           `res` = "<Entity is not alive>"
+
 
 proc doStartLog(id: EcsIdentity): NimNode =
   if not id.logInitialised:
@@ -1108,7 +1070,9 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
     var
       ofNode = nnkOfBranch.newTree()
       compVal = newIntLitNode(component.int)
+    
     ofNode.add compVal
+    
     let
       tyStr = id.typeName component
       ty = newIdentNode tyStr
@@ -1123,6 +1087,7 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       sysOwner = id.systemOwner(component)
       sysIdx = newDotExpr(newLit sysOwner.int, ident "SystemIndex")
       isOwned = sysOwner != InvalidSystemIndex
+    
     var
       accessOwningSystem = newStmtList()
       isOwnedLit: NimNode
@@ -1161,10 +1126,13 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
     case id.errCaseComponent
     of erAssert:
       quote do:
-        assert false, "Invalid component type id: " & $(`idIdent`.toInt)
+        {.line.}:
+          assert false, "Invalid component type id: " & $(`idIdent`.toInt)
     of erRaise:
       quote do:
-        raise newException(ValueError, "Invalid component type id: " & $(`idIdent`.toInt))
+        {.line.}:
+          raise newException(ValueError, "Invalid component type id: " & $(`idIdent`.toInt))
+  
   caseStmt.add(nnkElse.newTree(elseCode))
 
   result = newStmtList()
@@ -1200,14 +1168,17 @@ proc makeCaseComponent(id: EcsIdentity): NimNode =
       `caseStmt`
   )
 
+
 proc makeMatchSystem(id: EcsIdentity): NimNode =
   ## Generate `caseSystem` and `forAllSystems` for current systems.
   let
     actions = ident "actions"
     index = ident "index"
     unsealedSystems = id.allUnsealedSystems
-  var body = newStmtList()
-  var caseStmt = nnkCaseStmt.newTree()
+  
+  var
+    body = newStmtList()
+    caseStmt = nnkCaseStmt.newTree()
   
   caseStmt.add quote do: `index`.int
 
@@ -1220,11 +1191,11 @@ proc makeMatchSystem(id: EcsIdentity): NimNode =
 
     var
       curSys = id.instantiation sysId
-      curSysTuple = ident(id.getSystemName(sysId).tupleName)
+      curSysItem = ident(id.getSystemName(sysId).itemTypeName)
 
     ofNode.add(quote do:
       template sys: untyped {.used.} = `curSys`
-      template SystemTupleType: typedesc {.used.} = `curSysTuple`
+      template ItemType: typedesc {.used.} = `curSysItem`
       `actions`
     )
 
@@ -1238,11 +1209,11 @@ proc makeMatchSystem(id: EcsIdentity): NimNode =
   for sys in unsealedSystems:
     let
       curSys = id.instantiation sys
-      curSysTuple = ident(id.getSystemName(sys).tupleName)
+      curSysItem = ident(id.getSystemName(sys).itemTypeName)
     allSysBody.add(quote do:
       block:
         template sys: untyped {.used.} = `curSys`
-        template SystemTupleType: typedesc {.used.} = `curSysTuple`
+        template ItemType: typedesc {.used.} = `curSysItem`
         `actions`
     )
 
@@ -1259,15 +1230,15 @@ proc makeMatchSystem(id: EcsIdentity): NimNode =
       ## chosen at runtime.
       ## 
       ## Within `caseSystem`, use the `sys` template to access to the system
-      ## variable the index represents, and `SystemTupleType` to reference
-      ## the tuple type for the system's `groups` field (in other words,
-      ## the type of the system's `item` when iterating).
+      ## variable the index represents, and `ItemType` to get the type of an
+      ## `item` in the system `groups` list.
       `body`
 
     template forAllSystems*(`actions`: untyped): untyped =
       ## This will perform `actions` for every system.
       ## Injects the `sys` template for easier operation.
       `allSysBody`
+
 
 proc makeCompRefAlive: NimNode =
   quote do:
@@ -1280,37 +1251,108 @@ proc makeCompRefAlive: NimNode =
         r = componentAlive()[index] and compRef.generation.int == componentGenerations()[index]
       r
 
+
 proc addPerformanceLog(id: EcsIdentity) {.compileTime.} =
   ## Append system operations per component to the log.
-  let commentStart = "# "
-  let perf: seq[ComponentUpdatePerfTuple] = getComponentUpdatePerformance(id)
+  
+  genLog """
+
+
+##
+## ------------------------
+## Systems use by component
+## ------------------------
+##
+
+"""
+
+  let
+    commentStart = "## "
+    perf: seq[ComponentUpdatePerfTuple] = getComponentUpdatePerformance(id)
+  
   for item in perf:
     if item.systemsUpdated == 0:
       genLog commentStart & item.componentType & ": <No systems using this component>"
     else:
       genLog commentStart & item.componentType & ": " & $item.systemsUpdated & " systems"
-  genLog ""
+  
+  genLog "# " & '-'.repeat(24)
+
 
 proc sealEntities(id: EcsIdentity): NimNode =
   result = newStmtList()
+  result.add id.genComponentSet()
+  result.add id.genSystemSet()
+
   result.add makeEntities(id)
   result.add makeCompRefAlive()
-  result.add makeFetchComponent(id)
+  result.add makeFetchComponents(id)
   result.add makeCaseComponent(id)
   result.add makeMatchSystem(id)
 
+  var
+    sysTypeClass: seq[NimNode]
+
+  for sysIndex in id.unsealedSystems:
+    sysTypeClass.add ident systemTypeName(id.getSystemName(sysIndex))
+
+  # Output a typeclass for this set of systems.
+  result.add genTypeClass(systemsTypeClassName(), true, sysTypeClass, mandatory = false)  
+
+
 proc sealStateChanges(id: EcsIdentity): NimNode =
   result = newStmtList()
+  
+  let
+    delProcName = ident "doDelete"
+    delTemplName = ident "delete"
+    deleteEntParam = ident "entity"
+    cacheId = quote do: EcsIdentity(`id`)
+
+    protectEventEntity =
+      respondToPragma(deleteEntParam, "hostEntity",
+        quote do:
+          error "Delete cannot remove the current event entity"
+      )
+  
+  # The 'delete' proc is forward declared so we can use it within any
+  # event. This is important to allow remove events to use state changes.
+  #
+  # If 'delete' is defined before state changes, remove events cannot use
+  # state changes. Defined after state changes, and 'delete' cannot be
+  # used within events.
+
+  result.add(quote do:
+    proc `delProcName`*(`deleteEntParam`: EntityRef)    
+
+    template `delTemplName`*(`deleteEntParam`: EntityRef) =
+      when `cacheId`.inSystem:
+        static:
+          # Systems are allowed to delete their iterating entity and
+          # alter their loop checks to accommodate.
+          `cacheId`.set_systemCalledDelete true
+      elif `cacheId`.ecsEventEnv.len > 0:
+        # Events are not allowed to delete their host entity.
+        `protectEventEntity`
+        when declared(curEntity):
+          # TODO: check {.hostEntity.} at compile time for `item.entity' instead of run time check.
+          # Note: this run time check to catch 'item.entity.delete'
+          # within an event expects 'curEntity' from 'userEntAccess'.
+          assert `deleteEntParam` != curEntity(), "Delete cannot remove the current event entity"
+      
+      doDelete(`deleteEntParam`)
+  )
+
+  result.add makeStateChanges(id)
   result.add makeDelete(id)
-  result.add makeNewEntityWith(id)
-  result.add makeAddComponents(id)
-  result.add makeRemoveComponents(id)
+
 
 proc sealRuntimeDebugging(id: EcsIdentity): NimNode =
   result = newStmtList()
   result.add makeRuntimeStrOutput(id)
   result.add makeListSystem(id)
   result.add makeRuntimeDebugOutput(id)
+
 
 proc invalidSystemAdds(id: EcsIdentity): (bool, string) =
   for sysId in id.allSystemsSeq:
@@ -1340,6 +1382,7 @@ proc invalidSystemAdds(id: EcsIdentity): (bool, string) =
           compStr & "\" being removed from system \"" & sysStr &
           "\", but this system does not use the component. \"" &
           sysStr & "\" uses [" & compList & "]")
+
 
 macro systemsUsed*(id: static[EcsIdentity], components: openarray[typedesc]): untyped =
   ## Output a string listing systems that an entity with the parameter
@@ -1380,10 +1423,12 @@ macro systemsUsed*(id: static[EcsIdentity], components: openarray[typedesc]): un
   else:
     result = newLit id.commaSeparate(res)
 
+
 template systemsUsed*(components: openarray[typedesc]): untyped =
   ## Output a string listing systems that an entity with the parameter
   ## components would use.
   defaultIdentity.systemsUsed components
+
 
 macro expectSystems*(id: static[EcsIdentity], entity: EntityRef, systems: openArray[string]): untyped =
   ## Generates code to fail assertion if an entity isn't part of one or more systems.
@@ -1487,24 +1532,44 @@ macro expectSystems*(id: static[EcsIdentity], entity: EntityRef, systems: openAr
             `entity`.listComponents(false) & "\nComponents required: " &
             allMissingStr & "\n"
 
+
 template expectSystems*(entity: EntityRef, systems: openArray[string]): untyped =
   expectSystems(defaultIdentity, entity, systems)
+
 
 macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
   ## Includes `code` immediately after makeEcs has finished.
   ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
-  id.add_onEcsBuiltCode code
+
+  var
+    curCode = id.onEcsBuiltCode
+
+  if curCode.isNil:
+    curCode = newStmtList()
+
+  curCode.add code
+  id.set_onEcsBuiltCode curCode
   newStmtList()
+
 
 macro onEcsBuilt*(code: untyped): untyped =
   ## Includes `code` immediately after makeEcs has finished.
   ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
-  defaultIdentity.add_onEcsBuiltCode code
+
+  var
+    curCode = defaultIdentity.onEcsBuiltCode
+
+  if curCode.isNil:
+    curCode = newStmtList()
+
+  curCode.add code
+  defaultIdentity.set_onEcsBuiltCode curCode
   newStmtList()
+
 
 proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   # Generate the ECS for `id`.
@@ -1518,7 +1583,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     echo "[ Entity generation for \"" & id.string & "\"]"
     echo "Entity options:\n", entityOptions.repr, "\n"
   
-  id.startOperation "Building ECS \"" & id.string & "\""
+  id.debugMessage "Building ECS \"" & id.string & "\""
 
   result = newStmtList()
 
@@ -1527,55 +1592,75 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   let
     unsealedSystems = id.allUnsealedSystems
     unsealedComponents = id.allUnsealedComponents
-
+  var
+    eventProcs = newStmtList()
+  
   id.ecsBuildOperation "component processing":
+
     for typeId in unsealedComponents:
 
       let
-        # Walk the ownership for this component.
-        deps = id.calcDependentOwners typeId
+        # Dependent owners are systems that require this typeId for a row to exist.
+        depOwners = id.calcDependentOwners typeId
         systems = id.systems typeId
+      var
+        depComps: ComponentSet
 
       # All systems that need to be involved in state
       # changes with this component.
       for sys in systems:
         id.add_linked typeId, sys
 
-      for dep in deps:
-        id.add_dependentOwners typeId, dep
-        if dep notin systems:
-          id.add_linked typeId, dep
+        for c in id.ecsOwnedComponents(sys):
+          # These owned components rely on 'typeId' to exist.
+          depComps.incl c
+
+      assert id.len_dependentComps(typeId) == 0
+      
+      depComps.excl typeId
+
+      for c in depComps:
+        id.add_dependentComps(typeId, c)
+
+      for sys in depOwners:
+        id.add_dependentOwners typeId, sys
+
+        if sys notin systems:
+          id.add_linked typeId, sys
 
       # Component event callbacks.
-      let
-        onAddCallbackForwardDecl = id.onAddCallbackForwardDeclNode(typeId)
-        onRemoveCallbackForwardDecl = id.onRemoveCallbackForwardDeclNode(typeId)
 
-      if onAddCallbackForwardDecl.len > 0:
-        result.add onAddCallbackForwardDecl
-      if onRemoveCallbackForwardDecl.len > 0:
-        result.add onRemoveCallbackForwardDecl
+      if id.onAddCallback(typeId).len > 0:
+        let (fwd, body) = id.buildEventCallback(typeId, ekAddCb)
+        result.add fwd
+        eventProcs.add body
+
+      if id.onRemoveCallback(typeId).len > 0:
+        let (fwd, body) = id.buildEventCallback(typeId, ekRemoveCb)
+        result.add fwd
+        eventProcs.add body
+
+  id.ecsBuildOperation "system event processing":
+
+    for sys in id.building(unsealedSystems):
+      if id.onAddedCallbackNode(sys.index).len > 0:
+        let (fwd, body) = id.buildEventCallback(sys, ekRowAddedCb)
+        result.add fwd
+        eventProcs.add body
+      
+      if id.onRemovedCallbackNode(sys.index).len > 0:
+        let (fwd, body) = id.buildEventCallback(sys, ekRowRemovedCb)
+        result.add fwd
+        eventProcs.add body
 
   # Write the number of systems using each component to the log.
   addPerformanceLog(id)
 
-  # Forward declarations for system added/removed callbacks.
-  for sys in unsealedSystems:
-    let
-      addedDecl = id.onAddedCallbackDeclNode(sys)
-      removedDecl = id.onRemovedCallbackDeclNode(sys)
-    if addedDecl.len > 0:
-      result.add addedDecl
-    if removedDecl.len > 0:
-      result.add removedDecl
+  let compInfoStr =
+    when defined(ecsLogDetails): ": " & id.commaSeparate(id.allUnsealedComponents)
+    else: ""
 
-  let s =
-    when defined(ecsLogDetails):
-      ": " & id.commaSeparate(id.allUnsealedComponents)
-    else:
-      ""
-
-  id.ecsBuildOperation "sealing " & $id.unsealedComponentCount() & " components" & s:
+  id.ecsBuildOperation "sealing " & $id.unsealedComponentCount() & " components" & compInfoStr:
     if id.unsealedComponentCount == 0:
       error "No components have been defined by this ECS"
 
@@ -1602,52 +1687,35 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     result.add makeRuntimeConstruction(id)
 
   # User code to run after everything's defined.
-  result.add id.onEcsBuiltCodeNode
+  if id.onEcsBuiltCode.len > 0:
+    result.add id.onEcsBuiltCode
 
-  id.ecsBuildOperation "user component event callbacks":
+  id.ecsBuildOperation "user event callbacks":
+    result.add eventProcs
+  
+  id.ecsBuildOperation "sealing":
+    # Flag components as generated.
     for typeId in unsealedComponents:
-
-      let
-        onAddCallback = id.onAddCallbackNode(typeId)
-        onRemoveCallback = id.onRemoveCallbackNode(typeId)
-
-      if onAddCallback.len > 0:
-        result.add onAddCallback
-      if onRemoveCallback.len > 0:
-        result.add onRemoveCallback
-
       id.add_ecsSealedComponents typeId
 
-  id.ecsBuildOperation "user system event callbacks":
+    # Flag systems as generated.
     for sys in unsealedSystems:
-
-      let
-        onSysAddedCallback = id.onAddedCallbackNode(sys)
-        onSysRemovedCallback = id.onRemovedCallbackNode(sys)
-
-      if onSysAddedCallback.len > 0:
-        result.add onSysAddedCallback
-
-      if onSysRemovedCallback.len > 0:
-        result.add onSysRemovedCallback
-
-  # Flag systems as generated.
-  for sys in unsealedSystems:
-    id.set_sealed sys, true
+      id.set_sealed sys, true
 
   if id.private:
     id.ecsBuildOperation "remove exports":
       result.deExport
+  
+  id.set_onEcsBuiltCode newStmtList()
 
   when defined(ecsLogCode):
     id.ecsBuildOperation "generate makeEcs() log":
       genLog("\n# makeEcs() code generation output:\n" & result.repr)
       result.add id.flushGenLog(defaultGenLogFilename)
   
-  id.endOperation()
-  
   when defined(ecsLog) or defined(ecsLogDetails):
     echo "ECS \"" & id.string & "\" built."
+
 
 macro makeEcs*(id: static[EcsIdentity], entityOptions: static[EcsEntityOptions]): untyped =
   ## Generate ECS functionality for `id`.
@@ -1661,6 +1729,7 @@ macro makeEcs*(id: static[EcsIdentity], entityOptions: static[EcsEntityOptions])
   ## To create the execution procedures for systems, use `commitSystems`.
   id.makeEcs(entityOptions)
 
+
 macro makeEcs*(options: static[EcsEntityOptions] = ECSEntityOptions()): untyped =
   ## Generate ECS functionality for `defaultIdentity`.
   ## 
@@ -1673,6 +1742,7 @@ macro makeEcs*(options: static[EcsEntityOptions] = ECSEntityOptions()): untyped 
   ## To create the execution procedures for systems, use `commitSystems`.
   defaultIdentity.makeEcs(options)
 
+
 macro flushGenLog*: untyped =
   ## When compiling with `-d:ecsLogCode`, this macro appends any
   ## code generated after `makeEcs` in the code log.
@@ -1683,6 +1753,7 @@ macro flushGenLog*: untyped =
   ## When placed at the expected exit point, all generated code is
   ## logged to file.
   defaultIdentity.flushGenLog(defaultGenLogFilename)
+
 
 proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   result = newStmtList()
@@ -1730,12 +1801,13 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
     logCodeComment = "Commit systems " & logTitle & "\n"
   
   genLog  "\n# " & logCodeComment &
-          "# " & '-'.repeat(logCodeComment.len) & "\n" &
+          "# " & '-'.repeat(logCodeComment.len - 1) & "\n" &
           result.repr
   
   result.add id.flushGenLog(defaultGenLogFilename)
   
   id.endOperation
+
 
 macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): untyped =
   ## This macro outputs uncommitted system execution procedures for
@@ -1787,6 +1859,7 @@ macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): unty
   ##
   id.doCommitSystems(wrapperName)
 
+
 macro commitSystems*(wrapperName: static[string]): untyped =
   ## This macro outputs uncommitted system execution procedures for
   ## system bodies defined so far in the default ECS identity.
@@ -1836,3 +1909,13 @@ macro commitSystems*(wrapperName: static[string]): untyped =
   ##    commitSystems("runC")
   ##
   defaultIdentity.doCommitSystems(wrapperName)
+
+template makeEcsCommit*(wrapperName: static[string]): untyped =
+  ## Wrap `makeEcs()` and `commitSystems wrapperName`.
+  makeEcs()
+  commitSystems(wrapperName)
+
+template makeEcsCommit*(wrapperName: static[string], entOpts: static[EcsEntityOptions]): untyped =
+  ## Wrap `makeEcs(entOpts)` and `commitSystems wrapperName`.
+  makeEcs(entOpts)
+  commitSystems(wrapperName)

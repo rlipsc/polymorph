@@ -16,34 +16,160 @@
 
 import macros, strutils, strformat, sequtils, times, sharedtypes,
   private/[ecsstatedb, utils, debugging], tables
+from private/eventutils import userEntAccess
+from std/cpuinfo import countProcessors
 import random
 
-template newEntityTemplate*: ComponentList = @[]
-proc initComponents*: ComponentList = @[]
 
 proc indexInit(sysNode: NimNode, options: ECSSysOptions): NimNode =
   let
     initTab = bindSym "initTable"
 
   case options.indexFormat
-  of sifTable:
-    quote do:
-      `sysNode`.index = `initTab`[EntityId, int]() 
-  of sifArray:
-    newEmptyNode()
-  of sifAllocatedSeq:
-    # Requires + 1 for array as 0 is invalid.
-    let initSize = newIntLitNode(options.maxEntities + 1)
-    quote do:
-      `sysNode`.index = newSeq[tuple[exists: bool, row: Natural]](`initSize`)
+    of sifTable:
+      quote do:
+        `sysNode`.index = `initTab`[EntityId, int]() 
+    of sifArray:
+      newStmtList()
+    of sifAllocatedSeq:
+      # Requires + 1 for array as 0 is invalid.
+      let initSize = newIntLitNode(options.maxEntities + 1)
+      quote do:
+        `sysNode`.index = newSeq[tuple[exists: bool, row: Natural]](`initSize`)
 
-proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimNode, extraFields: seq[NimNode]): NimNode =
+
+# -------------------------------------
+# Processing system component arguments
+# -------------------------------------
+
+
+type
+  UnpackedPrefixKind = enum upNone = "", upNot = "not", upOwn = "own", upCustom
+  
+  UnpackedPrefix = object
+    kind: UnpackedPrefixKind
+    custom: NimNode
+  
+  UnpackedArg = object
+    typeName: string
+    typeId: ComponentTypeId
+    prefix: UnpackedPrefix
+
+
+proc unpackComponentArg(id: EcsIdentity, node: NimNode): UnpackedArg =
+  ## Parse a system requirement of the form '<Type>|<prefix> <Type>'.
+  ## The prefixes `not` and `own` have special semantics.
+
+  const
+    sysPre = "System components "
+
+  result =
+    case node.kind
+      
+      of nnkIdent, nnkSym:
+        UnpackedArg(
+          typeName: node.strVal,
+          typeId: id.typeStringToId node.strVal,
+          prefix: UnpackedPrefix(kind: upNone)
+        )
+      
+      of nnkPrefix:
+
+        node.expectMinLen 2
+
+        var
+          prefixOp: string
+
+        case node[0].kind
+          of nnkIdent, nnkSym:
+            prefixOp = node[0].strVal
+          of nnkOpenSymChoice, nnkClosedSymChoice:
+            node[0].expectMinLen 1
+            prefixOp = node[0][0].strVal
+          else:
+            error sysPre & "expected an ident or symbol as a type prefix but got " & $node.kind & ":\n'" & node.treerepr & "'"
+        
+        if prefixOp != "not":
+          error sysPre & "unknown type prefix '" & node[0].strVal & "'"
+
+        UnpackedArg(
+          typeName: node[1].strVal,
+          typeId: id.typeStringToId node[1].strVal,
+          prefix: UnpackedPrefix(kind: upNot)
+        )
+
+      of nnkCommand:
+        if node[1].kind notin [nnkIdent, nnkSym]:
+          error sysPre & "expected a type ident to own but got " & $node[1].kind & ": '" & node[1].repr & "'"
+        
+        UnpackedArg(
+          typeName: node[1].strVal,
+          typeId: id.typeStringToId node[1].strVal,
+          prefix:
+            case node[0].strVal
+              of "own": UnpackedPrefix(kind: upOwn)
+              else:     UnpackedPrefix(kind: upCustom, custom: copy node[0])
+        )
+
+      else:
+        error sysPre & "expected 'type' or 'not type' but got " &
+          $node.kind & ": '" & node.repr & "'"
+        
+        UnpackedArg(
+          typeName: "",
+          typeId: InvalidComponent,
+          prefix: UnpackedPrefix(kind: upNone)
+        )
+
+
+proc unpackArgs(id: EcsIdentity, componentTypes: NimNode): tuple[uArgs: seq[UnpackedArg], names: string] =
+  ## Parse `componentTypes` to UnpackedArg.
+
+  # TODO: `repr` might give mangled type names when creating a private ECS inside a block.
+  
+  result.uArgs.setLen componentTypes.len
+
+  for i in 0 ..< componentTypes.len:
+    let
+      uArg = id.unpackComponentArg(componentTypes[i])
+      tName =
+        case uArg.prefix.kind
+          of upNone: uArg.typeName
+          of upNot, upOwn: $uArg.prefix.kind & " " & uArg.typeName
+          of upCustom: uArg.prefix.custom.repr & " " & uArg.typeName
+    
+    result.uArgs[i] = uArg
+
+    if uArg.typeName.len == 0:
+      error "Cannot resolve type from " & componentTypes[i].repr
+
+    if result.names.len > 0:
+      result.names &= ", " & tName
+    else:
+      result.names = tName
+
+
+# ---------------------
+# Creating system types
+# ---------------------
+
+proc threadParamType(sysType: NimNode): NimNode =
+  let
+    sys = ident "sys"
+    rows = ident "rows"
+    r1 = ident "r1"
+    r2 = ident "r2"
+  quote do:
+    tuple[`sys`: ptr `sysType`, `rows`: tuple[`r1`, `r2`: int]]
+
+
+proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, extraFields: seq[NimNode]): NimNode =
   ## Generates the type declaration for this system.
   let
     name = id.getSystemName sysIndex
     sysTypeName = systemTypeName(name)
     sysIdent = ident sysTypeName
-    tupleTypeIdent = ident(tupleName(name))
+    itemTypeIdent = ident(itemTypeName(name))
     options = id.getOptions(sysIndex)
   result = newStmtList()
 
@@ -55,7 +181,7 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
         lastIndex*: int           ## Records the last item position processed for streaming.
         streamRate*: Natural      ## Rate at which this system streams items by default, overridden if defined using `stream x:`.
         # TODO: Currently writable, use sys.name to get a generated constant by system type.
-        systemName*: string       ## Name is automatically set up at code construction in defineSystem
+        systemName*: string       ## Name is automatically set up at code construction in defineSystem.
         disabled*: bool           ## Doesn't run doProc if true, no work is done.
         paused*: bool             ## Pauses this system's entity processing, but still runs init & finish. 
         initialised*: bool        ## Automatically set to true after an `init` body is called.
@@ -66,43 +192,56 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     # Extract field list so we can edit them.
     fields = result.recList(sysTypeName)
     highIdx, count: NimNode
+
   doAssert fields.kind != nnkEmpty, "Internal error: Cannot retrieve fields from system type `" & name & "`"
 
   # Create requirements array
-  let reqCount = id.len_ecsSysRequirements(sysIndex)
+  let
+    reqCount = id.len_ecsSysRequirements(sysIndex)
+  
   fields.add genField("requirements", false, genArray(reqCount, ident "ComponentTypeId"))
 
-  # Append groups field to the system type, depending on options.
+  # Append groups field to the system type.
   case options.storageFormat
-  of ssSeq:
-    fields.add genField("groups", true, genSeq(tupleTypeIdent))
-    highIdx = quote do:
-      template high*(system: `sysIdent`): int = system.groups.high
-    count = quote do:
-      template count*(system: `sysIdent`): int = system.groups.len
-  of ssArray:
-    let maxEntities = options.maxEntities
-    fields.add genField("groups", true, genArray(maxEntities + 1, tupleTypeIdent))
-    # TODO: Make nextFreeIdx private. This is exposed due to `newEntityWith` not building a proc, so needs internal access.
-    fields.add genField("nextFreeIdx", true, ident "int")
-    highIdx = quote do:
-      template high*(system: `sysIdent`): int = system.nextFreeIdx - 1
-    count = quote do:
-      template count*(system: `sysIdent`): int = system.nextFreeIdx
+
+    of ssSeq:
+      fields.add genField("groups", true, genSeq(itemTypeIdent))
+      
+      highIdx = quote do:
+        template high*(system: `sysIdent`): int = system.groups.high
+      count = quote do:
+        template count*(system: `sysIdent`): int = system.groups.len
+
+    of ssArray:
+      let
+        maxEntities = options.maxEntities
+      
+      fields.add genField("groups", true, genArray(maxEntities + 1, itemTypeIdent))
+      # TODO: Make nextFreeIdx private. This is exposed due to `newEntityWith` not building a proc, so needs internal access.
+      fields.add genField("nextFreeIdx", true, ident "int")
+      
+      highIdx = quote do:
+        template high*(system: `sysIdent`): int = system.nextFreeIdx - 1
+      count = quote do:
+        template count*(system: `sysIdent`): int = system.nextFreeIdx
 
   # Define the `index` field, used to translate from entityId to the groups row. 
   case options.indexFormat
-  of sifTable:
-    fields.add genField("index", true, genTable(ident "EntityId", ident "int"))
-  of sifArray:
-    let existsTuple = quote: tuple[exists: bool, row: Natural]
-    # Requires + 1 for array as 0 is invalid.
-    fields.add genField("index", true, genArray(options.maxEntities + 1, existsTuple))
-  of sifAllocatedSeq:
-    let existsTuple = quote: tuple[exists: bool, row: Natural]
-    fields.add genField("index", true, genSeq(existsTuple))
+
+    of sifTable:
+      fields.add genField("index", true, genTable(ident "EntityId", ident "int"))
+
+    of sifArray:
+      let existsTuple = quote: tuple[exists: bool, row: Natural]
+      # Requires + 1 for array as 0 is invalid.
+      fields.add genField("index", true, genArray(options.maxEntities + 1, existsTuple))
+
+    of sifAllocatedSeq:
+      let existsTuple = quote: tuple[exists: bool, row: Natural]
+      fields.add genField("index", true, genSeq(existsTuple))
 
   # Add fields to support timing the system.
+
   if options.timings == stProfiling:
     # Time to run one tick's worth of items based on past performance
     fields.add genField("timePerGroupRun", true, ident "float")
@@ -112,15 +251,27 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     fields.add genField("maxTimePerGroupItem", true, ident "float")
     fields.add genField("minTimePerGroupRun", true, ident "float")
     fields.add genField("maxTimePerGroupRun", true, ident "float")
+  
+  case options.threading:
+    of sthNone:
+      discard
+    of sthDistribute:
+      let
+        paramTy = threadParamType(sysIdent)
+      fields.add genField("threads", true, quote do: seq[Thread[`paramTy`]])
+      fields.add genField("cores", true, ident "int")
+
+  
   if options.timings in [stRunEvery, stProfiling]:
     # Keeps track of the last time a tick was issued
-    fields.add genField("lastTick", true, ident "float")
+    fields.add genField("lastRun", true, ident "float")
     # In theory, inputting a negative curTime() + x in runEvery would allow no trigger until x
     # had passed, then act as if runEvery is zero (ie; always run)
     ## If runEvery is non-zero, this system's do proc will only trigger after this delay
     fields.add genField("runEvery", true, ident "float")
 
   # Finally, add extra fields (provided by the user) to the type.
+  
   if extraFields.len > 0:
     fields.add(extraFields)
 
@@ -129,8 +280,9 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, componentTypes: NimN
     `count`
   )
 
+
 proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, fieldSetup: seq[tuple[fieldName, value: NimNode]]): NimNode =
-  ## Generates an init proc that instantiates the system and initialises variables and instantiates the system variable.
+  ## Generates an init proc that instantiates the system and system variable, and assigns any user default values.
   let
     typeName = ($sysName).capitalizeAscii
     sysType = ident systemTypeName(typeName)
@@ -156,7 +308,7 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
   # Create variable for this system.
   let
     sysVar = ident systemVarName(typeName)
-    typeIdent = ident tupleName(typeName)
+    typeIdent = ident itemTypeName(typeName)
     systemVarDecl =
       if options.useThreadVar:
         quote:
@@ -165,11 +317,11 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
         quote:
           var `sysVar`*: `sysIdent`
 
-  let docCmt = newCommentStmtNode "Returns the tuple type for the " & sysName & " system."
+  let docCmt = newCommentStmtNode "Returns the type of 'item' for the " & sysName & " system."
   result.add(quote do:
     `systemVarDecl`
     `docCmt`
-    template tupleType*(system: `sysType`): untyped = `typeIdent`
+    template itemType*(system: `sysType`): untyped = `typeIdent`
   )
 
   # Add timing utilities for this system.
@@ -187,25 +339,35 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
           sys.minTimePerGroupRun = 0.0
           sys.maxTimePerGroupRun = 0.0
         proc timePerRun*(sys: `sysIdent`): float {.inline.} = sys.timePerGroupRun
-    else: newEmptyNode()
+    else: newStmtList()
+  
+  let threadInits =
+    case options.threading
+      of sthNone: newStmtList()
+      of sthDistribute:
+        let countCores = bindSym("countProcessors")
+        quote do:
+          `initParam`.cores = `countCores`()
+          `initParam`.threads.setLen `initParam`.cores          
 
   let
     entity = ident "entity"
     sysHasEntity = sysVar.indexHasKey(quote do: `entity`.entityId, options.indexFormat)
+
   result.add(quote do:
+
     proc `initIdent`*(`initParam`: var `sysIdent`) =
       ## Initialise the system.
 
-      ## The sys template represents the system variable being passed.
-      template sys: untyped {.used.} = `initParam`
-      ## The self template represents the system variable being passed.
-      template self: untyped {.used.} = `initParam`
+      template sys: untyped {.used.} = `initParam`  ## The `sys` template represents the system variable being passed.
+      template self: untyped {.used.} = `initParam` ## The `self` template represents the system variable being passed.
 
       `initIndex`
       `initParam`.streamRate = 1  # Default items to process per frame when using `stream:`.
       `initParam`.requirements = `reqsConst`
       `initParam`.systemName = `sysName`
       `fieldInits`
+      `threadInits`
       sys.id = `sysIndex`.SystemIndex
 
     `timingsProcs`
@@ -217,8 +379,7 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
     `sysVar`.`initIdent`()
 
     proc contains*(sys: `sysIdent`, `entity`: EntityRef): bool =
-      `sysHasEntity`
-    
+      `sysHasEntity`  
   )
 
 proc processPragma(identNode, valueType: NimNode): tuple[ident: NimNode, def: NimNode] =
@@ -248,82 +409,103 @@ proc processPragma(identNode, valueType: NimNode): tuple[ident: NimNode, def: Ni
     b = newIdentDefs(identNode, valueType)
   (a, b)
 
+
 proc parsePublicPragma(identNode, valueType: NimNode): (NimNode, NimNode) =
   ## Parse the ident node for an ident def and if it finds a {.public.}
   ## annotation, postfix the ident with `*` so the field is exported.
-  ## This is necessary because `ident*` invalid syntax in an
+  ## This is necessary because `ident*` is invalid syntax in an
   ## untyped block.
   case identNode.kind
-  of nnkPragmaExpr:
-    # Strip out public pragma (but keep others).
-    identNode.processPragma(valueType)
-  of nnkInfix:
-    if identNode.len >= 1:
-      if identNode[1].kind == nnkPragmaExpr:
-        identNode[1].processPragma(valueType)
+    of nnkPragmaExpr:
+      # Strip out public pragma (but keep others).
+      identNode.processPragma(valueType)
+    of nnkInfix:
+      if identNode.len >= 1:
+        if identNode[1].kind == nnkPragmaExpr:
+          identNode[1].processPragma(valueType)
+        else:
+          (identNode[1], newIdentDefs(identNode[1], valueType))
       else:
-        (identNode[1], newIdentDefs(identNode[1], valueType))
+        (identNode, newIdentDefs(identNode, valueType))
     else:
       (identNode, newIdentDefs(identNode, valueType))
-  else:
-    (identNode, newIdentDefs(identNode, valueType))
+
 
 proc matchesTypeProvided(node: NimNode): bool =
   ## Tests to see if we're doing `field -> type`.
   node.kind == nnkInfix and node[0].kind == nnkIdent and node[0].strVal == "->"
 
 
-proc unpackComponentArg(id: EcsIdentity, node: NimNode): tuple[
-    typeName: string,
-    typeId: ComponentTypeId,
-    negate: bool] =
+proc makeSystemItemType(node: var NimNode, id: EcsIdentity, sysName: string, sysIndex: SystemIndex, components, owned: ComponentIterable) =
+  ## Build the 'item' type that contains fields for the entity and each component accessible by this system.
 
-  # Parse <typedesc> and <not typedesc>
+  var
+    elements = nnkRecList.newTree()
+  
+  # Add the 'entity' field.
+  elements.add(
+    nnkIdentDefs.newTree(
+      nnkPragmaExpr.newTree(
+        postFix(ident("entity"), "*"),
+        nnkPragma.newTree(
+          ident "hostEntity"
+        )
+      ),
+      ident("EntityRef"),
+      newEmptyNode())
+    )
+  
+  # Add components to the field list.
+  for c in id.building components:
+    let
+      typeId = c.typeId
+      tyName = c.name
 
-  const
-    sysPre = "System components "
+    if typeId in owned:
+      # Owned component storage is the system itself.
 
-  case node.kind
-    
-    of nnkIdent, nnkSym:
-      (
-        typeName: node.strVal,
-        typeId: id.typeStringToId node.strVal,
-        negate: false
-      )
-    
-    of nnkPrefix:
-      if node[1].kind != nnkIdent:
-        error sysPre & "expected a type ident for negation but got " & $node.kind & ": '" & node.repr & "'"
+      id.set_systemOwner typeId, sysIndex
+      id.set_isOwned typeId, true
       
-      if node[0].strVal != "not":
-        error sysPre & "cannot process a type modifier of '" & node[0].repr & "'"
-      
-      (
-        typeName: node[1].strVal,
-        typeId: id.typeStringToId node[1].strVal,
-        negate: true
+      elements.add(
+        nnkIdentDefs.newTree(
+          postfix(ident(c.lcName), "*"),
+          ident(tyName),
+          newEmptyNode()
+        )
       )
 
     else:
-      error sysPre & "expected 'type' or 'not type' but got " &
-        $node.kind & ": '" & node.repr & "'"
-      (
-        typeName: "",
-        typeId: InvalidComponent,
-        negate: false
+      # If not owned the component instance type is used.
+      
+      elements.add(
+        nnkIdentDefs.newTree(
+          postfix(ident(c.lcName), "*"),
+          c.instanceTy,
+          newEmptyNode()
+        )
       )
 
+  node.add nnkTypeSection.newTree(
+    nnkTypeDef.newTree(
+      postfix(ident itemTypeName(sysName), "*"),
+      newEmptyNode(),
+      nnkObjectTy.newTree(
+        newEmptyNode(),
+        newEmptyNode(),
+        elements
+      )
+    )
+  )
 
-proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedComponents: NimNode, extraFields: NimNode, sysOptions: ECSSysOptions): NimNode =
-  ## Create a tuple to hold the required combination of types for this system.
+
+proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, extraFields: NimNode, sysOptions: ECSSysOptions): NimNode =
+  ## Create a system type then init an instance.
+  
   result = newStmtList()
 
   if id.findSystemIndex(sysName).found:
     error "System \"" & sysName & "\" has already been defined"
-  
-  if componentTypes.len == 0:
-    error "Systems require at least one component type to operate on but none have been provided"
   
   if sysOptions.indexFormat in [sifArray, sifAllocatedSeq] and sysOptions.maxEntities == 0:
     error "System \"" & sysName & "\", system options: maxEntities cannot be zero when using the fixed size option '" &
@@ -336,62 +518,69 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   var
     passedComponentIds: seq[ComponentTypeId]
     passedNegationIds: seq[ComponentTypeId]
+    ownedComponentIds: seq[ComponentTypeId]
+  let
+    (uArgs, componentTypesStr) = id.unpackArgs(componentTypes)
 
-  for item in componentTypes:
+  for uArg in uArgs:
     let
-      uArg = id.unpackComponentArg(item)
       typeId = uArg.typeId
       typeName = id.typeName(typeId)
+      errPre = "Component '" & typeName & "' cannot be "
+      errPost = " multiple times for system \"" & sysName & "\""
 
-    if typeId in passedComponentIds:
-      error "Component '" & typeName & "' is included multiple times for system \"" & sysName & "\""
+    if typeId in id.ecsSealedComponents:
+      error "Component " & typeName &
+        " has already been sealed with makeEcs and cannot be extended to system \"" & sysName &
+        "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
 
-    if uArg.negate:
-      passedNegationIds.add typeId
-    else:
-      # Check the component isn't already part of a sealed ECS.
+    case uArg.prefix.kind:
+      of upNone:
+        if typeId in passedComponentIds:
+          error errPre & "included" & errPost
 
-      if typeId in id.ecsSealedComponents:
-        error "Component " & typeName &
-          " has already been sealed with makeEcs and cannot be extended to system \"" &
-          sysName &
-          "\". Use 'defineSystem' to forward declare the system or place this 'makeSystem' before 'makeEcs'."
+        passedComponentIds.add typeId
 
-      passedComponentIds.add typeId
+      of upNot:
+        if typeId in passedNegationIds:
+          error errPre & "negated" & errPost
 
-  if passedComponentIds.len == 0:
-    error "Systems must use at least one component"
+        passedNegationIds.add typeId
 
-  # Process owned components.
+      of upOwn:
+        if typeId in ownedComponentIds:
+          error errPre & "owned" & errPost
+        
+        if typeId notin passedComponentIds:
+          # Allow [A, own A].
+          passedComponentIds.add typeId
+        
+        ownedComponentIds.add typeId
 
-  var
-    ownedComponentIds: seq[ComponentTypeId]
+      of upCustom:
+        error errPre & "cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
 
-  for comp in ownedComponents:
-    let
-      typeId = id.typeStringToId($comp)
-
-    if typeId.int == -1:
-      error "This type's id can't be found in registered components: " & $comp
-
-    if typeId notin passedComponentIds:
-      error "Requesting to own component " & id.typeName(typeId) &
-        " which is not part of system \"" & sysName &
-        "\". System components: " & id.commaSeparate(passedComponentIds)
-
-    ownedComponentIds.add typeId
+  when defined(ecsLog) or defined(ecsLogDetails):
+    echo "Defining body for system \"", sysName, "\" with types [", componentTypesStr, "]"
 
   for typeId in passedComponentIds:
     let
       curOwner = id.systemOwner typeId
 
     if curOwner != InvalidSystemIndex and typeId in ownedComponentIds:
-      error "Component " & id.typeName(typeId) & " is already owned by system \"" & id.getSystemName(curOwner) & "\"" 
+      error "Component " & id.typeName(typeId) & " is already owned by system \"" & id.getSystemName(curOwner) & "\""
+    
+    if typeId in passedNegationIds:
+      error "Component " & id.typeName(typeId) & " cannot be used and negated in the same system \"" & sysName & "\""
 
   # Conditions have now been met to add the system.
 
+  let sourceLoc = componentTypes.lineInfo
+
   when defined(ecsLog) or defined(ecsLogDetails):
-    echo "[ System generation for \"" & sysName & "\"]"
+
+    echo "[ System generation for \"" & sysName & "\" " & sourceLoc & " ]"
+
   when defined(ecsLogDetails):
     echo "System \"", sysName, "\" options:\n", sysOptions.repr, "\n"
 
@@ -403,61 +592,33 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
   let
     sysIndex = id.addSystem sysName
 
+  id.set_ecsSystemSourceLoc(sysIndex, sourceLoc)
+
   id.setOptions(sysIndex, sysOptions)
 
   # Store variable ident for this system.
   id.set_Instantiation(sysIndex, inst)
-  
+
   # Append to the commitSystems order.
   id.add_systemOrder sysIndex
 
-  assert id.len_ecsOwnedComponents(sysIndex) == 0, "Owned components are already initialised"
+  assert id.len_ecsOwnedComponents(sysIndex) == 0, "Internal error: owned components have already been initialised"
 
-  for sys in ownedComponentIds:
-    id.add_ecsOwnedComponents sysIndex, sys
+  # Add this system's requirements to the macrocache.
+
+  for compId in ownedComponentIds:
+    id.add_ecsOwnedComponents sysIndex, compId
 
   for compId in passedNegationIds:
     id.add_ecsSysNegations sysIndex, compId
+    id.add_systems compId, sysIndex
 
-  # Build tuple type of components for this system.
-  var
-    elements = nnkTupleTy.newTree()
-  
-  # Add entity field.
-  elements.add(nnkIdentDefs.newTree(ident("entity"), ident("EntityRef"), newEmptyNode()))
-  
-  # Add component fields to the tuple.
-  for typeId in passedComponentIds:
-    let
-      tyName = id.typeName typeId
+  for compId in passedComponentIds:
+    id.add_ecsSysRequirements sysIndex, compId
+    id.add_systems compId, sysIndex
 
-    if typeId in ownedComponentIds:
-      # Owned component storage is the system itself.
-
-      id.set_systemOwner typeId, sysIndex
-      id.set_isOwned typeId, true
-      
-      elements.add(nnkIdentDefs.newTree(
-        ident((tyName).toLowerAscii), ident(tyName), newEmptyNode())
-      )
-
-    else:
-      # If not owned the component instance type is used.
-      
-      elements.add(nnkIdentDefs.newTree(
-        ident(tyName.toLowerAscii), ident(tyName.instanceTypeName()), newEmptyNode())
-      )
-
-    # Update component to system links.
-    id.add_systems typeId, sysIndex
-    id.add_ecsSysRequirements sysIndex, typeId
-  
-  # Build system tuple type and access variable.
-  let typeIdent = ident(tupleName(typeName))
-
-  # This type defines the elements of the `groups` field.
-  result.add(quote do:
-    type `typeIdent`* = `elements`)
+  # Create a type to hold components for a system row.
+  result.makeSystemItemType(id, sysName, sysIndex, passedComponentIds, ownedComponentIds)
 
   # Add user defined fields to this System's type.
   # These can be defined as `Field: Value`, `Field = Value`, or `Field -> Type = Value`.
@@ -474,45 +635,51 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
 
     for tyDef in extraFields:
       case tyDef.kind
-      of nnkCall:
-        # Already in the right format.
-        tyDef[1].expectKind nnkStmtList
-        tyDef[1].expectMinLen 1
-        let
-          valueType = tyDef[1][0]
-          (_, identDef) = parsePublicPragma(tyDef[0], valueType)
+        of nnkCall:
+          # Already in the right format.
+          tyDef[1].expectKind nnkStmtList
+          tyDef[1].expectMinLen 1
+          let
+            valueType = tyDef[1][0]
+            (_, identDef) = parsePublicPragma(tyDef[0], valueType)
 
-        extraFieldDefs.add(identDef)
-  
-      of nnkAsgn:
-        # Because it's invalid syntax to use `field: type = statement`
-        # you can manually set the type using `field -> type = statement`
-        # Otherwise, use `field: type` and set it up with `init:` in the system.
-        var valueType: NimNode
-        let value = tyDef[1]
-        if tyDef[0].matchesTypeProvided:
-          # Pull out user's type request.
-          valueType = tyDef[0][2]
+          extraFieldDefs.add(identDef)
+    
+        of nnkAsgn:
+          # Because it's invalid syntax to use `field: type = statement`
+          # you can manually set the type using `field -> type = statement`
+          # Otherwise, use `field: type` and set it up with `init:` in the system.
+          var valueType: NimNode
+          let value = tyDef[1]
+          if tyDef[0].matchesTypeProvided:
+            # Pull out user's type request.
+            valueType = tyDef[0][2]
+          else:
+            # Try and work out what type we have.
+            valueType = value.assignmentType
+          let (ident, identDef) = parsePublicPragma(tyDef[0], valueType)
+
+          # Add assignment to the init procedure.
+          fieldSetup.add (ident, value)
+          # Record the field def too.
+          extraFieldDefs.add(identDef)
         else:
-          # Try and work out what type we have.
-          valueType = value.assignmentType
-        let (ident, identDef) = parsePublicPragma(tyDef[0], valueType)
-
-        # Add assignment to the init procedure.
-        fieldSetup.add (ident, value)
-        # Record the field def too.
-        extraFieldDefs.add(identDef)
-      else:
-        error "Unhandled kind for extra field in system \"" & sysName &
-          "\", expected `field: type` or `field = value`, got:\n" & tyDef.treeRepr
+          error "Unhandled kind for extra field in system \"" & sysName &
+            "\", expected `field: type` or `field = value`, got:\n" & tyDef.treeRepr
 
   # Generate the system type according to provided options.
-  result.add makeSystemType(id, sysIndex, componentTypes, extraFieldDefs)
+  result.add makeSystemType(id, sysIndex, extraFieldDefs)
   result.add instantiateSystem(id, sysIndex, sysName, fieldSetup)
 
-  # Static access to the state of ownership in the system.
+  # User access to system ownership.
   let sysType = ident systemTypeName(sysName)
   if ownedComponentIds.len > 0:
+    var
+      ownedComponents = nnkBracket.newTree()
+    
+    for c in ownedComponentIds:
+      ownedComponents.add ident(id.typeName c)
+
     result.add(quote do:
       template isOwner*(sys: `sysType`): bool = true
       template ownedComponents*(sys: `sysType`): seq[ComponentTypeId] = `ownedComponents`
@@ -530,17 +697,29 @@ proc createSysTuple(id: EcsIdentity, sysName: string, componentTypes, ownedCompo
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
+
+proc embedOwned(componentTypes, ownedComponents: NimNode): NimNode =
+  result = componentTypes.copy
+  for n in ownedComponents:
+    result.add nnkCommand.newTree(ident "own", n)
+
+
+# -----------------
+# Public system API
+# -----------------
+
+
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system and providing extra fields.
-  result = id.createSysTuple(name, componentTypes, ownedComponents, extraFields, options)
+  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, extraFields, options)
 
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system.
-  result = id.createSysTuple(name, componentTypes, ownedComponents, nil, options)
+  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, nil, options)
 
 macro defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system and its types using an ECS identity, providing extra fields to incorporate into the resultant system instance.
-  result = id.createSysTuple(name, componentTypes, nil, extraFields, options)
+  result = id.createSystem(name, componentTypes, extraFields, options)
 
 template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions]): untyped =
   ## Define a system and its types using an ECS identity with specific options.
@@ -550,9 +729,15 @@ template defineSystem*(id: static[EcsIdentity], name: static[string], componentT
   ## Define a system and its types using an ECS identity with default system options.
   defineSystem(id, name, componentTypes, defaultSystemOptions, nil)
 
+template defineSystem*(id: static[EcsIdentity], name: static[string]): untyped =
+  ## Define a system without components using an ECS identity with default system options.
+  defineSystem(id, name, nil, defaultSystemOptions, nil)
+
+
 #---------------------------------------------------
 # Convenience templates for using a default identity
 #---------------------------------------------------
+
 
 template defineSystem*(name: static[string], componentTypes: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system and its types using the default ECS identity, providing extra fields to incorporate into the resultant system instance.
@@ -566,6 +751,10 @@ template defineSystem*(name: static[string], componentTypes: untyped): untyped =
   ## Define a system and its types using the default ECS identity with default system options.
   defaultIdentity.defineSystem(name, componentTypes)
 
+template defineSystem*(name: static[string]): untyped =
+  ## Define a system and its types using the default ECS identity with default system options.
+  defaultIdentity.defineSystem(name, nil)
+
 template defineSystemOwner*(name: static[string], componentTypes: untyped, ownedComponents: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options, extraFields)
@@ -574,9 +763,15 @@ template defineSystemOwner*(name: static[string], componentTypes: untyped, owned
   ## Define a system using the default ECS identity, declaring types that are owned by this system and providing extra fields.
   defaultIdentity.defineSystemOwner(name, componentTypes, ownedComponents, options)
 
+template defineSystem*(name: static[string]): untyped =
+  ## Define a system without components using the default ECS identity with default system options.
+  defaultIdentity.defineSystem(name, nil, defaultSystemOptions, nil)
+
+
 # ----------------
 # Grouping systems
 # ----------------
+
 
 macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: openarray[string]): untyped =
   ## Assign specific systems to a group using an ECS identity.
@@ -674,9 +869,10 @@ template commitGroup*(group, runProc: static[string]): untyped =
   defaultIdentity.commitGroup(group, runProc)
 
 
-#-----------------
-# System utilities
-#-----------------
+#----------------------
+# User system utilities
+#----------------------
+
 
 template updateTimings*(sys: untyped): untyped =
   # per item
@@ -700,47 +896,34 @@ template updateTimings*(sys: untyped): untyped =
     if sys.timePerGroupRun < sys.minTimePerGroupRun:
       sys.minTimePerGroupRun = sys.timePerGroupRun
 
-proc getAssertItem(assertItem: bool, sys, itemIdx: NimNode, rowIdx: NimNode = nil): NimNode =
-  if assertItem:
-    if rowIdx != nil:
-      quote do:
-        if `itemIdx` != `rowIdx`:
-          assert false,
-            "'item' in " & `sys`.name & " is being used after a " &
-            "remove or delete affected this system"
-        elif `itemIdx` > `sys`.high:
-          assert false,
-            "'item' in " & `sys`.name & " is out of bounds. " &
-            "Use of 'item' after remove/delete affected this system?"
-    else:
-      quote do:
-        if `itemIdx` > `sys`.high:
-          assert false,
-            "'item' in " & `sys`.name & " is out of bounds. " &
-            "Use of 'item' after remove/delete affected this system?"
-  else:
-    newStmtList()
-
 macro removeComponents*(sys: object, types: varargs[typed]) =
   ## Remove the components in `types` from all entities in this system.
   
   # This macro builds a `removeComponents` with `types` and executes it
   # for each entity in the system, from the last entity backwards to the
   # first.
+  # Note that removing a required component implicitly adjust the system
+  # length so we don't need to manually set the 'groups' field length.
+
   let entity = ident "entity"
   var `removeInner` = nnkCall.newTree(ident "remove", entity)
   
   for ty in types:
+    
     case ty.kind
-    of nnkSym:
-      `removeInner`.add ty
-    of nnkHiddenStdConv:
-      ty.expectMinLen 2
-      ty[1].expectKind nnkBracket
-      for compTy in ty[1]:
-        `removeInner`.add compTy
-    else:
-      `removeInner`.add ty
+
+      of nnkSym:
+        `removeInner`.add ty
+      
+      of nnkHiddenStdConv:
+        ty.expectMinLen 2
+        ty[1].expectKind nnkBracket
+        
+        for compTy in ty[1]:
+          `removeInner`.add compTy
+      
+      else:
+        `removeInner`.add ty
 
   quote do:
     for i in countDown(`sys`.count - 1, 0):
@@ -756,166 +939,35 @@ template clear*(sys: object) =
   if `sys`.count > 0:
     for i in countDown(`sys`.count - 1, 0):
       `sys`.groups[i].entity.delete
+    # The length of `sys`.groups is set by delete.
 
-type SysEventOp = enum seAdded = "onAdded", seRemoved = "onRemoved"
 
-proc checkEventCycle(id: EcsIdentity, name: string, sysIndex: SystemIndex, op: SysEventOp): NimNode =
-  # Inline system events can add/remove components, which may
-  # trigger one or more other inline system events.
-  # 
-  # Since these events are inlined at compile-time during a state
-  # change, cycles can form when they're expanded.
-  # 
-  # This applies even though you may be performing state changes
-  # on *separate* entities that will never create an event cycle
-  # at run time, because within the compile time context each
-  # state changes must include code for all *potential* changes,
-  # and this can combinatoric explode with multi-component changes
-  # more than a few levels deep.
-  # 
-  # Of particular note, `construct` must statically expand all
-  # possible inline events for every component in the identity.
-  # 
-  # System events such as `added` and `removed` are therefore
-  # checked to halt compilation when nested state changes try to
-  # invoke the same event for the same system again.
-  # 
-  # To avoid the possibility of compile time cycles within system
-  # events, use `addedCallback` and `removedCallback`.
-  # 
-  # Future work: it may be possible to isolate state change
-  # branches by inserting ident tracking code using the
-  # macrocache to make this check more lenient.
-  
-  let
-    # Build access idents for onAdded and onRemoved.
-    opStr = $op
-    chain = opStr & "Chain"
-    source = opStr & "Source"
-    start = opStr & "Start"
+# -------------------------
+# Wrapping iteration blocks
+# -------------------------
 
-    getSource = ident source
-    setSource = ident "set_" & source
 
-    getStartIdx = ident start
-    setStartIdx = ident "set_" & start
-
-    getChain = ident chain
-    addChain = ident "add_" & chain
-    lenChain = ident "len_" & chain
-
-  # Insert static code for the next expansion level to catch closed
-  # event loops.
-  quote do:
-    static:
-      const
-        identity = EcsIdentity(`id`)
-        # When `getSource` is empty it returns default(SystemIndex),
-        # which is expected to == InvalidSystemIndex.
-        #
-        # Once the event has been fully expanded by the compiler
-        # the source is set back to InvalidSystemIndex for the next
-        # system event.
-        chainSource = identity.`getSource`
-        curSys = `sysIndex`.SystemIndex
-      
-      startOperation(identity, `opStr` & " \"" & identity.getSystemName(curSys) & "\"")
-
-      if chainSource == InvalidSystemIndex:
-        # The first system to invoke the event records the path.
-        # Initialise the chain from this system.
-        identity.`setSource` curSys
-        identity.`setStartIdx`(curSys, identity.`lenChain`(curSys))
-        identity.`addChain` curSys, curSys
-
-      else:
-        # This event has been generated by another inline event.
-        # If this system has been seen before then compilation is
-        # halted, otherwise appends this system to the chain.
-        const curChain = identity.`getChain`(chainSource)
-
-        assert curChain.len > 0, "Internal error: chain desync - current chain is empty, expected start system \"" &
-          identity.getSystemName(chainSource) & "\""
-        
-        when curChain.len > 0:
-
-          const chainIdx = identity.`getStartIdx` curSys
-          assert chainIdx < curChain.len
-          
-          const
-            # Trim current chain before the last known starting point.
-            activeChain = curChain[chainIdx .. max(chainIdx, curChain.high)]
-          
-          when defined(ecsLogDetails):
-            const potentialChain = activeChain & curSys
-            debugPerformance(identity, `opStr` & " event chain: " & identity.commaSeparate(potentialChain))
-
-          when curSys in activeChain:
-            # This system is already in the chain and part of a cycle.
-            # TODO: We could also do this perhaps with more flexibility using a recursion count.
-
-            proc outputMsg(sysSource: SystemIndex, postFix = ""): string =
-              let
-                sysReqs = identity.ecsSysRequirements(sysSource)
-                compListStr = identity.commaSeparate(sysReqs)
-              "  \"" & identity.getSystemName(sysSource) & "\" [" & compListStr & "]" & postFix & "\n"
-
-            proc chainMsg: string = 
-              const cycleIndicator = " <- Start of cycle"
-
-              when activeChain.len > 1:
-                for i in 0 ..< activeChain.len - 1:
-                  result.add activeChain[i].outputMsg()
-              result.add activeChain[^1].outputMsg(cycleIndicator)
-              result.add curSys.outputMsg(" ...\n")
-              result.add "Use a callback event to avoid cycles." 
-
-            error "System \"" & `name` &
-              "\" inline event '" & `opStr` & "'" &
-              " causes circular code generation:\n" & chainMsg()
-
-          identity.`addChain` chainSource, curSys
-
-proc strictCatchCheck(cacheId: NimNode): NimNode =
-  let
-    undefinedItemMsg = "Cannot access 'item' here as the current row may be " &
-      "undefined until the next iteration due to a previous removal of " &
-      "components or deletion of an entity within this system iteration. " &
-      "Use the injected 'entity' variable or the system's 'deleteList' " &
-      "to avoid this error whilst using 'ecsStrict'"
-
-  if defined(ecsStrict):
-    quote do:
-      static:
-        when `cacheId`.sysRemoveAffectedThisSystem or `cacheId`.systemCalledDelete:
-          error `undefinedItemMsg`
-  else: newStmtList()
-
-proc timeWrapper(sys: NimNode, options: EcsSysOptions, core: NimNode): NimNode =
+proc initTiming(sys: NimNode, options: EcsSysOptions, core: NimNode): NimNode =
   ## Wraps `core` with timing code if `timings` is true, otherwise passes through `core` unchanged.
   case options.timings
-  of stNone:
-    `core`
-  of stRunEvery:
-    quote do:
-      let startTime = cpuTime()
+    
+    of stNone, stRunEvery:
       `core`
-      # record last tick time
-      `sys`.lastTick = startTime
-  of stProfiling:
-    quote do:
-      let startTime = cpuTime()
-      `core`
-      let endTime = cpuTime()
-      `sys`.timePerGroupRun = endTime - startTime
-      if `sys`.count > 0:
-        `sys`.timePerGroupItem = `sys`.timePerGroupRun / `sys`.count.float
-      else:
-        `sys`.timePerGroupItem = 0.0
-      # Note that the min/max timers are user handled with `system.resetMinMax`.
-      `sys`.updateTimings()
-      # record last tick time
-      `sys`.lastTick = startTime
+    
+    of stProfiling:
+      quote do:
+        let startTime = cpuTime()
+        `core`
+        let endTime = cpuTime()
+        `sys`.timePerGroupRun = endTime - startTime
+        if `sys`.count > 0:
+          `sys`.timePerGroupItem = `sys`.timePerGroupRun / `sys`.count.float
+        else:
+          `sys`.timePerGroupItem = 0.0
+
+        # Note that the min/max timers are user handled with `system.resetMinMax`.
+        `sys`.updateTimings()
+
 
 proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options: EcsSysOptions, code: NimNode): NimNode =
   let
@@ -928,18 +980,17 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
 
     # if `entity` != `item.entity` then this row has been removed.
     rowEnt = ident "entity"
+    entAccess = userEntAccess(quote do: `sys`.groups[`idx`].entity)
 
-    typeName = name.capitalizeAscii
-    typeIdent = ident(tupleName(typeName))
+    sysItem = id.systemItem(sysIndex, rowEnt, sys, groupIndex)
 
-    strictCatch = strictCatchCheck(cacheId)
-    assertItem = id.assertItem(sysIndex)
-    assertCheck = getAssertItem(assertItem, sys, groupIndex)
-
-  result = timeWrapper(sys, options, quote do:
+  result = initTiming(sys, options, quote do:
     block:
       static:
+        if `cacheId`.inSystemAll:
+          error "Cannot embed 'all' blocks within themselves"
         `cacheId`.set_inSystemAll true
+        `cacheId`.set_ecsSysIterating true
 
       var
         `sysLen` = `sys`.count()
@@ -949,17 +1000,15 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
           `idx`: int
 
         while `idx` < `sysLen`:
-          ## The entity this row started execution with.
+
+          `entAccess`
+
           let
-            `rowEnt` {.used, inject.} = `sys`.groups[`idx`].entity
-            ## Read only index into `groups`.
+            ## Read-only index into `groups`.
             `groupIndex` {.used, inject.} = `idx`
 
-          ## Current system item being processed.
-          template item: `typeIdent` {.used.} =
-            `strictCatch`
-            `assertCheck`
-            `sys`.groups[`idx`]
+          # System `item` template.
+          `sysItem`
 
           # Inject the user's statements from `all:`
           `code`
@@ -974,7 +1023,9 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
             `idx` = `idx` + 1
       static:
         `cacheId`.set_inSystemAll false
+        `cacheId`.set_ecsSysIterating false
   )
+
 
 type
   Command = enum
@@ -982,13 +1033,15 @@ type
     cmdMultiPass = "multipass",
     cmdStochastic = "stochastic"
 
+
 proc getCommand(node: NimNode): Command =
   if node.kind == nnkIdent:
     case node.strVal.toLowerAscii
-    of $cmdMultiPass:
-      result = cmdMultiPass
-    of $cmdStochastic:
-      result = cmdStochastic
+      of $cmdMultiPass:
+        result = cmdMultiPass
+      of $cmdStochastic:
+        result = cmdStochastic
+
 
 proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command, body: NimNode] =
   # Stream commands:
@@ -1058,6 +1111,7 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
     else:
       error formatError
 
+
 proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options: EcsSysOptions, code: NimNode): NimNode =
   let
     # `sys` is the system variable parameter passed to the doProc.
@@ -1068,13 +1122,10 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
 
     # if `entity` != `item.entity` then this row has been removed.
     rowEnt = ident "entity"
+    entAccess = userEntAccess(quote do: `sys`.groups[`groupIndex`].entity)
 
-    typeName = name.capitalizeAscii
-    typeIdent = ident(tupleName(typeName))
+    sysItem = id.systemItem(sysIndex, rowEnt, sys, groupIndex)
 
-    strictCatch = strictCatchCheck(cacheId)
-    assertItem = id.assertItem(sysIndex)
-    streamAssertCheck = getAssertItem(assertItem, sys, groupIndex)
     streamDetails = parseStreamCommands(code)
     streamBody = streamDetails.body
 
@@ -1096,32 +1147,36 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
 
     processNext =
       case streamDetails.command
-      of cmdNone:
-        quote do:
-          `sys`.lastIndex = `sys`.lastIndex + 1
-          `finished` = (`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`)
-      of cmdMultiPass:
-        quote do:
-          `sys`.lastIndex = (`sys`.lastIndex + 1) mod `sysLen`
-          `finished` = `processed` >= `streamAmount`
-      of cmdStochastic:
-        quote do:
-          `sys`.lastIndex = `randomValue`(`sys`.high)
-          `finished` = `processed` >= `streamAmount`
+        of cmdNone:
+          quote do:
+            `sys`.lastIndex = `sys`.lastIndex + 1
+            `finished` = (`processed` >= `streamAmount`) or (`sys`.lastIndex >= `sysLen`)
+        of cmdMultiPass:
+          quote do:
+            `sys`.lastIndex = (`sys`.lastIndex + 1) mod `sysLen`
+            `finished` = `processed` >= `streamAmount`
+        of cmdStochastic:
+          quote do:
+            `sys`.lastIndex = `randomValue`(`sys`.high)
+            `finished` = `processed` >= `streamAmount`
 
     initFirstRun =
       case streamDetails.command
-      of cmdNone, cmdMultiPass:
-        quote do:
-          `sys`.lastIndex = `sys`.lastIndex mod `sysLen`
-      of cmdStochastic:
-        quote do:
-          if not `finished`:
-            `sys`.lastIndex = `randomValue`(`sys`.high)
+        of cmdNone, cmdMultiPass:
+          quote do:
+            if `sys`.count > 0:
+              `sys`.lastIndex = `sys`.lastIndex mod `sysLen`
+        of cmdStochastic:
+          quote do:
+            if not `finished`:
+              `sys`.lastIndex = `randomValue`(`sys`.high)
 
-  result = timeWrapper(sys, options, quote do:
+  result = initTiming(sys, options, quote do:
     static:
+      if `cacheId`.inSystemStream:
+        error "Cannot embed 'stream' blocks within themselves"
       `cacheId`.set_inSystemStream  true
+      `cacheId`.set_ecsSysIterating true
     block:
       # loop per entity in system
 
@@ -1134,16 +1189,15 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         `finished` = `sysLen` == 0
       `initFirstRun`
       while not `finished`:
+
         let
           ## Current index into `groups`.
           `groupIndex` {.used, inject.} = `sys`.lastIndex
-          ## The entity this row started execution with.
-          `rowEnt` {.used, inject.} = `sys`.groups[`groupIndex`].entity
-        ## Current system item being processed.
-        template item: `typeIdent` {.used.} =
-          `strictCatch`
-          `streamAssertCheck`
-          `sys`.groups[`groupIndex`]
+
+        `entAccess`
+        
+        # System `item` template.
+        `sysItem`
         
         # Inject stream statements.
         `streamBody`
@@ -1156,13 +1210,35 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
       
       static:
         `cacheId`.set_inSystemStream false
+        `cacheId`.set_ecsSysIterating false
   )
+
 
 #---------------------------
 # Generating the system proc
 #---------------------------
 
-proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, systemBody: NimNode, ownedFields: NimNode): NimNode =
+
+proc isBlockNode(node: NimNode): bool =
+  node.len > 0 and
+    (node.kind in [nnkCall, nnkCommand]) and
+    (node[0].kind in [nnkIdent, nnkSym, nnkOpenSymChoice])
+
+
+iterator blocks(body: NimNode): int =
+  ## Return the index of top level nodes that could be blocks.
+  
+  var
+    bodyIdx: int
+  
+  while bodyIdx < body.len:
+    if body[bodyIdx].isBlockNode:  
+        yield bodyIdx
+
+    bodyIdx.inc
+
+
+proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, systemBody: NimNode): NimNode =
   ## Create the system proc to 'tick' the system.
 
   if systemBody == nil:
@@ -1212,36 +1288,16 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
   result = newStmtList()
 
-  # `repr` may give mangled type names when creating a private ECS
-  # inside a block.
-  var
-    componentTypesStr: string
-  
-  for t in componentTypes:
-  
-    let
-      uArg = id.unpackComponentArg(t)
-      tName =
-        if uArg.negate:
-          "not " & uArg.typeName
-        else:
-          uArg.typeName
-
-    if uArg.typeName.len == 0:
-      error "Cannot resolve type from " & t.repr
-
-    if componentTypesStr.len > 0:
-      componentTypesStr &= ", " & tName
-    else:
-      componentTypesStr = tName
-
-
   if sysIdxSearch.found:
     # This system has already been defined.
     # Check the state passed here matches the previous definition.
+
     let
       existingSysIdx = sysIdxSearch.index
       existingExtraFields = id.extraFields(existingSysIdx)
+      (uArgs, componentTypesStr) = id.unpackArgs componentTypes
+      origDefLocStr = "\nOriginal system definition at: " &
+        id.ecsSystemSourceLoc(sysIdxSearch.index) & "\n"
     
     if hasFieldsBlock and not(existingExtraFields == extraFields):
       var
@@ -1252,16 +1308,18 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
       error "Fields block doesn't match the original system definition:\n" &
         "Original fields:\n" & fStr1 &
-        "\n\nPassed fields:" & fStr2
+        "\n\nPassed fields:" & fStr2 &
+        origDefLocStr
 
     if id.bodyDefined(existingSysIdx):
-      error "System \"" & name & "\" already has a body defined"
+      error "System \"" & name & "\" already has a body defined at: " &
+        id.ecsSystemBodySourceLoc(sysIdxSearch.index) & "\n"
   
     let
       expectedTypes = id.ecsSysRequirements existingSysIdx
       existingOpts = id.getOptions existingSysIdx
-      negations = id.ecsSysNegations(existingSysIdx)
-
+      negations = id.ecsSysNegations existingSysIdx
+      owned = id.ecsOwnedComponents existingSysIdx
 
     if componentTypes.len > 0:
       # Check the components given to makeSystem match defineSystem.
@@ -1271,24 +1329,27 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         "] in conflict with previous definition in defineSystem: [" &
         id.commaSeparate(expectedTypes) & "]" &
         (if negations.len > 0: " and not [" & id.commaSeparate(negations) & "]"
-          else: "")
+          else: "") &
+        (if owned.len > 0: " and owning [" & id.commaSeparate(owned) & "]"
+          else: "") &
+        origDefLocStr
       
       # Check given types match the original definition.
+      # Currently this doesn't enforce unspecified modifiers.
 
-      var
-        expIdx: int
-      
-      for givenType in componentTypes:
-        let
-          uArg = id.unpackComponentArg(givenType)
-
-        if uArg.negate and uArg.typeId notin negations:
-          errMsg()
-        elif expIdx < expectedTypes.len:
-          if uArg.typeId != expectedTypes[expIdx]:
-            errMsg()
-          else:
-            expIdx += 1
+      for uArg in uArgs:
+        case uArg.prefix.kind
+          of upNone:
+            if uArg.typeId notin expectedTypes:
+              errMsg()
+          of upNot:
+            if uArg.typeId notin negations:
+              errMsg()
+          of upOwn:
+            if uArg.typeId notin owned:
+              errMsg()
+          of upCustom:
+            error "Cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
 
     # Options must match with the original definition.
     if existingOpts != options:
@@ -1297,14 +1358,13 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         "\nPassed options:\n" & $options
 
     when defined(ecsLog) or defined(ecsLogDetails):
-      echo "Adding body to pre-defined system \"", name, "\" with types ",
-        id.commaSeparate(expectedTypes)
+      echo "Adding body to pre-defined system \"", name, "\" with types [",
+        id.commaSeparate(expectedTypes), "]"
+  
   else:
     # This is an inline makeSystem.
-    when defined(ecsLog) or defined(ecsLogDetails):
-      echo "Defining body for system \"", name, "\" with types ", componentTypesStr
-
-    result.add createSysTuple(id, name, componentTypes, ownedFields, extraFields, options)
+    
+    result.add createSystem(id, name, componentTypes, extraFields, options)
 
     sysIdxSearch = id.findSystemIndex(name)
     assert sysIdxSearch.found, "Internal error: cannot find system \"" & name & "\" after adding it"
@@ -1312,237 +1372,205 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     # Use the new SystemIndex.
     sysIndex = sysIdxSearch.index
 
-
+  # Parse the system system blocks.
+  
   var
     initBodies = newStmtList()
-
     startBodies = newStmtList()   
     finishBodies = newStmtList()
+    onAdded = newStmtList()
+    onRemoved = newStmtList()
+    onAddedCallback = newStmtList()
+    onRemovedCallback = newStmtList()
 
-  let assertItem = id.assertItem(sysIndex)
-
-  var
     activeBlocks: set[SystemBlockKind]
-    bodyIndex: int
     blockChoices: array[SystemBlock, string]
   
   for b in SystemBlock.low .. SystemBlock.high:
     blockChoices[b] = $b
 
-  const
-    descriptorNodeKinds = [nnkIdent, nnkSym, nnkOpenSymChoice]
+  const needComponentsMsg = "Cannot use this block as this system has no components: '"
+  let hasComponents = id.ecsSysRequirements(sysIdxSearch.index).len > 0
+  var blockRemoves: seq[int]
 
-  while bodyIndex < systemBody.len:
-    # Step through top level nodes and expand block descriptors.
-  
-    let item = systemBody[bodyIndex]
-
-    if item.len < 1 or
-        item.kind notin [nnkCall, nnkCommand] or
-        item[0].kind notin descriptorNodeKinds:
-      # Not something we need to process.
-      bodyIndex.inc
-      continue
+  for blockIndex in systemBody.blocks:
+    
+    template item: NimNode =
+      systemBody[blockIndex]
 
     let
-      sysBlock = ($item[0]).toLowerAscii
+      blockTitle = ($item[0]).toLowerAscii
 
-    if sysBlock notin blockChoices:
+    if blockTitle notin blockChoices:
       # Not a known block descriptor.
-      bodyIndex.inc
       continue
 
-    let
-      code = item[1]
+    # User code is in 'item[1]'.
 
-      staticCloseAdded = quote do:
-        static:
-          const
-            identity = EcsIdentity(`id`)
+    case blockTitle
 
-          identity.set_onAddedSource InvalidSystemIndex
-          endOperation(identity)
-      
-      staticCloseRemoved = quote do:
-        static:
-          const
-            identity = EcsIdentity(`id`)
-          
-          identity.set_onRemovedSource InvalidSystemIndex
-          endOperation(identity)
-
-    const
-      msgSealed = "This ECS has been sealed with makeEcs() and system '$1' events cannot be changed"
-      msgSealedAdded = msgSealed % "added"
-      msgSealedRemoved = msgSealed % "removed"
-
-    var
-      removeBlock: bool
-
-    case sysBlock.toLowerAscii
       of $sbFields:
         # This block's fields have already been used to create the system
-        # variable, this block can be removed from the system body.
-        removeBlock = true
+        # variable, and can be removed from the body.
         activeBlocks.incl sbkFields
+        blockRemoves.add blockIndex
 
       of $sbInit:
-        item[1].expectKind nnkStmtList
-        initBodies.add(code)
-
-        removeBlock = true
         activeBlocks.incl sbkInit
+        initBodies.add(item[1])
+        blockRemoves.add blockIndex
 
       of $sbStart:
-        item[1].expectKind nnkStmtList
-        startBodies.add(code)
-
-        removeBlock = true
         activeBlocks.incl sbkStart
-
-      of $sbAll:
-        item[1].expectKind nnkStmtList
-        systemBody[bodyIndex] = id.wrapAllBlock(name, sysIndex, options, code)
-
-        activeBlocks.incl sbkAll
+        startBodies.add(item[1])
+        blockRemoves.add blockIndex
 
       of $sbFinish:
-        item[1].expectKind nnkStmtList
-        finishBodies.add(code)
-
-        removeBlock = true
         activeBlocks.incl sbkFinish
+        finishBodies.add(item[1])
+        blockRemoves.add blockIndex
 
       of $sbAdded:
-
-        if id.sealed sysIndex:
-          error msgSealedAdded
-
-        if id.len_onAdded(sysIndex) == 0:
-          id.add_onAdded(sysIndex, id.checkEventCycle(name, sysIndex, seAdded))
-        id.add_onAdded(sysIndex, code)
-        id.add_onAdded(sysIndex, staticCloseAdded)
-        
-        removeBlock = true
+        if not hasComponents:
+          error needComponentsMsg & $sbAdded & "'"
         activeBlocks.incl sbkAdded
+        onAdded.add item[1]
+        blockRemoves.add blockIndex
       
       of $sbRemoved:
-
-        if id.sealed sysIndex:
-          error msgSealedRemoved
-
-        if id.len_onRemoved(sysIndex) == 0:
-          id.add_onRemoved(sysIndex, id.checkEventCycle(name, sysIndex, seRemoved))
-
-        id.add_onRemoved(sysIndex, code)
-        id.add_onRemoved(sysIndex, staticCloseRemoved)
-        
-        removeBlock = true
+        if not hasComponents:
+          error needComponentsMsg & $sbRemoved & "'"
         activeBlocks.incl sbkRemoved
+        onRemoved.add item[1]
+        blockRemoves.add blockIndex
 
       of $sbAddedCallback:
-
-        if id.sealed sysIndex:
-          error msgSealedAdded
-        let
-          eventProcName = ident systemAddedCBName(name)
-          gi = ident "groupIndex"
-          assertCheck = getAssertItem(assertItem, sys, gi)
-
-        # Callback definitions are added during makeEcs.
-        id.add_onAddedCallback(sysIndex, quote do:
-          proc `eventProcName`(`sys`: var `sysType`, `gi`: int) =
-            template item: untyped =
-              `assertCheck`
-              `sys`.groups[`gi`]
-            `code`
-        )
-        # Record forward declaration.
-        id.add_onAddedCallbackDecl(sysIndex, quote do:
-          proc `eventProcName`(`sys`: var `sysType`, `gi`: int)
-        )
-
-        removeBlock = true
+        if not hasComponents:
+          error needComponentsMsg & $sbAddedCallback & "'"
         activeBlocks.incl sbkAddedCallback
+        onAddedCallback.add item[1]
+        blockRemoves.add blockIndex
 
       of $sbRemovedCallback:
-
-        if id.sealed sysIndex:
-          error msgSealedRemoved
-        let
-          eventProcName = ident name & "RemovedCallback"
-          gi = ident "groupIndex"
-          assertCheck = getAssertItem(assertItem, sys, gi)
-
-        # Callback definitions are added during makeEcs.
-        id.add_onRemovedCallback(sysIndex, quote do:
-          proc `eventProcName`(`sys`: var `sysType`, `gi`: int) =
-            template item: untyped =
-              `assertCheck`
-              `sys`.groups[`gi`]
-            `code`
-        )
-        # Record forward declaration.
-        id.add_onRemovedCallbackDecl(sysIndex, quote do:
-          proc `eventProcName`(`sys`: var `sysType`, `gi`: int)
-        )
-
-        removeBlock = true
+        if not hasComponents:
+          error needComponentsMsg & $sbRemovedCallback & "'"
         activeBlocks.incl sbkRemovedCallback
+        onRemovedCallback = item[1]
+        blockRemoves.add blockIndex
 
-      of $sbStream:
+  # Search and wrap 'all' and 'stream' blocks within the body.
 
-        # Note: Passing `item` rather than `code` as stream has to
-        # perform further processing.
-        systemBody[bodyIndex] = wrapStreamBlock(id, name, sysIndex, options, item)
-        activeBlocks.incl sbkStream
+  proc applyIterationBlocks(parent: NimNode) =
+    # Recursive search and wrap for 'all' and 'stream' blocks.
+    for blockIndex in 0 ..< parent.len:
+      
+      template curNode: NimNode =
+        parent[blockIndex]
 
-    if removeBlock:
-      systemBody.del bodyIndex
-    else:
-      bodyIndex.inc
+      if curNode.isBlockNode:
+
+        let
+          blockTitle = ($curNode[0]).toLowerAscii
+
+        case blockTitle
+
+          of $sbAll:
+            if not hasComponents:
+              error needComponentsMsg & $sbAll & "'"
+            activeBlocks.incl sbkAll
+            parent[blockIndex] = id.wrapAllBlock(name, sysIndex, options, parent[blockIndex][1])
+
+          of $sbStream:
+            if not hasComponents:
+              error needComponentsMsg & $sbAdded & "'"
+            activeBlocks.incl sbkStream
+            # Note: passes `curNode` rather than the code in [1], as
+            # stream has to further parse the node for commands.
+            parent[blockIndex] = wrapStreamBlock(id, name, sysIndex, options, curNode())
+          
+          else:
+            discard
+      else:
+        # We have to go deeper.
+        curNode.applyIterationBlocks
+
+  systemBody.applyIterationBlocks
+
+  # Add event blocks to the macrocache.
+
+  const
+    msgSealed = "This ECS has been sealed with makeEcs() and system '$1' events cannot be changed"
+    msgSealedAdded = msgSealed % "added"
+    msgSealedRemoved = msgSealed % "removed"
+
+  if onAdded.len > 0:
+    if id.sealed sysIndex:
+      error msgSealedAdded
+    id.add_onAdded(sysIndex, onAdded)
+  
+  if onRemoved.len > 0:
+    if id.sealed sysIndex:
+      error msgSealedRemoved
+    id.add_onRemoved(sysIndex, onRemoved)
+  
+  if onAddedCallback.len > 0:
+    if id.sealed sysIndex:
+      error msgSealedAdded
+    id.add_onAddedCallback(sysIndex, onAddedCallback)
+  
+  if onRemovedCallback.len > 0:
+    if id.sealed sysIndex:
+      error msgSealedRemoved
+    id.add_onRemovedCallback(sysIndex, onRemovedCallback)
+
+  # Remove event blocks from the output body.
+  
+  for i in countDown(blockRemoves.high, 0):
+    systemBody.del blockRemoves[i]
 
   # Set up debug echo statements.
+  
   var echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
   case options.echoRunning:
-  of seNone: discard
-  of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
-    if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
+    of seNone: discard
+    of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
+      if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
+        echoRun = quote do:
+          echo `name` & " running..."
+      if sbkInit in activeBlocks:
+        echoInit = quote do:
+          echo `name` & " initialising"
+      if sbkAll in activeBlocks:
+        echoAll = quote do:
+          echo `name` & " run all"
+      if sbkFinish in activeBlocks:
+        echoFinish = quote do:
+          echo `name` & " run finish"
+      if options.echoRunning == seEchoUsedAndRunningAndFinished:
+        echoCompleted = quote do:
+          echo `name` & " completed"
+    of seEchoAll:
       echoRun = quote do:
         echo `name` & " running..."
-    if sbkInit in activeBlocks:
       echoInit = quote do:
         echo `name` & " initialising"
-    if sbkAll in activeBlocks:
       echoAll = quote do:
         echo `name` & " run all"
-    if sbkFinish in activeBlocks:
       echoFinish = quote do:
         echo `name` & " run finish"
-    if options.echoRunning == seEchoUsedAndRunningAndFinished:
       echoCompleted = quote do:
         echo `name` & " completed"
-  of seEchoAll:
-    echoRun = quote do:
-      echo `name` & " running..."
-    echoInit = quote do:
-      echo `name` & " initialising"
-    echoAll = quote do:
-      echo `name` & " run all"
-    echoFinish = quote do:
-      echo `name` & " run finish"
-    echoCompleted = quote do:
-      echo `name` & " completed"
 
-  ##
-  ## All body
-  ##
+  # Manage the static environment.
 
   let
     cacheId = quote do: EcsIdentity(`id`)
 
     staticInit = quote do:
-      `cacheId`.set_inSystem  true
+      
+      # Record entry into system iteration in the static environment.
+
+      `cacheId`.set_inSystem true
       `cacheId`.set_inSystemIndex `sysIndex`.SystemIndex
       `cacheId`.set_sysRemoveAffectedThisSystem false
       `cacheId`.set_systemCalledDelete false
@@ -1557,7 +1585,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         quote do:
           # Reports system component access and performance hints.
           # Each component access is displayed in order of access
-          # within the system
+          # within the system.
           const prefix {.used.} = "System \"" & `name` & "\""
           when `cacheId`.len_readsFrom(`sysIndex`.SystemIndex) > 0:
             debugPerformance `cacheId`, prefix & ": Reads from: " &
@@ -1568,40 +1596,37 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           when `cacheId`.systemCalledDelete:
             debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration"
           elif `cacheId`.sysRemoveAffectedThisSystem:
-            debugPerformance `cacheId`, prefix & " calls a remove that affects this system, length must be checked each iteration"
+            debugPerformance `cacheId`, prefix & " can remove items from this system, length must be checked each iteration"
       else:
         newStmtList()
 
     staticTearDown = quote do:
+
       `reportPerformance`
+
+      # Record exit of system iteration in the static environment.
 
       `cacheId`.set_inSystem false
       `cacheId`.set_inSystemIndex InvalidSystemIndex
 
       `cacheId`.set_sysRemoveAffectedThisSystem false
       `cacheId`.set_systemCalledDelete false
-      
-      # Reset event chaining.
-      when `cacheId`.onAddedSource != InvalidSystemIndex:
-        `cacheId`.set_onAddedSource InvalidSystemIndex
-      when `cacheId`.onRemovedSource != InvalidSystemIndex:
-        `cacheId`.set_onRemovedSource InvalidSystemIndex      
 
-  # Generate list of types for system comment.
-  var sysTypeNames: string
+  var
+    sysTypeNames: string
+  
   for typeName in id.systemTypesStr(sysIndex):
     if sysTypeNames != "": sysTypeNames &= ", "
     sysTypeNames &= typeName
 
   let
-    doSystem = ident(doProcName(name))
     systemComment = newCommentStmtNode("System \"" & name & "\", using components: " & sysTypeNames)
-    runCheck =
-      case options.timings
-      of stNone:
-        quote do: not `sys`.disabled
-      of stRunEvery, stProfiling:
-        quote do: (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastTick >= `sys`.runEvery))
+  
+  # Assemble the final system procedure.
+
+  let
+    doSystem = ident doProcName(name)
+  var
     initWrapper =
       if initBodies.len > 0:
         quote do:
@@ -1611,32 +1636,56 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
             `sys`.initialised = true
       else:
         newStmtList()
+  
+    runCheck, initRunEvery: NimNode
+  
+  case options.timings
+    of stNone:
+      runCheck = quote: not `sys`.disabled
+      initRunEvery = newStmtList()
+    of stRunEvery, stProfiling:
+      runCheck = quote do:
+        (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastRun >= `sys`.runEvery))
+      initRunEvery = quote do:
+        # Update last tick time
+        `sys`.lastRun = cpuTime()
 
   let
-    # Assemble the final proc.
+    sysBody =
+      if systemBody.len == 0 and echoAll.len == 0:
+        nnkDiscardStmt.newTree(newEmptyNode())
+      else:
+        systemBody
+
+    # This procedure is executes the system.
+
     systemProc = quote do:
       proc `doSystem`*(`sys`: var `sysType`) =
         `systemComment`
-        static:
-          `staticInit`
 
         `echoRun`
         if `runCheck`:
+          `initRunEvery`
           `initWrapper`
           `startBodies`
+          static:
+            `staticInit`
+
           if not `sys`.paused:
             `echoAll`
-            `systemBody`
+            `sysBody`
+
+          static:
+            `staticTearDown`
 
           `echoFinish`
           `finishBodies`
-          for ent in `sys`.deleteList:
-            ent.delete
+
+          for i in 0 ..< `sys`.deleteList.len:
+            `sys`.deleteList[i].delete
           `sys`.deleteList.setLen 0
         `echoCompleted`
         
-        static:
-          `staticTearDown`
       
       template `doSystem`*: untyped =
         `doSystem`(`sysId`)
@@ -1648,21 +1697,31 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   # Add to the list of systems with a defined body.
   # This allows detection of trying to set a body multiple times.
   id.set_bodyDefined(sysIndex, true)
+  id.set_ecsSystemBodySourceLoc(sysIndex, componentTypes.lineInfo)
 
   # Add to the current list of systems with uncommitted bodies.
   id.addUncommitted sysIndex
 
-## Options specified
+
+# ------------------
+# Options specified
+# ------------------
+
 
 macro makeSystemOpts*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using an ECS identity with specific options.
-  generateSystem(id, name, componentTypes, options, systemBody, newEmptyNode())
+  generateSystem(id, name, componentTypes, options, systemBody)
 
-macro makeSystemOpts*(name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], systemBody: untyped): untyped =
+
+macro makeSystemOpts*(name: static[string], componentTypes: untyped, options: static[ECSSysOptions], systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using the default ECS identity with specific options.
-  generateSystem(defaultIdentity, name, componentTypes, options, systemBody, newEmptyNode())
+  generateSystem(defaultIdentity, name, componentTypes, options, systemBody)
 
-## No options specified
+
+# --------------------
+# No options specified
+# --------------------
+
 
 proc sysOptionsOrDefault(id: EcsIdentity, name: string): tuple[found: bool, options: EcsSysOptions] {.compileTime.} =
   let
@@ -1673,18 +1732,28 @@ proc sysOptionsOrDefault(id: EcsIdentity, name: string): tuple[found: bool, opti
   else:
     (false, defaultSysOpts)
 
+
 macro makeSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using an ECS identity.
   ## 
   ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
-  let opts = id.sysOptionsOrDefault name
-  generateSystem(id, name, componentTypes, opts.options, systemBody, newEmptyNode())
+  let (_, options) = id.sysOptionsOrDefault name
+  generateSystem(id, name, componentTypes, options, systemBody)
+
 
 template makeSystem*(name: static[string], componentTypes: untyped, systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using the default ECS identity.
   ## 
   ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
   defaultIdentity.makeSystem(name, componentTypes, systemBody)
+
+
+template makeSystem*(name: static[string], systemBody: untyped): untyped =
+  ## Define a system and/or add a system code body using the default ECS identity.
+  ## 
+  ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
+  defaultIdentity.makeSystem(name, nil, systemBody)
+
 
 macro makeSystemBody*(id: static[EcsIdentity], name: static[string], systemBody: untyped): untyped =
   ## Define the code body for a previously defined system using an ECS identity.
@@ -1693,11 +1762,13 @@ macro makeSystemBody*(id: static[EcsIdentity], name: static[string], systemBody:
   if not opts.found:
     error "`makeSystemBody` requires a 'defineSystem' for \"" & name & "\""
 
-  generateSystem(id, name, newEmptyNode(), opts.options, systemBody, newEmptyNode())
+  generateSystem(id, name, newEmptyNode(), opts.options, systemBody)
+
 
 template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
   ## Define the code body for a previously defined system using the default ECS identity.
   defaultIdentity.makeSystemBody(name, systemBody)
+
 
 macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[ComponentTypeId]], actions: untyped): untyped =
   ## Statically perform `actions` only for systems defined for these types.
@@ -1711,7 +1782,7 @@ macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[Compon
         let
           sysName = id.getSystemName sys
           curSysVar = id.instantiation sys
-          curTupType = ident sysName.tupleName
+          curTupType = ident sysName.itemTypeName
         result.add(quote do:
           block:
             template sys: untyped = `curSysVar`
@@ -1719,6 +1790,7 @@ macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[Compon
             actions
         )
   genLog "# forSystemsUsing:\n", result.repr
+
 
 macro forSystemsUsing*(id: static[EcsIdentity], types: openarray[typedesc], actions: untyped): untyped =
   ## Statically perform `actions` only for systems defined for these types.
@@ -1732,3 +1804,9 @@ macro forSystemsUsing*(id: static[EcsIdentity], types: openarray[typedesc], acti
   result = quote do:
     forSystemsUsing(`typeIds`, `actions`)
 
+
+template forSystemsUsing*(types: openarray[typedesc], actions: untyped): untyped =
+  ## Statically perform `actions` only for systems defined for these types.
+  ## Systems may have other types defined but must include all of `types`.
+  ## Note that types must be known at compile time.
+  forSystemsUsing(defaultIdentity, types, actions)

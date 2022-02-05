@@ -81,13 +81,13 @@ proc checkId*(id: EcsIdentity, compId: ComponentTypeId) {.compileTime.} =
 # Registered systems
 #-------------------
 
-proc systems*(id: EcsIdentity): CacheSeq {.compileTime.} =
+proc systemsKey*(id: EcsIdentity): CacheSeq {.compileTime.} =
   ## Get key for the list of system.
   CacheSeq(id.string & "System")
 
 proc checkId*(id: EcsIdentity, sysIdx: SystemIndex) {.compileTime.} =
   let
-    key = id.systems
+    key = id.systemsKey
     keyLen = key.len
   if sysIdx.int notin 1 ..< keyLen:
     error "Invalid SystemIndex passed to checkId: \"" & $sysIdx.int &
@@ -125,11 +125,11 @@ proc typeNodeAccess(typeNode: NimNode): tuple[accessNode, accessType: NimNode] =
 
   case typeSym.strVal
   of "Natural", "int", "uint", "uint16", "uint32":
-    return (ident "intVal", typeSym)
+    return (ident "intVal", typeSym.copy)
   of "bool":
-    return (ident "boolVal", typeSym)
+    return (ident "boolVal", typeSym.copy)
   of "string":
-    return (ident "strVal", typeSym)
+    return (ident "strVal", typeSym.copy)
   of "NimNode":
     return (nil, nil)
   else:
@@ -188,7 +188,7 @@ macro genListStates(indexType, itemType: typedesc, listNames: static[openarray[s
         CacheSeq(`id`.string & `listKey` & `paramKey`)
     
     if $itemType == "NimNode":
-      # Extra convenience proc for NimNodes fpr wrapping with a
+      # Extra convenience proc for NimNodes for wrapping with a
       # statement list.
       let res = ident "result"
 
@@ -286,7 +286,7 @@ macro genLookupListStates(indexType1, indexType2, itemType: typedesc, listNames:
         CacheSeq(`id`.string & `listKey` & `p1Key` & "_" & `p2key`)
 
     if $itemType == "NimNode":
-      # Extra convenience proc for NimNodes fpr wrapping with a
+      # Extra convenience proc for NimNodes for wrapping with a
       # statement list.
 
       result.add(quote do:
@@ -388,7 +388,6 @@ macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]):
   ## Each item represents an individual value indexed by type id.
   ## Though all additions to a value are recorded, only the most
   ## recent value is returned.
-  
   result = newStmtList()
   
   let
@@ -414,13 +413,15 @@ macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]):
             let key = `key`
             if key.len > 0:
               key[key.len - 1].`accessNode`.`itemType`
-            else: default(`itemType`)
+            else:
+              default(`itemType`)
         else:
           quote do:
             let key = `key`
             if key.len > 0:
               key[key.len - 1].`itemType`
-            else: default(`itemType`)
+            else:
+              default(`itemType`)
 
       writeNode =
         if accessNode != nil:
@@ -484,7 +485,7 @@ macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string
         CacheSeq(`id`.string & `listKey`)
 
     if $itemType == "NimNode":
-      # Extra convenience proc for NimNodes fpr wrapping with a
+      # Extra convenience proc for NimNodes for wrapping with a
       # statement list.
 
       result.add(quote do:
@@ -529,6 +530,7 @@ genItemStates(ComponentTypeId, string, ["instanceType", "refType", "initPrefix",
 genItemStates(ComponentTypeId, bool, ["isOwned"])
 genItemStates(ComponentTypeId, SystemIndex, ["systemOwner"])
 genListStates(ComponentTypeId, SystemIndex, ["systems", "dependentOwners", "linked"])
+genListStates(ComponentTypeId, ComponentTypeId, ["dependentComps"])
 
 # Raw component type definition AST.
 genListStates(ComponentTypeId, NimNode, ["componentDefinitions"])
@@ -549,7 +551,6 @@ genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComp
 # System groups
 genListStates(string, SystemIndex, ["groupSystems"])  # Group to list of systems.
 genListStates(SystemIndex, string, ["systemGroups"])  # System to list of groups.
-
 # System options
 genItemStates(SystemIndex, int, ["maxEntities"])
 genItemStates(SystemIndex, ECSSysStorage, ["storageFormat"])
@@ -558,6 +559,11 @@ genItemStates(SystemIndex, ECSSysTimings, ["timings"])
 genItemStates(SystemIndex, ECSSysEcho, ["echoRunning"])
 genItemStates(SystemIndex, bool, ["assertItem"])
 genItemStates(SystemIndex, bool, ["orderedRemove"])
+genItemStates(SystemIndex, ECSSysThreading, ["threading"])
+
+# Source locations
+genItemStates(SystemIndex, string, ["ecsSystemSourceLoc", "ecsSystemBodySourceLoc"])
+genGlobalStates(string, ["ecsMakeEcsSourceLoc"])
 
 # Current build info
 genGlobalListStates(ComponentTypeId, [
@@ -571,16 +577,16 @@ genGlobalListStates(string, ["codeLog"])
 genGlobalStates(int, ["codeLogStart"])
 
 genGlobalListStates(SystemIndex, [
-  # Stores a list of defined systems.
-  "ecsSysDefined",
-  # Stores the order of systems for `commitSystems`.
-  "systemOrder"])
+  "ecsSysDefined",  # Stores a list of defined systems.
+  "systemOrder"]    # Stores the order of systems for `commitSystems`.
+  )
 
-# State tracking for systems.
+# State tracking for system execution.
 genGlobalStates(bool, [
-  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",
+  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow", "ecsSysIterating",
   "sysRemoveAffectedThisSystem", "systemCalledDelete",
-  "logInitialised"])        # Perform one log clear per unique path.
+  "logInitialised"  # Perform one log clear per unique path.
+  ])
 
 # Use the NimNode as a seq[int] as a mutable seq[SystemIndex].
 genGlobalStates(NimNode, ["uncommittedSystems"])
@@ -598,7 +604,7 @@ genListStates(ComponentTypeId, NimNode, [
   "onInitCode", "onFinalisationCode", "onAddToEntCode",
   "onRemoveFromEntCode", "onAddCallback", "onRemoveCallback",
   "onAddAnySystemCode", "onRemoveAnySystemCode",
-  "onInterceptValueInitCode", "onAddCallbackForwardDecl",
+  "onInterceptUpdate", "onAddCallbackForwardDecl",
   "onRemoveCallbackForwardDecl"])
 
 #-------------------
@@ -607,8 +613,7 @@ genListStates(ComponentTypeId, NimNode, [
 
 genListStates(SystemIndex, NimNode, [
   "onAdded", "onRemoved",
-  "onAddedCallback", "onRemovedCallback",
-  "onAddedCallbackDecl", "onRemovedCallbackDecl"
+  "onAddedCallback", "onRemovedCallback"
   ])
 
 # Events for systems with particular components.
@@ -621,23 +626,13 @@ genLookupListStates(SystemIndex, ComponentTypeId, NimNode, ["onAddToCode", "onRe
 # component.
 genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromSystemComp"])
 
-# Track which systems are being invoked for onAdded/onRemoved blocks.
-# This helps monitor cyclic invocations.
-genListStates(SystemIndex, SystemIndex, ["onAddedChain", "onRemovedChain"])
-genGlobalStates(SystemIndex, ["onAddedSource", "onRemovedSource"])
-genItemStates(SystemIndex, int, ["onAddedStart", "onRemovedStart"])
+#--------------
+# Global events
+#--------------
 
-genGlobalStates(string, ["ecsCurrentOperation"])
-genGlobalStates(string, ["ecsCurrentOperationIndent"])
-genGlobalStates(string, ["ecsCurrentOperationSource"])
-genGlobalListStates(NimNode, ["onEcsBuiltCode"])
-
-#--------------------
-# Events for entities
-#--------------------
-
-genGlobalListStates(NimNode, ["onEntityStateChange"])
+genGlobalStates(NimNode, ["onEntityStateChange"])
 genGlobalStates(bool, ["private"])
+genGlobalStates(NimNode, ["ecsCurrentOperation", "onEcsBuiltCode"])
 
 #--------------------
 # Root objects <-> DB
@@ -777,7 +772,7 @@ proc typeName*(id: EcsIdentity, compId: ComponentTypeId): string =
 
 proc findCompId*(id: EcsIdentity, typeName: string): ComponentTypeId {.compileTime.} =
   ## Find the ComponentTypeId from a type name.
-  # TODO: Assumes ascii type identifiers.
+  ## Note: assumes ascii type identifiers.
   let fTypeName = toUpperAscii(typeName)
   let key = id.components
 
@@ -848,12 +843,12 @@ proc getSystemName*(id: EcsIdentity, sysIdx: SystemIndex): string {.compileTime.
   # This isn't called "systemName" because it clashes with the
   # `systemName` field inside a system instance.
   id.checkId sysIdx
-  id.systems[sysIdx.int].strVal
+  id.systemsKey[sysIdx.int].strVal
 
 proc findSysIdx*(id: EcsIdentity, name: string): SystemIndex {.compileTime.} =
   ## Find a SystemIndex matching `name`.
   let
-    key = id.systems
+    key = id.systemsKey
     sysName = name.toUpperAscii
 
   var i: int
@@ -871,17 +866,17 @@ proc addSystem*(id: EcsIdentity, name: string): SystemIndex {.discardable, compi
   if id.findSysIdx(name) != InvalidSystemIndex:
     error "System \"" & name & "\" is already registered"
 
-  let key = id.systems
+  let key = id.systemsKey
   result = key.len.SystemIndex
 
   # Add name entry. The index is the SystemIndex.
   key.add newLit(name)
 
 iterator allSystems*(id: EcsIdentity): tuple[id: SystemIndex, name: string] =
-  let sysLen = id.systems.len
+  let sysLen = id.systemsKey.len
   if sysLen > 1:
     for i in 1 ..< sysLen:
-      yield (i.SystemIndex, id.systems[i].strVal)
+      yield (i.SystemIndex, id.systemsKey[i].strVal)
 
 proc allSystemsSeq*(id: EcsIdentity): seq[SystemIndex] =
   for sys in id.allSystems:
@@ -892,8 +887,14 @@ proc allSystemNames*(id: EcsIdentity): seq[string] =
     result.add item.name
 
 proc len_systems*(id: EcsIdentity): int =
-  result = id.systems.len
+  result = id.systemsKey.len
   assert result >= 0, "EcsIdentity is not initialised"
+
+# -------------------------
+# State tracking for events
+# -------------------------
+
+genGlobalStates(NimNode, ["ecsEventEnv", "ecsEventMutations"])       # Stores a list of MutationState.
 
 #-----------------------------
 # Set up an ECS build identity
@@ -947,6 +948,7 @@ proc setOptions*(id: EcsIdentity, sysId: SystemIndex, opts: ECSSysOptions) =
   id.set_echoRunning(sysId, opts.echoRunning)
   id.set_assertItem(sysId, opts.assertItem)
   id.set_orderedRemove(sysId, opts.orderedRemove)
+  id.set_threading(sysId, opts.threading)
 
 proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.maxEntities = id.maxEntities(sysId)
@@ -957,3 +959,4 @@ proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.echoRunning = id.echoRunning(sysId)
   result.assertItem = id.assertItem(sysId)
   result.orderedRemove = id.orderedRemove(sysId)
+  result.threading = id.threading(sysId)

@@ -20,13 +20,14 @@
 type
   ECSCompStorage* = enum csSeq, csArray, csTable
   ECSErrorResponse* = enum erAssert, erRaise  ## Note that with cdRaise, the component list is searched for duplicates each time a component is added, even with release/danger.
-  ECSEntityItemStorage* = enum esSeq, esArray, esPtrArray
+  ECSEntityItemStorage* = enum esSeq, esArray,
+    esPtrArray # TODO: this functionality is experimental and unpolished.
   ECSRecyclerFormat* = enum rfSeq, rfArray
   ECSErrorResponses* = object
-    errDuplicates*: ECSErrorResponse  # TODO
+    errDuplicates*: ECSErrorResponse  # TODO: needs implementation.
     errEntityOverflow*: ECSErrorResponse
     errCaseComponent*: ECSErrorResponse
-    errCaseSystem*: ECSErrorResponse  # TODO
+    errCaseSystem*: ECSErrorResponse  # TODO: needs implementation.
     errIncompleteOwned*: ECSErrorResponse
   ECSStrDefault* = enum sdShowData, sdHideData
 
@@ -50,8 +51,6 @@ type
     # Component lists defined as a table will probably find the set unnecessary.
     # Note that using hasComponent often can imply the need for a new system
     # incorporating these components.
-    # TODO: Add ability to mark components as priority for inserting them at the
-    # start of an entity's list rather than the end.
     useSet*: bool ## Use a set for hasComponent.
     errors*: ECSErrorResponses  ## Control how errors are generated.
     strDefault*: ECSStrDefault ## Defines if the `$` operator should default to displaying component field data or just listing the components.
@@ -76,6 +75,7 @@ type
   ECSSysIndexFormat* = enum sifTable, sifArray, sifAllocatedSeq
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
+  ECSSysThreading* = enum sthNone, sthDistribute
 
   ECSSysOptions* = object
     maxEntities*: int ## Maximum entities this system can hold.
@@ -86,6 +86,7 @@ type
     echoRunning*: ECSSysEcho  ## Reporting system execution state can be useful for debugging blocking systems or to monitor the sequence of system actions.
     assertItem*: bool ## Add asserts to check the system `item` is within bounds.
     orderedRemove*: bool  ## Maintains the execution order when items are removed from groups. This changes deletion from an O(1) to an O(N) operation.
+    threading*: ECSSysThreading ## System threading options.
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect
@@ -102,7 +103,8 @@ func dynamicSizeSystem*: ECSSysOptions =
   ## Shortcut for systems that adjust dynamically.
   ECSSysOptions(
     storageFormat: ssSeq,
-    indexFormat: sifTable)
+    indexFormat: sifTable,
+    assertItem: compileOption("assertions"))
 
 func fixedSizeComponents*(maxInstances: int): ECSCompOptions =
   ## Shortcut for fixed size, high performance, high memory systems.
@@ -136,6 +138,7 @@ func dynamicSizeEntities*: ECSEntityOptions =
     recyclerFormat: rfSeq
     )
 
+
 const
   defaultComponentOptions* = dynamicSizeComponents()
   defaultEntityOptions* = dynamicSizeEntities()
@@ -145,6 +148,9 @@ const
   defaultCompOpts* = defaultComponentOptions
   defaultEntOpts* = defaultEntityOptions
   defaultSysOpts* = defaultSystemOptions
+
+# Used as a pragma to statically track the current event entity.
+template hostEntity* {.pragma.}
 
 # Base Polymorph types.
 
@@ -160,15 +166,36 @@ type
   EntityRef* = tuple[entityId: EntityId, instance: EntityInstance]
   Entities* = seq[EntityRef]
 
-  EntityChangeEvent* = enum
-    eceNoChange,
-    eceNewEntityWith, eceAddComponents,
-    eceConstruct, eceClone,
-    eceRemoveComponents, eceDelete
+  EventKind* = enum
+    ekNoEvent =           "<none>",
+    ekConstruct =         "construct",
+    ekClone =             "clone",
+    ekDeleteEnt =         "delete",
+  
+    ekNewEntityWith =     "newEntityWith",
+    ekAddComponents =     "addComponent",
+    ekRemoveComponents =  "removeComponent",
 
-  # This ideally needs to be redefined as the set size is.
-  # stored value as the minimum set size and type cast to it everywhere from
-  # user provided ComponentTypeIds.
+    ekInit =              "onInit",
+    ekUpdate =            "onUpdate",
+    ekAdd =               "onAdd",
+    ekRemove =            "onRemove",
+    ekAddCB =             "onAddCallback",
+    ekRemoveCB =          "onRemoveCallback",
+    ekDeleteComp =        "onDelete",
+  
+    ekSystemAddAny =      "onSystemAdd",
+    ekSystemRemoveAny =   "onSystemRemove",
+  
+    ekCompAddTo =         "onSystemAddTo",
+    ekCompRemoveFrom =    "onSystemRemoveFrom",
+
+    ekRowAdded =          "added",
+    ekRowRemoved =        "removed",
+    ekRowAddedCB =        "addedCallback",
+    ekRowRemovedCB =      "removedCallback",
+
+  # TODO: this could be minimised to bytes as the set size is.
   ComponentTypeIDBase* = uint16
   ComponentTypeId* = distinct ComponentTypeIDBase
 
@@ -203,6 +230,9 @@ type
   ComponentList* = seq[Component]
   ## A template for multiple entities
   ConstructionTemplate* = seq[ComponentList]
+
+  SystemFetchResult* = tuple[found: bool, row: int]
+
 
 const
   InvalidComponent* = 0.ComponentTypeId
