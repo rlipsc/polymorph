@@ -1,12 +1,13 @@
 - [Project overview](#project-overview)
-  - [Entity-component-systems](#entity-component-systems)
-  - [Polymorph](#polymorph)
-  - [Project goals](#project-goals)
+  - [Goals](#goals)
+  - [Entity-component-system (ECS)](#entity-component-system-ecs)
   - [Example code](#example-code)
+  - [Benefits of ECS](#benefits-of-ecs)
+  - [Polymorph](#polymorph)
   - [Compile time focus](#compile-time-focus)
     - [Characteristics](#characteristics)
-  - [Why Nim?](#why-nim)
   - [Polymers companion library](#polymers-companion-library)
+  - [Why Nim?](#why-nim)
 - [Overview of building an ECS](#overview-of-building-an-ecs)
   - [After `makeEcs`](#after-makeecs)
 - [Defining components](#defining-components)
@@ -73,32 +74,81 @@
   - [Performance](#performance)
 
 
-# Polymorph project overview
+# Project overview
 
 ![pmsmaller](https://user-images.githubusercontent.com/36367371/152643501-b32e45a9-da45-4a0b-ad53-490c500cf780.png)
 
-This library provides a lean, generative abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern.
+A lean, generative abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern.
 
-## Entity-component-systems
+## Goals
 
-This pattern, often abbreviated as ECS, lets you create sets of data at run time, and dispatch code for sets with particular combinations.
+- Manage complexity with declarative dispatch and run time composition.
+- Scalable, low boilerplate platform for composing data oriented designs.
+- No runtime, zero system iteration overhead.
+- Leverage static typing and metaprogramming to elide run time work.
+- No external dependencies.
 
-- A set of types is an **entity**.
-- A data type is a **component**.
-- A **system** is program logic running over components.
+## Entity-component-system (ECS)
 
-Entity-component-systems offer a way to structure programs 'bottom up' using run time composition and declarative dispatch without inheritance.
+This pattern lets you combine types at run time and run code for type combinations.
 
-Advantages of this pattern include:
-- [the principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID),
-- [inversion of control](https://en.wikipedia.org/wiki/Inversion_of_control),
-- removing [ambiguities, coupling, dependencies](https://en.wikipedia.org/wiki/Multiple_inheritance#The_diamond_problem) and slow virtual calls of inheritance trees,
-- avoiding the "conceptual crystallisation" of top down, class/object based design,
-- composing behaviour at run time for excellent design agility and rapid prototyping,
-- naturally isolated, decoupled, and reusable system code,
-- natively asynchronous,
-- encouraging machine friendly data oriented designs,
-- high performance through microarchitecture friendly batch processing over uniform lists.
+- **Entities** are sets of data types.
+- **Components** are types added to `entities`.
+- **Systems** are code running for certain `components`.
+
+Entity-component-systems offer a way to structure programs 'bottom up' using run time composition.
+
+
+## Example code
+
+```nim
+import polymorph
+
+# Define component types.
+register defaultCompOpts:
+  type
+    Pos = object
+      x, y: int
+    
+    Vel = object
+      x, y: int
+
+# Define some logic for Pos and Vel.
+makeSystem "move", [Pos, Vel]:
+  all:
+    item.pos.x += item.vel.x
+    item.pos.y += item.vel.y
+
+# Generate the ECS.
+makeEcsCommit "runSystems"
+
+# Combine Pos and Vel to use "move".
+let
+  moving = newEntityWith(
+    Pos(x: 0, y: 0),
+    Vel(x: 1, y: 1)
+  )
+
+# Run the "move" system a number of times.
+for i in 0 ..< 4:
+  runSystems()
+
+# Pos has been updated.
+let pos = moving.fetch Pos
+assert pos.x == 4 and pos.y == 4
+```
+
+## Benefits of ECS
+
+- [The principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID)
+- [Inversion of control](https://en.wikipedia.org/wiki/Inversion_of_control)
+- Naturally data oriented and data driven
+- Remove [ambiguities, coupling, dependencies](https://en.wikipedia.org/wiki/Multiple_inheritance#The_diamond_problem) and slow virtual calls of inheritance trees
+- Maintain design agility and rapid prototyping by composing behaviour at run time
+- Avoid data coupling and the 'conceptual crystallisation' of top down design
+- Encourage decoupled and isolated logic that's easy to reuse, extend, and maintain
+- High performance through machine friendly batch processing with uniform lists
+- Natively asynchronous
 
 ## Polymorph
 
@@ -107,52 +157,6 @@ This library takes a generative, system oriented approach to ECS.
 Systems store execution state and require no work to iterate. Adding or removing components generates code to directly update the compile time inferred systems. ECS functionality is built ad hoc to perform the minimum run time work according to the relationship between systems and components.
 
 The output is statically dispatched with a sequential flow, optimised to each system/component design.
-
-## Project goals
-
-- Manage complexity with declarative dispatch and run time composition.
-- Scalable, low boilerplate platform for composing data oriented designs.
-- No runtime, zero system iteration overhead.
-- Leverage static typing and metaprogramming to elide run time work.
-- No external dependencies.
-
-## Example code
-
-```nim
-import polymorph
-
-# Define component data.
-register defaultCompOpts:
-  type
-    Pos = object
-      x, y: int
-    Vel = object
-      x, y: int
-
-# Act on components.
-makeSystem "move", [Pos, Vel]:
-  all:
-    item.pos.x += item.vel.x
-    item.pos.y += item.vel.y
-
-# Generate the ECS and systems.
-makeEcsCommit "runSystems"
-
-# Use the "move" system.
-let
-  moving = newEntityWith(
-    Pos(x: 0, y: 0),
-    Vel(x: 1, y: 1)
-  )
-
-# Execute "move" a number of times.
-for i in 0 ..< 4:
-  runSystems()
-
-# Check the new component values
-let pos = moving.fetch Pos
-assert pos.x == 4 and pos.y == 4
-```
 
 ## Compile time focus
 
@@ -173,18 +177,12 @@ Adding and removing multiple components at once is also minimised at compile tim
 - ***Architecturally simple output***: outputs simple loops over lists in a set order. Aims to scale from stack only, low resource environments to cache efficient, high performance data processing.
 - ***Granular code generation options***: select different data structures for each component and system, choose error handling mechanisms, system interval execution, indexing and removal strategies, and more - without changing any code.
 
-## Why Nim?
-
-[Nim](https://nim-lang.org/) is an extremely adaptable language with low development friction, very high performance, and fast compile times. It's built to be readable with a flexible syntax.
-
-The language is extremely portable, compiling to C, C++, ObjC, and JavaScript, along with good Python interop. Nim's static typing and high level abstractions can be shared across domain boundaries and interface with a huge variety of ecosystems.
-
-Extensibility is a core philosophy, with hygienic macros using the language in a VM to process abstract syntax trees directly. Nim's compile time evaluation and well supported metaprogramming make this library possible.
-
 ## Polymers companion library
 
 The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-made components and systems for various tasks:
 
+  - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
+  - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
   - `Console`: reading keyboard and mouse events, writing text with normalised (-1, 1) coordinates.
   - `Database`: performing queries with ODBC.
   - `Networking`: components for:
@@ -192,8 +190,14 @@ The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-m
     - HTTP processing,
     - Serving webpages,
     - JSON RPC over HTTP.
-  - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
-  - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
+
+## Why Nim?
+
+[Nim](https://nim-lang.org/) is an adaptable language with low development friction, very high performance, and fast compile times. It's built to be readable with a flexible syntax.
+
+The language is extremely portable, compiling to C, C++, ObjC, and JavaScript, along with good Python interop. Nim's static typing and high level abstractions can be shared across domain boundaries and interface with a huge variety of ecosystems.
+
+Extensibility is a core philosophy, with hygienic macros using the language in a VM to process abstract syntax trees directly. Nim's compile time evaluation and well supported metaprogramming make this library possible.
 
 # Overview of building an ECS
 
