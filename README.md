@@ -76,7 +76,7 @@
 
 # Project overview
 
-![pmsmaller](https://user-images.githubusercontent.com/36367371/152643501-b32e45a9-da45-4a0b-ad53-490c500cf780.png)
+![pmf150](https://user-images.githubusercontent.com/36367371/152667517-d00339f4-bf1b-423f-abd5-323506277186.png)
 
 A lean, generative abstraction for writing programs with the [entity-component-system](https://en.wikipedia.org/wiki/Entity_component_system) pattern.
 
