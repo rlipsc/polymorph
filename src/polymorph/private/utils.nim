@@ -1865,11 +1865,11 @@ proc respondToPragma*(node: NimNode, pragmaName: string, actions: NimNode): NimN
 #-------------------------------------------------------------------------
 
 
-import os
 
-const
-  consistencyChecking* = false
-  defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
+const consistencyChecking* = false
+when defined(ecsLogCode):
+  import os
+  const defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
 
 proc genLog*(id: static[EcsIdentity], params: varargs[string]) {.compileTime.} =
   ## Allows macros to generate a log that is then written to file.
