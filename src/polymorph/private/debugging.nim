@@ -15,10 +15,9 @@
 # limitations under the License.
 
 import macros, ecsstatedb
-from strutils import repeat
 
-when defined(ecsLogDetails):
-  from strutils import capitalizeAscii
+when defined(ecsLogDetails) or defined(ecsPerformanceHints):
+  from strutils import capitalizeAscii, repeat
 
 
 proc debugMessage*(id: EcsIdentity, op: string, extraIndent = 0): int {.compileTime, discardable.} = 
@@ -31,6 +30,7 @@ proc debugMessage*(id: EcsIdentity, op: string, extraIndent = 0): int {.compileT
     curIndent
   else:
     discard
+
 
 proc startOperation*(id: EcsIdentity, op: string) {.compileTime.} = 
   when defined(ecsLogDetails) or defined(ecsPerformanceHints):
@@ -47,6 +47,7 @@ proc startOperation*(id: EcsIdentity, op: string) {.compileTime.} =
   else:
     discard
 
+
 proc endOperation*(id: EcsIdentity) {.compileTime.} = 
   when defined(ecsLogDetails) or defined(ecsPerformanceHints):
     var
@@ -56,12 +57,14 @@ proc endOperation*(id: EcsIdentity) {.compileTime.} =
     if curOps.len == 0:
       error "Internal error: trying to end an operation when no operations exist"
 
-    if curOps.len == 1:
-      # Space out final operations.
-      debugEcho ""
+    when defined(ecsLogDetails):
+      if curOps.len == 1:
+        # Space out final operations.
+        debugEcho ""
+
+    # TODO: Make operation finishing announcements an option.
     #   let
     #     lastOp = curOps[^1].strVal
-      
     #   id.debugMessage "End " & lastOp, cr = true
 
     curOps.del curOps.len - 1

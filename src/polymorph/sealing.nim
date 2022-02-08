@@ -1048,15 +1048,6 @@ proc makeListSystem(id: EcsIdentity): NimNode =
           `res` = "<Entity is not alive>"
 
 
-proc doStartLog(id: EcsIdentity): NimNode =
-  if not id.logInitialised:
-    id.set_logInitialised true
-    quote do:
-      startGenLog(`defaultGenLogFilename`)
-  else:
-    newStmtList()
-
-
 proc makeCaseComponent(id: EcsIdentity): NimNode =
   ## Generate caseComponent for the current component set.
   let
@@ -1571,6 +1562,33 @@ macro onEcsBuilt*(code: untyped): untyped =
   newStmtList()
 
 
+proc doStartLog(id: EcsIdentity): NimNode =
+  when defined(ecsLogCode):
+    if not id.logInitialised:
+      id.set_logInitialised true
+      quote do:
+        startGenLog(`defaultGenLogFilename`)
+    else:
+      newStmtList()
+  else:
+    newStmtList()
+
+
+macro flushGenLog*: untyped =
+  ## When compiling with `-d:ecsLogCode`, this macro appends any
+  ## code generated after `makeEcs` in the code log.
+  ## 
+  ## This includes the code for adding and removing components, and
+  ## creating new entities with `newEntityWith`.
+  ## 
+  ## When placed at the expected exit point, all generated code is
+  ## logged to file.
+  when defined(ecsLogCode):
+    defaultIdentity.flushGenLog(defaultGenLogFilename)
+  else:
+    newStmtList()
+
+
 proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   # Generate the ECS for `id`.
 
@@ -1587,7 +1605,8 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
 
   result = newStmtList()
 
-  result.add id.doStartLog()
+  when defined(ecsLogCode):
+    result.add id.doStartLog()
 
   let
     unsealedSystems = id.allUnsealedSystems
@@ -1743,18 +1762,6 @@ macro makeEcs*(options: static[EcsEntityOptions] = ECSEntityOptions()): untyped 
   defaultIdentity.makeEcs(options)
 
 
-macro flushGenLog*: untyped =
-  ## When compiling with `-d:ecsLogCode`, this macro appends any
-  ## code generated after `makeEcs` in the code log.
-  ## 
-  ## This includes the code for adding and removing components, and
-  ## creating new entities with `newEntityWith`.
-  ## 
-  ## When placed at the expected exit point, all generated code is
-  ## logged to file.
-  defaultIdentity.flushGenLog(defaultGenLogFilename)
-
-
 proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   result = newStmtList()
 
@@ -1803,8 +1810,9 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   genLog  "\n# " & logCodeComment &
           "# " & '-'.repeat(logCodeComment.len - 1) & "\n" &
           result.repr
-  
-  result.add id.flushGenLog(defaultGenLogFilename)
+
+  when defined(ecsLogCode):
+    result.add id.flushGenLog(defaultGenLogFilename)
   
   id.endOperation
 

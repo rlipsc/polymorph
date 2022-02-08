@@ -1865,11 +1865,27 @@ proc respondToPragma*(node: NimNode, pragmaName: string, actions: NimNode): NimN
 #-------------------------------------------------------------------------
 
 
-
-const consistencyChecking* = false
 when defined(ecsLogCode):
   import os
   const defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
+
+
+macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
+  when defined(ecsLogCode):
+    ## Empties log file.
+    result = newStmtList()
+    when defined(ecsLogCode):
+      let
+        fn = newLit fileName
+        preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
+        prelude = staticRead(`preludeFn`)
+      result = quote do:
+        let f = `fn`.open(fmWrite)
+        f.write `prelude`
+        f.close
+        echo "Started file \"", `fn`, "\""  
+  else:
+    newStmtList()
 
 proc genLog*(id: static[EcsIdentity], params: varargs[string]) {.compileTime.} =
   ## Allows macros to generate a log that is then written to file.
@@ -1879,30 +1895,27 @@ proc genLog*(id: static[EcsIdentity], params: varargs[string]) {.compileTime.} =
       s &= $item
     s &= "\n"
     id.add_codeLog s
+  else:
+    discard
 
-macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
-  ## Empties log file.
-  result = newStmtList()
-  when defined(ecsLogCode):
-    let
-      fn = newLit fileName
-      preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
-      prelude = staticRead(`preludeFn`)
-    result = quote do:
-      let f = `fn`.open(fmWrite)
-      f.write `prelude`
-      f.close
-      echo "Started file \"", `fn`, "\""  
+template genLog*(params: varargs[string]) =
+  genLog(defaultIdentity, params)
+
+template startGenLog*(fileName: static[string]): untyped =
+  startGenLog(defaultIdentity, fileName)
+
+template startGenLog*() =
+  startGenLog(defaultGenLogFilename)
 
 proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
-  ## Write log to file.
-  ## Because we cannot `import c` at compile time and write the log then,
-  ## we build the code to statically write the log at run time...
-  ## This means a lot of text stored in your program exe before its
-  ## written to the actual log file at run time start up.
-  ## To activate the code log pass `-d:ecsLogCode` flag when compiling.
-  result = newStmtList()
   when defined(ecsLogCode):
+    ## Write log to file.
+    ## Because we cannot `import c` at compile time and write the log then,
+    ## we build the code to statically write the log at run time...
+    ## This means a lot of text stored in your program exe before its
+    ## written to the actual log file at run time start up.
+    ## To activate the code log pass `-d:ecsLogCode` flag when compiling.
+    result = newStmtList()
     var logText = ""
     let
       fn = newLit fileName
@@ -1933,15 +1946,8 @@ proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
         
         echo "Appended to ECS generation log '", `fn`, "': ", total, " characters written"
       )
-
-template genLog*(params: varargs[string]) =
-  genLog(defaultIdentity, params)
-
-template startGenLog*(fileName: static[string]): untyped =
-  startGenLog(defaultIdentity, fileName)
-
-template startGenLog*() =
-  startGenLog(defaultGenLogFilename)
+  else:
+    newStmtList()
 
 
 #---------------
