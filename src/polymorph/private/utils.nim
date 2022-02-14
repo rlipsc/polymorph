@@ -1850,11 +1850,12 @@ proc populated*(node: NimNode): bool =
   ## Returns true when a populated statement list exist.
   ## This is useful if you end up with 'newStmtList(newStmtList())' and
   ## checking 'len > 0' is insufficient.
-  node.findChild(
-    it.kind == nnkStmtList and
-    it.len > 0 and
-    it[0].kind != nnkStmtList
-  ).kind == nnkStmtList
+  for n in node:
+    if n.kind == nnkStmtList:
+      if n.populated:
+        return true
+    else:
+      return true
 
 proc unpack*(node: var NimNode, source: NimNode) =
   ## Adds `source` to `node`, unpacking from nnkStmtList if required.
