@@ -119,6 +119,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
 
     var notComponent = -1
     
+    # Handle {.notComponent.}.
     if tyDef[pragExpr].kind == nnkPragmaExpr:
       tyDef[pragExpr].expectMinLen 2
       let pragma = tyDef[pragExpr][pragmaList]
@@ -130,10 +131,10 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
             break
 
       if notComponent > -1:
-        # Remove {.notComponent.} from typeDef and ignore.
+        # Remove the {.notComponent.} from the typeDef and ignore.
         pragma.del(notComponent)
         if pragma.len == 0:
-          # Remove empty pragma declaration and transpose ident.
+          # Remove the empty pragma declaration and transpose ident.
           let pragmaIdent = 0
           tyDef[pragExpr] = tyDef[pragExpr][pragmaIdent]
         continue
@@ -244,6 +245,7 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
       
       supportStorageSize =
         if ownerSystem == InvalidSystemIndex:
+          # + 1 as the first element is InvalidComponentIndex.
           maxComponentCount + 1
         else:
           let format = id.storageFormat(ownerSystem)
