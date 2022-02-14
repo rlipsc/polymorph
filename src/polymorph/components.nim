@@ -38,6 +38,14 @@ proc addComponentTypeId(id: EcsIdentity, typeNameStr: string): ComponentTypeId {
   genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
 
 
+macro instanceType*(id: static[EcsIdentity], ty: typedesc): untyped =
+  ident id.ecsInstanceType(id.typeStringToId $ty)
+
+
+template instanceType*(ty: typedesc): untyped =
+  defaultIdentity.instanceType(ty)
+
+
 proc valid*(compRef: ComponentRef): bool =
   ## Checks against invalid component (for example uninitialised data).
   ## This does not check to see if the component is alive in the system, only that it is semantically valid.
@@ -103,7 +111,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
 
   var
     typeDeclarations = newStmtList()
-    typeUtils = newStmtList()
+    afterComponentDef = newStmtList()
     registered: seq[string]
   let
     previousComponentsDeclared = id.components.len
@@ -159,16 +167,18 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
     # Record the options for later transforms such as commitSystems
     id.setOptions(typeId, options)
 
-    typeUtils.add typeNameStr.createRefComponent
+    afterComponentDef.add typeNameStr.createRefComponent
 
     typeDeclarations.add(quote do:
-      type `instTypeNode`* = distinct `IdBaseType`
-      type `generationTypeNode`* = distinct `IdBaseType`
+      type
+        `instTypeNode`* = distinct `IdBaseType`
+        `generationTypeNode`* = distinct `IdBaseType`
     )
+
     # Add static transform to convert from type to `ComponentTypeId`
     # eg; template typeId*(ty: A | ARef | AInstance): ComponentTypeId = 1.ComponentTypeId
     # The same value is returned for a concrete instance, ref instance, and typedesc.
-    typeUtils.add(quote do:
+    afterComponentDef.add(quote do:
       template `typeIdAccessName`*(`tyParam`: `typeNameIdent` | `refTypeNameIdent` | `instTypeNode` |
         typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`] | typedesc[`instTypeNode`]): ComponentTypeId = `typeId`.ComponentTypeId
       )
@@ -185,12 +195,9 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   when defined(ecsLogDetails):
     echo "Component options:\n", options.repr, "\n"
 
-  result.add typeDeclarations
-  # The body gets added unchanged (aside from `{.notComponent.} stripping)
-  # after the instance types have been generated.
-  # This allows instance types to be used within the user's type definitions.
-  result.add body
-  result.add typeUtils
+  result.add typeDeclarations   # Add declarations for types derived from the components.
+  result.add body               # The user's code body gets added unchanged, aside from stripping `{.notComponent.}.
+  result.add afterComponentDef  # 'Component' descendant types and utility templates.
 
   if id.private:
     result.deExport
@@ -215,13 +222,10 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
       refTypeNameIdent = newIdentNode(refTypeName(typeNameStr))
       tyParam = newIdentNode("ty")
       maxComponentCount = options.maxComponents + 2
+      instTypeNode = newIdentNode instanceTypeName(typeNameStr)
+      storageFieldName = typeNameStr.storageFieldName
 
-    let instTypeNode = newIdentNode instanceTypeName(typeNameStr)
-    
     typeUtils.add(quote do:
-      ## Compile-time translation between a user's type/container type to its instance type.
-      ## Useful for converting a ComponentIndex into direct storage access.
-      template instanceType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`]): untyped = `instTypeNode`
       ## Compile-time translation between a user's type to its container `ref` type.
       template containerType*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instTypeNode`]): untyped = `refTypeNameIdent`
       ## Create a `ref` container from a user object.
@@ -230,9 +234,7 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
       ## Create a `ref` container from an instance.
       template makeContainer*(`tyParam`: `instTypeNode`): `refTypeNameIdent` =
         `tyParam`.access.makeContainer()
-      )
-
-    let storageFieldName = typeNameStr.storageFieldName
+    )
 
     proc storageField(typeIdent: NimNode, maxComps: int): NimNode =
       case options.componentStorageFormat
@@ -685,8 +687,8 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         ## tuple for the live component currently at this index.
         let i = inst  # Prevents duplicate instantiation of `inst`.
         (i.typeId, i.ComponentIndex, i.generation)
-      )
-
+    )
+  
   result.add typeAccess
   result.add firstCompIdInits
 
