@@ -1866,24 +1866,23 @@ proc respondToPragma*(node: NimNode, pragmaName: string, actions: NimNode): NimN
 
 
 when defined(ecsLogCode):
-  import os
+  from os import joinPath, parentDir, `/`
   const defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
 
 
 macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
+  ## Creates/clears the log file.
   when defined(ecsLogCode):
-    ## Empties log file.
-    result = newStmtList()
-    when defined(ecsLogCode):
-      let
-        fn = newLit fileName
-        preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
-        prelude = staticRead(`preludeFn`)
-      result = quote do:
-        let f = `fn`.open(fmWrite)
-        f.write `prelude`
-        f.close
-        echo "Started file \"", `fn`, "\""  
+    let
+      fn = newLit fileName
+      preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
+      prelude = staticRead(`preludeFn`)
+
+    result = quote do:
+      let f = `fn`.open(fmWrite)
+      f.write `prelude`
+      f.close
+      echo "Started file \"", `fn`, "\""  
   else:
     newStmtList()
 

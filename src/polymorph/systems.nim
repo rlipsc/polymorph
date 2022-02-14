@@ -14,10 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, strutils, strformat, sequtils, times, sharedtypes,
-  private/[ecsstatedb, utils, debugging], tables
+import macros, strutils, strformat, sequtils, sharedtypes,
+  private/[ecsstatedb, utils], tables
 from private/eventutils import userEntAccess
-from std/cpuinfo import countProcessors
 import random
 
 
@@ -153,6 +152,7 @@ proc unpackArgs(id: EcsIdentity, componentTypes: NimNode): tuple[uArgs: seq[Unpa
 # Creating system types
 # ---------------------
 
+
 proc threadParamType(sysType: NimNode): NimNode =
   let
     sys = ident "sys"
@@ -163,6 +163,10 @@ proc threadParamType(sysType: NimNode): NimNode =
     tuple[`sys`: ptr `sysType`, `rows`: tuple[`r1`, `r2`: int]]
 
 
+const
+  cannotImport = " but cannot import within a private ECS. Import this symbol before generating this system"
+
+
 proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, extraFields: seq[NimNode]): NimNode =
   ## Generates the type declaration for this system.
   let
@@ -171,7 +175,24 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, extraFields: seq[Nim
     sysIdent = ident sysTypeName
     itemTypeIdent = ident(itemTypeName(name))
     options = id.getOptions(sysIndex)
+    threadImports =
+      if options.threading == sthDistribute:
+        quote do:
+          static:
+            when not compileOption("threads"):
+              error "Compile with '--threads:on' to use system threading options"
+          when not declared(countProcessors):
+            static:
+              if EcsIdentity(`id`).private:
+                error "Need 'cpuinfo.countProcessors'" & cannotImport
+            from std/cpuinfo import countProcessors
+      else:
+        newStmtList()
+
   result = newStmtList()
+  
+  if threadImports.len > 0:
+    result.add threadImports
 
   # Generate the type for this system
   result.add(quote do:
@@ -258,6 +279,7 @@ proc makeSystemType(id: EcsIdentity, sysIndex: SystemIndex, extraFields: seq[Nim
     of sthDistribute:
       let
         paramTy = threadParamType(sysIdent)
+      
       fields.add genField("threads", true, quote do: seq[Thread[`paramTy`]])
       fields.add genField("cores", true, ident "int")
 
@@ -345,9 +367,8 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
     case options.threading
       of sthNone: newStmtList()
       of sthDistribute:
-        let countCores = bindSym("countProcessors")
         quote do:
-          `initParam`.cores = `countCores`()
+          `initParam`.cores = countProcessors()
           `initParam`.threads.setLen `initParam`.cores          
 
   let
@@ -949,6 +970,7 @@ template clear*(sys: object) =
 
 proc initTiming(sys: NimNode, options: EcsSysOptions, core: NimNode): NimNode =
   ## Wraps `core` with timing code if `timings` is true, otherwise passes through `core` unchanged.
+
   case options.timings
     
     of stNone, stRunEvery:
@@ -1626,6 +1648,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
   let
     doSystem = ident doProcName(name)
+  
   var
     initWrapper =
       if initBodies.len > 0:
@@ -1637,29 +1660,36 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       else:
         newStmtList()
   
-    runCheck, initRunEvery: NimNode
+    runCheck, initRunEvery, timeImports: NimNode
   
   case options.timings
     of stNone:
       runCheck = quote: not `sys`.disabled
       initRunEvery = newStmtList()
+      timeImports = newStmtList()
     of stRunEvery, stProfiling:
       runCheck = quote do:
         (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastRun >= `sys`.runEvery))
       initRunEvery = quote do:
         # Update last tick time
         `sys`.lastRun = cpuTime()
-
+      timeImports = quote do:
+        when not declared(cpuTime):
+          static:
+            if EcsIdentity(`id`).private:
+              error "Need 'times.cpuTime'" & cannotImport
+          from times import cpuTime
   let
     sysBody =
       if systemBody.len == 0 and echoAll.len == 0:
         nnkDiscardStmt.newTree(newEmptyNode())
       else:
         systemBody
-
+    
     # This procedure is executes the system.
 
     systemProc = quote do:
+      `timeImports`
       proc `doSystem`*(`sys`: var `sysType`) =
         `systemComment`
 

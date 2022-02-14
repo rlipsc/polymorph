@@ -1561,17 +1561,14 @@ macro onEcsBuilt*(code: untyped): untyped =
   defaultIdentity.set_onEcsBuiltCode curCode
   newStmtList()
 
-
-proc doStartLog(id: EcsIdentity): NimNode =
-  when defined(ecsLogCode):
+when defined(ecsLogCode):
+  proc doStartLog(id: EcsIdentity): NimNode =
     if not id.logInitialised:
       id.set_logInitialised true
       quote do:
         startGenLog(`defaultGenLogFilename`)
     else:
       newStmtList()
-  else:
-    newStmtList()
 
 
 macro flushGenLog*: untyped =
