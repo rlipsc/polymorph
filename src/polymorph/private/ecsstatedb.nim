@@ -526,7 +526,7 @@ macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string
 #-------------------------------
 
 # Component properties
-genItemStates(ComponentTypeId, string, ["instanceType", "refType", "initPrefix", "refInitPrefix"])
+genItemStates(ComponentTypeId, string, ["ecsInstanceType", "refType", "initPrefix", "refInitPrefix"])
 genItemStates(ComponentTypeId, bool, ["isOwned"])
 genItemStates(ComponentTypeId, SystemIndex, ["systemOwner"])
 genListStates(ComponentTypeId, SystemIndex, ["systems", "dependentOwners", "linked"])

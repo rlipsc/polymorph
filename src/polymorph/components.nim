@@ -32,7 +32,7 @@ macro componentNames*(id: static[EcsIdentity]): untyped =
 proc addComponentTypeId(id: EcsIdentity, typeNameStr: string): ComponentTypeId {.compileTime.} = 
   result = id.addTypeId typeNameStr
 
-  id.set_instanceType(result, instanceTypeName typeNameStr)
+  id.set_ecsInstanceType(result, instanceTypeName typeNameStr)
   id.set_refType(result, refTypeName typeNameStr)
   
   genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
@@ -314,7 +314,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       aliveIdent = newIdentNode aliveStateInstanceName(typeNameStr)
       nextIdxIdent = newIdentNode nextInstanceName(typeNameStr)
       tyParam = ident "ty"
-      instTypeName = id.instanceType typeId
+      instTypeName = id.ecsInstanceType typeId
       instTypeNode = newIdentNode instTypeName                  # Type's instance type
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       invalidFieldPrefix = newLit "undeclared field: '"
@@ -697,7 +697,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
   for typeId in id.unsealedComponents:
     compTypeNodes.add ident id.typeName(typeId)
     refTypeNodes.add ident id.refType(typeId)
-    instanceTypeNode.add ident id.instanceType(typeId)
+    instanceTypeNode.add ident id.ecsInstanceType(typeId)
   
   result.add genTypeClass(typeClassName(), true, compTypeNodes)
   result.add genTypeClass(refTypeClassName(), true, refTypeNodes)
