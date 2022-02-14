@@ -541,7 +541,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
     passedNegationIds: seq[ComponentTypeId]
     ownedComponentIds: seq[ComponentTypeId]
   let
-    (uArgs, componentTypesStr) = id.unpackArgs(componentTypes)
+    (uArgs, componentTypesStr {.used.}) = id.unpackArgs(componentTypes)
 
   for uArg in uArgs:
     let

@@ -1991,7 +1991,7 @@ proc genTypeClass*(name: string, public: bool, nodeList: openarray[NimNode], man
     else:
       tcn = newIdentNode(name)
     result = quote do:
-      type `tcn` = `parent`
+      type `tcn` {.used.} = `parent`
 
 proc fill*[T](val: var T, node: NimNode) =
   ## Will try to fill the fields of `val` with equivalent fields in `node`.
