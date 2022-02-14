@@ -820,8 +820,8 @@ iterator allComponents*(id: EcsIdentity): tuple[id: ComponentTypeId, name: strin
 proc allComponentsSeq*(id: EcsIdentity): seq[ComponentTypeId] =
   let compLen = id.components.len
   if compLen > 1:
-    for i in 1 ..< compLen:
-      result.add i.ComponentTypeId
+    for item in id.allComponents:
+      result.add item.id
 
 proc allComponentNames*(id: EcsIdentity): seq[string] =
   for item in id.allComponents:
