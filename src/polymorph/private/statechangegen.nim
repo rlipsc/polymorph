@@ -190,17 +190,10 @@ proc removeComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateC
   ## Invoke remove events for details.passed.
   ## 
 
-  template conflict(cName: string): string =
-    "Request to remove component " & cName & " in conflict with a previous " &
-    "add with the same component:\n" & id.eventMutationsStr    
-
   if not details.iterating.isNil:
     assert details.passed.len > 0, "Internal error: there must be at least one component passed when iterating"
 
     let c = id.getInfo(details.passed[0])
-
-    # if id.addOccurred([c.typeId.int]):
-    #   error c.name.conflict
 
     var context = newEventContext(entity, c, details.iterating)
     let events = id.buildRemoveCompEvents(context, c)
@@ -210,10 +203,6 @@ proc removeComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateC
   else:
     
     for c in id.building(details.passed):
-
-      # if id.addOccurred([c.typeId.int]):
-      #   # This state change is already in progress.
-      #   error c.name.conflict
 
       let fetchedIdent = details.compAccess(c, details.suffix)
       var context = newEventContext(entity, c, fetchedIdent)
@@ -235,33 +224,17 @@ proc buildAddCompEvents(node: var NimNode, id: EcsIdentity, context: var EventCo
 proc addComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateChangeDetails) =
   # Invoke component add events for details.passed.
 
-  template conflict(cName: string): string =
-    "Embedded 'addComponent " & cName &
-      "' conflicts with 'removeComponent " & cName & "' in previous events:\n" &
-      id.eventMutationsStr    
-
   if not details.iterating.isNil:
     assert details.passed.len > 0, "Internal error: there must be at least one component when iterating"
     
     let c = id.getInfo(details.passed[0])
-
-    # if id.removeOccurred([c.typeId.int]):
-    #   error c.name.conflict
-
-    var
-      context = newEventContext(entity, c, details.iterating)
+    var context = newEventContext(entity, c, details.iterating)
 
     details.allEvents.buildAddCompEvents(id, context, c)
 
   else:
     for c in id.building(details.passed):
-
-      # if id.removeOccurred([c.typeId.int]):
-      #   error c.name.conflict
-
-      var
-        context = newEventContext(entity, c, details.compAccess(c, details.suffix))
-      
+      var context = newEventContext(entity, c, details.compAccess(c, details.suffix))
       details.allEvents.buildAddCompEvents(id, context, c)
 
 
