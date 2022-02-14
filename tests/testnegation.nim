@@ -1,7 +1,7 @@
-import polymorph
-
-
 template testNegation* {.dirty.} =
+
+  when not declared(ECSEntityOptions):
+    {.fatal: "This test requires importing polymorph".}
 
   const
     cOpts = defaultCompOpts
@@ -167,5 +167,6 @@ template testNegation* {.dirty.} =
         check negAdding notin sysNeg3
 
 when isMainModule:
-  import unittest
+  import polymorph, unittest
+  
   testNegation()

@@ -1,7 +1,7 @@
-import polymorph
-
-
 template testOwnedComponents* {.dirty.} =
+  when not declared(ECSEntityOptions):
+    {.fatal: "This test requires importing polymorph".}
+    
   const
     maxEnts = 25
     entOpts = ECSEntityOptions(maxEntities: maxEnts,
@@ -195,6 +195,6 @@ template testOwnedComponents* {.dirty.} =
   run()
 
 when isMainModule:
-  import unittest
+  import polymorph, unittest
 
   testOwnedComponents()
