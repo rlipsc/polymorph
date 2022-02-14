@@ -599,7 +599,6 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   let sourceLoc = componentTypes.lineInfo
 
   when defined(ecsLog) or defined(ecsLogDetails):
-
     echo "[ System generation for \"" & sysName & "\" " & sourceLoc & " ]"
 
   when defined(ecsLogDetails):
@@ -999,6 +998,8 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
     groupIndex = ident "groupIndex"
     idx = genSym(nskVar, "i")
     sysLen = ident "sysLen"
+    enterIteration = id.enterIteration
+    exitIteration = id.exitIteration
 
     # if `entity` != `item.entity` then this row has been removed.
     rowEnt = ident "entity"
@@ -1012,7 +1013,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
         if `cacheId`.inSystemAll:
           error "Cannot embed 'all' blocks within themselves"
         `cacheId`.set_inSystemAll true
-        `cacheId`.set_ecsSysIterating true
+        `enterIteration`
 
       var
         `sysLen` = `sys`.count()
@@ -1045,7 +1046,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
             `idx` = `idx` + 1
       static:
         `cacheId`.set_inSystemAll false
-        `cacheId`.set_ecsSysIterating false
+        `exitIteration`
   )
 
 
@@ -1192,13 +1193,16 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
           quote do:
             if not `finished`:
               `sys`.lastIndex = `randomValue`(`sys`.high)
+    
+    enterIteration = id.enterIteration
+    exitIteration = id.exitIteration
 
   result = initTiming(sys, options, quote do:
     static:
       if `cacheId`.inSystemStream:
         error "Cannot embed 'stream' blocks within themselves"
       `cacheId`.set_inSystemStream  true
-      `cacheId`.set_ecsSysIterating true
+      `enterIteration`
     block:
       # loop per entity in system
 
@@ -1232,7 +1236,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
       
       static:
         `cacheId`.set_inSystemStream false
-        `cacheId`.set_ecsSysIterating false
+        `exitIteration`
   )
 
 

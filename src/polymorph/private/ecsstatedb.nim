@@ -574,7 +574,7 @@ genGlobalListStates(ComponentTypeId, [
   "ecsSealedComponents"])
 
 genGlobalListStates(string, ["codeLog"])
-genGlobalStates(int, ["codeLogStart"])
+genGlobalStates(int, ["codeLogStart", "ecsSysIterating"])
 
 genGlobalListStates(SystemIndex, [
   "ecsSysDefined",  # Stores a list of defined systems.
@@ -583,7 +583,7 @@ genGlobalListStates(SystemIndex, [
 
 # State tracking for system execution.
 genGlobalStates(bool, [
-  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow", "ecsSysIterating",
+  "inSystem", "inSystemAll", "inSystemStream", "inSystemDeleteRow",
   "sysRemoveAffectedThisSystem", "systemCalledDelete",
   "logInitialised"  # Perform one log clear per unique path.
   ])

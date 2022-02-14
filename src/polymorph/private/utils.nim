@@ -761,6 +761,29 @@ proc trackMutation*(node: var NimNode, id: EcsIdentity, mutationType: EventKind,
   trackMutation(node, id, mutationType, indexes.toIntList, announce)
 
 
+# ------------------
+# Iteration tracking
+# ------------------
+
+
+proc enterIteration*(id: EcsIdentity): NimNode =
+  ## Statically nark the start of an iteration block.
+  let cacheId = quote do: EcsIdentity(`id`)
+  quote do:
+    static: `cacheId`.set_ecsSysIterating `cacheId`.ecsSysIterating + 1
+
+
+proc exitIteration*(id: EcsIdentity): NimNode =
+  ## Statically nark the end of an iteration block.
+  let cacheId = quote do: EcsIdentity(`id`)
+  quote do:
+    {.line.}:
+      static:
+        `cacheId`.set_ecsSysIterating `cacheId`.ecsSysIterating - 1
+        if `cacheId`.ecsSysIterating < 0:
+          error "Internal error: unbalanced system iterations - exited more iterations than entered"
+
+
 #-------------
 # Entity utils
 #-------------
@@ -1066,7 +1089,7 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
     node.add(quote do:
       {.line.}:
         static:
-          if not(`cacheId`.ecsSysIterating) or (`cacheId`.ecsSysIterating and `cacheId`.ecsEventEnv.len == 0):
+          if `cacheId`.ecsSysIterating == 0 or (`cacheId`.ecsSysIterating > 0 and `cacheId`.ecsEventEnv.len == 0):
             # Note: events within system iteration can skip this error
             # for two reasons:
             #

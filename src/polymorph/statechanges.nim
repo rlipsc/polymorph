@@ -579,7 +579,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
     block:
       static:
         startOperation(`cacheId`, `opStr`)
-        if `cacheId`.ecsSysIterating:
+        if `cacheId`.ecsSysIterating > 0:
           if `cacheId`.inSystemIndex in `negatedSystemsSeq`:
             # This addComponent negates the currently iterating system,
             # and therefore acts as a remove operation, so we need to
@@ -643,7 +643,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
       static:
         startOperation(`cacheId`, `opStr`)
 
-        if `cacheId`.ecsSysIterating:
+        if `cacheId`.ecsSysIterating > 0:
           if `cacheId`.inSystemIndex in `relevantSystemsSeq`:
             # Calling removeComponent from within a system that uses the component.
             # We don't know if its the current row's entity or some other entity.
@@ -1054,7 +1054,6 @@ proc makeDelete*(id: EcsIdentity): NimNode =
   ## `makeEcs` invocation.
   let
     entitySym = ident "entity"
-    delProcName = ident "delete"
 
   # This operation parses the entity's components by building 'case'
   # statements that process associated systems.
