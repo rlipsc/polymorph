@@ -532,6 +532,8 @@ proc toStr(es: EventState, id: EcsIdentity): string =
 
   let
     pk = es.event.getParamKind
+  
+  func quote(str: string): string = "\"" & str & "\""
 
   case pk
     of pkNone:
@@ -546,14 +548,14 @@ proc toStr(es: EventState, id: EcsIdentity): string =
     
     of pkSys:
       if es.indexes.len > 0:
-        result &= id.getSystemName(es.indexes[0].SystemIndex).systemVarName
+        result &= id.getSystemName(es.indexes[0].SystemIndex).quote
         
         for v in es.indexes[1 ..^ 1]:
-          result &= ", " & id.getSystemName(v.SystemIndex).systemVarName
+          result &= ", " & id.getSystemName(v.SystemIndex).quote
 
     of pkSysComp:
       if es.indexes.len > 0:
-        result &= id.getSystemName(es.indexes[0].SystemIndex).systemVarName
+        result &= id.getSystemName(es.indexes[0].SystemIndex).quote
         
         if es.indexes.len > 1:
           result &= " and "
@@ -563,7 +565,7 @@ proc toStr(es: EventState, id: EcsIdentity): string =
 
 
 proc toStr(m: ComponentMutation, id: EcsIdentity): string =
-  result = m.mutation.toStr(id) & " [ trace: "
+  result = m.mutation.toStr(id) & " [ "
   
   result &= m.trace[0].toStr(id)
   for i in 1 ..< m.trace.len:
@@ -600,6 +602,8 @@ proc eventMutationsStr*(id: EcsIdentity, indent = 0): string =
   if result.len > 0:
     result &= "\n\n"
   result &= id.mutationsStr(indent)
+  if result.len > 0:
+    result &= "\n"
 
 
 proc enterEvent(id: EcsIdentity, event: EventKind, indexes: openarray[int]) =

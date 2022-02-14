@@ -194,7 +194,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     paramKind = getParamKind(eventKind)
     eventDir = eventKind.getEventDir
 
-    ek = newLit eventKind
+    ek = newLit $eventKind
     ecsId = quote do: EcsIdentity(`id`)
 
   const
@@ -222,16 +222,16 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowRemoved}, [`sysInt`]):
-              error "Event '" & $`ek` & "'" & `ei` &
-                "removing from system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "'" & `ei` &
+                "a previous remove from system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
         )
 
       of ekRemoveComponents:
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowAdded}, [`sysInt`]):
-              error "Event '" & $`ek` & "'" & `ei` &
-                "adding to system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "'" & `ei` &
+                "a previous add to system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
         )
       else:
         discard
@@ -256,7 +256,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         if not defined(ecsPermissive):
           checks.add(quote do:
             if removeOccurred(`ecsId`, `compInts`):
-              error "Event '" & $`ek` & "'" & `ei` & "removing [" & `compStr` & "]" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "'" & `ei` & "removing [" & `compStr` & "]" & `br` & eventMutationsStr(`ecsId`)
           )
 
       of ekRemoveComponents:
@@ -264,7 +264,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         if not defined(ecsPermissive):
           checks.add(quote do:
             if addOccurred(`ecsId`, `compInts`):
-              error "Event '" & $`ek` & "'" & `ei` & "adding [" & `compStr` & "]" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "'" & `ei` & "adding [" & `compStr` & "]" & `br` & eventMutationsStr(`ecsId`)
           )
       else:
         discard
