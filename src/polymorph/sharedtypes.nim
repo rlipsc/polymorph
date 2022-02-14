@@ -65,7 +65,7 @@ type
     maxComponents*: Natural   ## Maximum amount of components for all component types in this prefix.
     componentStorageFormat*: ECSCompItemStorage ## Underlying storage format for components.
     accessMethod*: ECSAccessMethod  ## Controls accessing fields through instances.
-    recyclerFormat*: ECSCompRecyclerFormat  ## TODO: Underlying storage format the recycler uses to keep track of deleted component indexes.
+    recyclerFormat*: ECSCompRecyclerFormat  ## Underlying storage format the recycler uses to keep track of deleted component indexes.
     clearAfterDelete*: bool ## Zeros memory of component after deletion.
     useThreadVar*: bool ## Declare the component arrays as {.threadVar.}.
     invalidAccess*: ECSCompInvalidAccess  ## Allow inserting assert checks for each instance field access.

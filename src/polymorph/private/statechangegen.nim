@@ -76,8 +76,8 @@ type
 
     componentGroups*: ComponentUpdateGroups   # Guard updates by component set.
     systemGroups*: SystemUpdateGroups         # Guard updates by system.
-    compAccess*: ComponentAccessProc          # Returns an ident from a typeId and suffix.
-    compValid*: ComponentValidProc            # Returns a bool statement for component existence.
+    compAccess*: ComponentAccessProc          # A proc taking typeId and returning code to read a component's data.
+    compValid*: ComponentValidProc            # A proc returning a bool statement for component existence.
 
     sysProcessed*: NimNode    # Set to a set[SysEnum] ident.
     iterating*: NimNode       # A for var expected to contain the typed component index.
