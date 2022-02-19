@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import macros, private/[utils, ecsstatedb, statechangeutils, statechangegen, eventutils]
+import macros, private/[utils, ecsstatedb, statechangeutils, statechangegen, eventutils, mutationtracking]
 import sharedtypes, tables, sets
 
 

@@ -24,7 +24,7 @@
 
 import macros, strutils, sets, tables
 import ../sharedtypes, ecsstatedb
-import utils, eventutils, statechangeutils
+import utils, eventutils, statechangeutils, mutationtracking
 
 
 # ---------------------------

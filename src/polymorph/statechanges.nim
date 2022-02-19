@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import macros, sharedtypes, components
-import private/[statechangeutils, statechangegen, utils, ecsstatedb, eventutils]
+import private/[statechangeutils, statechangegen, utils, ecsstatedb, eventutils, mutationtracking]
 import strutils, tables, typetraits, sets, macrocache
 
 macro componentToSysRequirements*(id: static[EcsIdentity], varName: untyped): untyped =

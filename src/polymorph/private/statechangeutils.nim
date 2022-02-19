@@ -157,11 +157,8 @@ iterator addStateChanges*(id: EcsIdentity, given: seq[ComponentTypeId], givenSet
 
 iterator removeStateChanges*(id: EcsIdentity, removing: seq[ComponentTypeId]): SystemChange =
   ## Returns a set of systems that interact with these components.
-  
-  var
-    processed: SystemSet
-  let
-    removingSet = removing.toHashSet
+  var processed: SystemSet
+  let removingSet = removing.toHashSet
 
   for c in removing:
 

@@ -1,6 +1,6 @@
 ## This module simplifies the invocation of user events.
 
-import macros, ../sharedtypes, ecsstatedb, utils
+import macros, ../sharedtypes, ecsstatedb, utils, mutationtracking
 
 # -----------------
 # Event user access
