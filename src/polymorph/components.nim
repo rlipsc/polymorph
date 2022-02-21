@@ -244,9 +244,10 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
     let
       useThreadVar = options.useThreadVar
       ownerSystem = id.systemOwner typeId
+      isOwned = ownerSystem != InvalidSystemIndex
       
       supportStorageSize =
-        if ownerSystem == InvalidSystemIndex:
+        if not isOwned:
           # + 1 as the first element is InvalidComponentIndex.
           maxComponentCount + 1
         else:
@@ -261,15 +262,19 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
           else:
             0
 
-    # Generate the field that will hold this component within storage.
-    # eg; a: array[100000, A]
-    # Note: Currently this field has to be added unconditionally as we don't know if this component is owned yet.
-    storageFields.add genField(storageFieldName, exportFields, typeNameIdent.storageField(supportStorageSize), useThreadVar)
+    if not isOwned:
+      # Generate the field that will hold this component within storage.
+      # eg; a: array[100000, A]
+      storageFields.add genField(storageFieldName, exportFields, typeNameIdent.storageField(supportStorageSize), useThreadVar)
     
-    # Generate the last index list for this component of the specific instance type
-    # eg; aLastIndex: seq[AInstance]
-    let freeIdxIdent = typeNameStr.freeInstancesName
-    storageFields.add genField(freeIdxIdent, exportFields, genSeq(instTypeNode), useThreadVar)
+      # Generate the last index list for this component of the specific instance type
+      # eg; aLastIndex: seq[AInstance]
+      let freeIdxStr = typeNameStr.freeInstancesName
+      storageFields.add genField(freeIdxStr, exportFields, instTypeNode.storageField(supportStorageSize), useThreadVar)
+
+      if options.componentStorageFormat == cisArray:
+        let freeIdxHigh = freeIdxStr & "High"
+        storageFields.add genField(freeIdxHigh, exportFields, ident "int", useThreadVar)
     
     # Generate the next index variable for this component
     # eg; aNextIndex: AInstance
@@ -310,7 +315,9 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       lcTypeIdent = newIdentNode storageFieldName                   # Variable holding the component's data, indexed by ComponentIndex.
       createIdent = newIdentNode createInstanceName(typeNameStr)    # Proc to create a storage entry and return the ComponentIndex.
       deleteIdent = newIdentNode deleteInstanceName()               # Proc to remove a storage entry by ComponentIndex.
-      freeIdxIdent = newIdentNode freeInstancesName(typeNameStr)    # Variable holding a stack of free indexes.
+      freeIdxStr = freeInstancesName(typeNameStr)
+      freeIdxIdent = ident freeIdxStr                               # Variable holding a stack of free indexes.
+      freeIdxHigh = ident freeIdxStr & "High"
       instParam = ident "instance"
       instanceIds = newIdentNode instanceIdsName(typeNameStr)       # Variable holding the generation of indexes.
       instanceTypeIdent = c.instanceTy
@@ -346,11 +353,17 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         # No init needed for array types.
         discard
       of cisSeq:
-        firstCompIdInits.add(quote do:
-          `lcTypeIdent`.setLen 1
-          `aliveIdent`.setLen 1
-          `instanceIds`.setLen 1
-        )
+        if c.isOwned:
+          firstCompIdInits.add(quote do:
+            `aliveIdent`.setLen 1
+            `instanceIds`.setLen 1
+          )
+        else:
+          firstCompIdInits.add(quote do:
+            `lcTypeIdent`.setLen 1
+            `aliveIdent`.setLen 1
+            `instanceIds`.setLen 1
+          )
 
     # Ensure first component item is valid.
     firstCompIdInits.add(quote do:
@@ -509,8 +522,20 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         # delIdx is the index of the component in its storage.
         delIdx = ident "idx"
         storageHigh = newDotExpr(lcTypeIdent, ident "high")
-        freeIdxLen = quote do: `freeIdxIdent`.len
-        freeIdxPop = quote do: `freeIdxIdent`.pop
+        freeIdxLen =
+          case options.componentStorageFormat
+          of cisArray: freeIdxHigh
+          of cisSeq: newDotExpr(freeIdxIdent, ident"len")
+        
+        freeIdxPop =
+          case options.componentStorageFormat
+          of cisArray:
+            quote do:
+              let h = `freeIdxIdent`[`freeIdxHigh`]
+              `freeIdxHigh` = max(0, `freeIdxHigh` - 1)
+              h
+          of cisSeq:
+            quote do: `freeIdxIdent`.pop
 
       # This is expected to return the typed index for the new component.
       let handleNextStorageItem =
@@ -537,11 +562,12 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         of cisArray:
           quote do:
             # We need to subtract the length by one because the first item starts at one.
-            if `freeIdxIdent`.len == `storageHigh` - 1:
+            if `freeIdxHigh` == `storageHigh` - 1:
               # If the free list is full, everything's free so we can reset the list.
-              `freeIdxIdent`.setLen 0
+              `freeIdxHigh` = 0
             else:
-              `freeIdxIdent`.add `delIdx`.`instanceTypeIdent`
+              `freeIdxHigh` = `freeIdxHigh` + 1
+              `freeIdxIdent`[`freeIdxHigh`] = `delIdx`.`instanceTypeIdent`
         of cisSeq:
           quote do:
             # We don't need nextIdxIdent as this is naturally managed by seq.len
@@ -579,7 +605,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
               zeroMem(`instParam`.access.addr, `typeNameIdent`.sizeOf)
           else:
             newStmtList()
-        
+
         # Find and set up a component slot.
         rawCreate = quote do:
           var r: `instanceTypeIdent`
