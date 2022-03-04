@@ -804,13 +804,6 @@ proc addTypeId*(id: EcsIdentity, typeName: string): ComponentTypeId {.compileTim
   # Add name entry.
   compsSeq.add newLit(typeName)
 
-proc findOrAddTypeId*(id: EcsIdentity, typeName: string): ComponentTypeId {.compileTime.} =
-  ## Returns the ComponentTypeId for `typeName`. If the type is not
-  ## registered, it is added and the new ComponentTypeId returned.
-  result = id.findCompId(typeName)
-  if result == InvalidComponent:
-    result = id.addTypeId(typeName)
-
 iterator allComponents*(id: EcsIdentity): tuple[id: ComponentTypeId, name: string] =
   let compLen = id.components.len
   if compLen > 1:
