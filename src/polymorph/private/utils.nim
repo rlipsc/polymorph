@@ -27,8 +27,8 @@
 ## - Compile time utilities for inspecting and building types.
 ## - Walking system ownership graphs to find dependencies.
 
-import macros, strutils, typetraits, ../sharedtypes, ecsstatedb, mutationTracking
-import debugging, tables, deques, sequtils, sets, macrocache
+import macros, strutils, tables, deques, sequtils, sets, macrocache
+import ../sharedtypes, ecsstatedb, mutationTracking, debugging
 export debugging
 
 
@@ -1446,7 +1446,7 @@ proc genArray*(size: int, typeName: string): NimNode = genArray(size, newIdentNo
 proc genStaticArray*[T](arr: seq[seq[T]]): NimNode =
   ## This utility proc generates a static array that matches the parameter array.
   result = newStmtList()
-  let typeName = T.name
+  let typeName = $T
   var bracket = newNimNode(nnkBracket)
   for i in 0 ..< arr.len:
     var compList = nnkBracket.newTree()
