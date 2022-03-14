@@ -949,7 +949,7 @@ proc doFetchComponents(id: EcsIdentity, entity: NimNode, components: NimNode): N
   var
     fetchOp = newStmtList()
 
-  when defined(debug):
+  when compileOption("assertions"):
     fetchOp.add(
       quote do:
         {.line.}:
