@@ -16,7 +16,7 @@
 
 import macros, sharedtypes, components
 import private/[statechangeutils, statechangegen, utils, ecsstatedb, eventutils, mutationtracking]
-import strutils, tables, typetraits, sets, macrocache
+import strutils, tables, sets, macrocache
 
 macro componentToSysRequirements*(id: static[EcsIdentity], varName: untyped): untyped =
   ## Create a static sequence that matches componentTypeId to an array of indexes into systemNodes
@@ -744,8 +744,8 @@ proc makeStateChanges*(id: EcsIdentity): NimNode =
 
 
   if id.private:
-    # Note: The these procedures are special in that they must be
-    # discardable, and therefore must be procedures.
+    # Note: functionality here needs to be discardable and therefore
+    # must be made with procedures.
     #
     # However it's important not to force generation of these procedures
     # for every type because 1) owned component dependencies might not
@@ -762,7 +762,8 @@ proc makeStateChanges*(id: EcsIdentity): NimNode =
     #
     # To work around this, a template wraps these procs for each type to
     # allow on demand generation for singular components and support
-    # `{.discardable.}`, at the cost of extra compilation time.
+    # `{.discardable.}`, at the cost of extra compilation time and
+    # code duplication.
 
     for c in id.building(id.allUnsealedComponents):
       let
@@ -776,9 +777,10 @@ proc makeStateChanges*(id: EcsIdentity): NimNode =
           quote do:
             template addComponent*(`entity`: EntityRef, component: `cType`): `cInst` =
               ## Add a single component to `entity` and return the instance.
-              proc ac(e: EntityRef, c: `cType`): `cInst` {.discardable.} =
-                e.addComponents(c)[0]
-              `entity`.ac(component)
+              block:
+                proc ac(e: EntityRef, c: `cType`): `cInst` {.discardable.} =
+                  e.addComponents(c)[0]
+                `entity`.ac(component)
 
             template addOrUpdate*(`entity`: EntityRef, component: `cType`): `cInst` =
               ## Add `component` to `entity`, or if `component` already exists, overwrite it.
