@@ -523,7 +523,7 @@ proc addToEntityList*(id: EcsIdentity, entity: NimNode, passed: ComponentIterabl
     
     mutationLog.add tyInt.newLit
   
-  if id.ecsEventEnv.len > 1:
+  if id.ecsEventEnv.len > 0:
     result.add(quote do:
       static:
         EcsIdentity(`id`).recordMutation(ekAddComponents, `mutationLog`)

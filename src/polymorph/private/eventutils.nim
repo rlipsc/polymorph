@@ -222,16 +222,18 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowRemoved}, [`sysInt`]):
-              error "Event '" & `ek` & "'" & `ei` &
-                "a previous remove from system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "' for system \"" & `sysName` & "\"" &
+                `ei` & "a previous event removing from this system before it could be called" & `br` &
+                eventMutationsStr(`ecsId`)
         )
 
       of ekRemoveComponents:
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowAdded}, [`sysInt`]):
-              error "Event '" & `ek` & "'" & `ei` &
-                "a previous add to system \"" & `sysName` & "\"" & `br` & eventMutationsStr(`ecsId`)
+              error "Event '" & `ek` & "' for system \"" & `sysName` & "\"" &
+                `ei` & "a previous event adding to this system before it could be called" & `br` &
+                eventMutationsStr(`ecsId`)
         )
       else:
         discard
@@ -281,48 +283,50 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     if id.eventOccurred({eventKind}, data):
       error de & $eventKind & "'" & br & id.eventMutationsStr
 
-  case paramKind
-    of pkNone:
+  if id.ecsEventEnv.len > 0:
 
-      checkRecursion([0])
-      eventCode.trackMutation(id, eventKind, [0])
+    case paramKind
+      of pkNone:
 
-    of pkCompCT:
+        checkRecursion([0])
+        eventCode.trackMutation(id, eventKind, [0])
 
-      if context.entityComps.len == 0:
-        error ie & tc
-      let intComps = context.entityComps.toIntList
-      checkRecursion(intComps)
-      prelude.checkStateInvalidation(context.entityComps)
-      eventCode.trackMutation(id, eventKind, intComps)
+      of pkCompCT:
 
-    of pkComp:
+        if context.entityComps.len == 0:
+          error ie & tc
+        let intComps = context.entityComps.toIntList
+        checkRecursion(intComps)
+        prelude.checkStateInvalidation(context.entityComps)
+        eventCode.trackMutation(id, eventKind, intComps)
 
-      if context.component.info.typeId == InvalidComponent:
-        error ie & tc
-      checkRecursion([typeInfo.typeId.int])
-      prelude.checkStateInvalidation([typeInfo.typeId])
-      eventCode.trackMutation(id, eventKind, [typeInfo.typeId.int])
-    
-    of pkSys:
-      # Callbacks and inline system events differ in their recursion checking.
-      if context.system.info.index == InvalidSystemIndex:
-        error ie & sc
-      prelude.checkStateInvalidation(sysInfo.index)
-      eventCode.trackMutation(id, eventKind, [sysInfo.index.int])
+      of pkComp:
 
-    of pkSysComp:
+        if context.component.info.typeId == InvalidComponent:
+          error ie & tc
+        checkRecursion([typeInfo.typeId.int])
+        prelude.checkStateInvalidation([typeInfo.typeId])
+        eventCode.trackMutation(id, eventKind, [typeInfo.typeId.int])
+      
+      of pkSys:
+        # Callbacks and inline system events differ in their recursion checking.
+        if context.system.info.index == InvalidSystemIndex:
+          error ie & sc
+        prelude.checkStateInvalidation(sysInfo.index)
+        eventCode.trackMutation(id, eventKind, [sysInfo.index.int])
 
-      if context.system.info.index == InvalidSystemIndex:
-        error ie & sc
-      if context.component.info.typeId == InvalidComponent:
-        error ie & tc
+      of pkSysComp:
 
-      checkRecursion([sysInfo.index.int, typeInfo.typeId.int])
-      prelude.checkStateInvalidation(sysInfo.index)
-      eventCode.trackMutation(id, eventKind, [sysInfo.index.int, typeInfo.typeId.int])
+        if context.system.info.index == InvalidSystemIndex:
+          error ie & sc
+        if context.component.info.typeId == InvalidComponent:
+          error ie & tc
 
-  node.add prelude
+        checkRecursion([sysInfo.index.int, typeInfo.typeId.int])
+        prelude.checkStateInvalidation(sysInfo.index)
+        eventCode.trackMutation(id, eventKind, [sysInfo.index.int, typeInfo.typeId.int])
+
+    node.add prelude
 
   case eventKind
 

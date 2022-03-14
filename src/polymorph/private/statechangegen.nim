@@ -298,7 +298,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
 
   assert change.kind == sckAdd
 
-  if id.ecsEventEnv.len > 1:
+  if id.ecsEventEnv.len > 0:
     # This is an embedded event.
 
     if id.eventOccurred({ekRowAdded, ekRowAddedCB}, [change.sys.int]):
@@ -478,7 +478,7 @@ proc removeFromSystem(id: EcsIdentity, entity: NimNode, details: var StateChange
 
   assert change.kind == sckRemove
 
-  if id.ecsEventEnv.len > 1:
+  if id.ecsEventEnv.len > 0:
     # This is an embedded event.
 
     if id.eventOccurred({ekRowRemoved, ekRowRemovedCb}, [change.sys.int]):
