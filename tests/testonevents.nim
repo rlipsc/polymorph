@@ -32,7 +32,7 @@ template testEvents*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
     eventLog: seq[string]
   
   const
-    displayLog = defined(onEventsLog)
+    displayLog = defined(ecsLog)
   
   template log(str: string, indent: int) =
     when displayLog:
@@ -405,7 +405,8 @@ template testEvents*(componentOptions: ECSCompOptions, systemOptions: ECSSysOpti
     for item in eventLog:
       echo item
   
-  echo "Finish."
+  when displayLog:
+    echo "Finish."
   flushGenLog()
 
 when isMainModule:

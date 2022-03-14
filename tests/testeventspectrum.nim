@@ -71,7 +71,8 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
     let
       key = $ty
 
-    echo "[ Type ", key, " event ", event, " ]"
+    when defined(ecsLog):
+      echo "[ Type ", key, " event ", event, " ]"
     
     componentEvents.withValue(key, curEv):
       check event notin curEv.c
@@ -86,7 +87,8 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
     let
       key = $ty
     
-    echo "[ Type ", key, " event ", event, " for ", sys, " ]"
+    when defined(ecsLog):
+      echo "[ Type ", key, " event ", event, " for ", sys, " ]"
 
     componentEvents.withValue(key, curEv):
       curEv.cs.withValue(sys, curVal):
@@ -224,22 +226,29 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
         unexpected = events.diff expected
         passed = missing.len == 0 and unexpected.len == 0
 
-      echo "\nTask \"" & task & "\" for " & cTypeStr & ": "
+      when defined(ecsLog):
+        echo "\nTask \"" & task & "\" for " & cTypeStr & ": "
+
       if not passed:
+        when not(defined(ecsLog)):
+          echo "\nTask \"" & task & "\" for " & cTypeStr & ": "
+        echo "  Failed!"
         echo "  Used ", `$`(events, 2)
         if missing.len > 0:
           echo "  Missing ", `$`(missing, 2)
         if unexpected.len > 0:
           echo "  Unexpected ", `$`(unexpected, 2)
       else:
-        echo "  <Passed>"
-      # forAllSystems:
-      #   echo sys.name, ": ", sys.count
+        when defined(ecsLog):
+          echo "  <Passed>"
+        else:
+          discard
       
       componentEvents.del cTypeStr
       check passed
 
-    echo "  ---"
+    when defined(ecsLog):
+      echo "  ---"
 
 
   suite "Event invocation": 
@@ -345,7 +354,7 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
 
   # Make sure onEntityChange doesn't affect other ECS created afterwards.
   clearOnEntityChange()
-  
+
   flushGenLog()
 
 when isMainModule:
