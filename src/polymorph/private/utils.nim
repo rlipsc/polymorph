@@ -1888,6 +1888,22 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
 # --------------
 
 
+template isExport(n: NimNode): bool =
+  if n.kind == nnkPostFix and n[0].kind == nnkIdent and n[0].strVal == "*":
+    true
+  else:
+    false
+
+
+proc remExport(node: NimNode, id: int) =
+  if node[id].kind == nnkPragmaExpr:
+    if node[id][0].isExport:
+      node[id][0] = node[id][0][1]
+  else:
+    if node[id].isExport:
+      node[id] = node[id][1]
+
+
 proc deExport*(code: var NimNode, suppressUnusedHints = true) =
   ## Removes top level export markers from templates, procs, funcs,
   ## macros, and var, let, and const sections.
@@ -1901,12 +1917,6 @@ proc deExport*(code: var NimNode, suppressUnusedHints = true) =
 
   for i in 0 ..< code.len:
 
-    template isExport(n: NimNode): bool =
-      if n.kind == nnkPostFix and n[0].kind == nnkIdent and n[0].strVal == "*":
-        true
-      else:
-        false
-
     # Unpack postfix export markers in place.
 
     case code[i].kind
@@ -1915,24 +1925,24 @@ proc deExport*(code: var NimNode, suppressUnusedHints = true) =
         if code[i][0].isExport:
           code[i][0] = code[i][0][1]
 
+      of nnkWhenStmt:
+        for def in 0 ..< code[i].len:
+          if code[i][def].kind in [nnkElifBranch]:
+            code[i][def][1].expectKind nnkStmtList
+            var temp = code[i][def][1]
+            temp.deExport
+            code[i][def][1] = temp
+
       of nnkConstSection, nnkLetSection, nnkVarSection, nnkTypeSection:
         for def in 0 ..< code[i].len:
-
-          if code[i][def].kind in [nnkConstDef, nnkIdentDefs, nnkTypeDef]:
-
+          if code[i][def].kind in [nnkConstDef, nnkIdentDefs, nnkTypeDef, nnkElifBranch]:
             for id in 0 ..< code[i][def].len:
-
-              if code[i][def][id].kind == nnkPragmaExpr:
-                if code[i][def][id][0].isExport:
-                  code[i][def][id][0] = code[i][def][id][0][1]
-
-              else:
-                if code[i][def][id].isExport:
-                  code[i][def][id] = code[i][def][id][1]
+              code[i][def].remExport id
 
       of nnkStmtList:
         var temp = code[i]
-        temp.deExport
+        # Only the top level should push and pop {.used.}.
+        temp.deExport(suppressUnusedHints = false)
         code[i] = temp
 
       else:
