@@ -403,6 +403,20 @@ macro onEntityChange*(actions: untyped): untyped =
   newStmtList()
 
 
+macro clearOnEntityChange*(id: static[EcsIdentity]): untyped =
+  ## Manually clear the onEntityChange event code, as this code is not
+  ## automatically cleared when new a ECS is created.
+  id.set_onEntityStateChange newStmtList()
+  newStmtList()
+
+
+macro clearOnEntityChange*(): untyped =
+  ## Manually clear the onEntityChange event code, as this code is not
+  ## automatically cleared when new a ECS is created.
+  defaultIdentity.set_onEntityStateChange newStmtList()
+  newStmtList()
+
+
 #--------------
 # State changes
 #--------------

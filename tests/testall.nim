@@ -17,7 +17,6 @@ static:
 
 block:
   runBasic(entOpts, compOpts, sysOpts)
-  
   # Check we can create entities with components from `runBasic`.
   let e = newEntityWith(IntCont(), AddOne())
   e.expectSystems ["incInt", "multipleBlocks"]
@@ -47,9 +46,8 @@ block:
     cOpts = fixedSizeComponents(100)
     sOpts = fixedSizeSystem(100)
     eOpts = fixedSizeEntities(100)
-  # This test uses onEntityChange which would affect other tests, and
-  # so must be run last.
   defineEventSpectrum(cOpts, sOpts, eOpts)  
+
 static:
   defaultIdentity.set_private false
 

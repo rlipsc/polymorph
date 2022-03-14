@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import macros, strutils, strformat, sequtils, sharedtypes,
-  private/[ecsstatedb, utils], tables
+  private/[ecsstatedb, utils], tables, sets
 from private/eventutils import userEntAccess
 import random
 
@@ -822,6 +822,7 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: open
     else:
       error "Cannot find system \"" & nameStr & "\""
 
+
 template defineGroup*(group: static[string], systems: openarray[string]): untyped =
   ## Assign specific systems to a group using the default ECS identity.
   ## 
@@ -829,6 +830,7 @@ template defineGroup*(group: static[string], systems: openarray[string]): untype
   ## 
   ## Systems may be part of multiple groups.
   defaultIdentity.defineGroup(group, systems)
+
 
 macro defineGroup*(id: static[EcsIdentity], group: static[string]): untyped =
   ## Assign previously defined and ungrouped systems to a group using an ECS identity.
@@ -853,6 +855,7 @@ macro defineGroup*(id: static[EcsIdentity], group: static[string]): untyped =
       if lcGroup notin id.systemGroups(sys):
         id.add_systemGroups(sys, lcGroup)
 
+
 template defineGroup*(group: static[string]): untyped =
   ## Assign previously defined and ungrouped systems to a group using the default ECS identity.
   ## 
@@ -860,106 +863,6 @@ template defineGroup*(group: static[string]): untyped =
   ## 
   ## Systems may be part of multiple groups.
   defaultIdentity.defineGroup(group)
-
-macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): untyped =
-  ## Output uncommitted system definitions for a group using an ECS identity and wrap in an execution procedure.
-  ## 
-  ## The order of execution matches the order these systems have been defined.
-  ## 
-  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
-  result = newStmtList()
-
-  let
-    systems = id.groupSystems(group.toLowerAscii)
-
-  if systems.len == 0:
-    error "No system bodies defined for group \"" & group & "\""
-  else:
-    result.add id.commitSystemList(systems, runProc)
-  
-  if id.private:
-    result.deExport
-
-template commitGroup*(group, runProc: static[string]): untyped =
-  ## Output uncommitted system definitions for a group using the default ECS identity and wrap in an execution procedure.
-  ## 
-  ## The order of execution matches the order these systems have been defined.
-  ## 
-  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
-  defaultIdentity.commitGroup(group, runProc)
-
-
-#----------------------
-# User system utilities
-#----------------------
-
-
-template updateTimings*(sys: untyped): untyped =
-  # per item
-  # max
-  if sys.timePerGroupItem > sys.maxTimePerGroupItem:
-    sys.maxTimePerGroupItem = sys.timePerGroupItem
-  # min
-  if sys.minTimePerGroupItem <= 0.0: 
-    sys.minTimePerGroupItem = sys.timePerGroupItem
-  else:
-    if sys.timePerGroupItem < sys.minTimePerGroupItem:
-      sys.minTimePerGroupItem = sys.timePerGroupItem
-  # per run
-  # max
-  if sys.timePerGroupRun > sys.maxTimePerGroupRun:
-    sys.maxTimePerGroupRun = sys.timePerGroupRun
-  # min
-  if sys.minTimePerGroupRun <= 0.0: 
-    sys.minTimePerGroupRun = sys.timePerGroupRun
-  else:
-    if sys.timePerGroupRun < sys.minTimePerGroupRun:
-      sys.minTimePerGroupRun = sys.timePerGroupRun
-
-macro removeComponents*(sys: object, types: varargs[typed]) =
-  ## Remove the components in `types` from all entities in this system.
-  
-  # This macro builds a `removeComponents` with `types` and executes it
-  # for each entity in the system, from the last entity backwards to the
-  # first.
-  # Note that removing a required component implicitly adjust the system
-  # length so we don't need to manually set the 'groups' field length.
-
-  let entity = ident "entity"
-  var `removeInner` = nnkCall.newTree(ident "remove", entity)
-  
-  for ty in types:
-    
-    case ty.kind
-
-      of nnkSym:
-        `removeInner`.add ty
-      
-      of nnkHiddenStdConv:
-        ty.expectMinLen 2
-        ty[1].expectKind nnkBracket
-        
-        for compTy in ty[1]:
-          `removeInner`.add compTy
-      
-      else:
-        `removeInner`.add ty
-
-  quote do:
-    for i in countDown(`sys`.count - 1, 0):
-      let `entity` = `sys`.groups[i].entity
-      `removeInner`
-
-template remove*(sys: object, types: varargs[typed]) =
-  ## Remove the components in `types` from all entities in this system.
-  removeComponents(sys, types)
-
-template clear*(sys: object) =
-  ## Remove all entities in this system.
-  if `sys`.count > 0:
-    for i in countDown(`sys`.count - 1, 0):
-      `sys`.groups[i].entity.delete
-    # The length of `sys`.groups is set by delete.
 
 
 # -------------------------
@@ -1804,6 +1707,346 @@ template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
   defaultIdentity.makeSystemBody(name, systemBody)
 
 
+# ----------------------------
+# Identity system built events
+# ----------------------------
+
+
+template append(id: EcsIdentity, accessProc: untyped, code: NimNode) =
+  # Helper for appending to NimNode DB entries.
+  var curCode = accessProc(id)
+  if curCode.isNil:
+    curCode = newStmtList()
+  curCode.add code
+  id.`set accessProc` curCode
+
+
+macro onEcsNextCommitId*(id: static[EcsIdentity], code: untyped): untyped =
+  ## Includes `code` immediately before `commitSystems` starts.
+  ## 
+  ## This can be useful for including imports or other code that might
+  ## be needed to compile systems.
+  ## 
+  ## This code is cleared for the identity after the nest `commitSystems`
+  ## has run.
+  id.append onEcsNextCommitCode, code
+  newStmtList()
+
+
+macro onEcsNextCommit*(code: untyped): untyped =
+  ## Includes `code` immediately before `commitSystems` starts.
+  ## 
+  ## This can be useful for including imports or other code that might
+  ## be needed to compile systems.
+  ## 
+  ## This code is cleared for the identity after the nest `commitSystems`
+  ## has run.
+  defaultIdentity.append onEcsNextCommitCode, code
+  newStmtList()
+
+
+macro onEcsCommitAllId*(id: static[EcsIdentity], code: untyped): untyped =
+  ## Inserts `code` before the output of all subsequent commits with this
+  ## identity.
+  ## 
+  ## To clear this event, use `clearOnEcsCommitAll`.
+  id.append onEcsCommitAllCode, code
+  newStmtList()
+
+
+macro onEcsCommitAll*(code: untyped): untyped =
+  ## Inserts `code` before the output of all subsequent commits with the
+  ## default identity.
+  ## 
+  ## To clear this event, use `clearOnEcsCommitAll`.
+  defaultIdentity.append onEcsCommitAllCode, code
+  newStmtList()
+
+
+macro onEcsCommitGroupsId*(id: static[EcsIdentity], groups: static[openarray[string]], code: untyped): untyped =
+  ## Inserts `code` before the output of `commitGroup` for `group`.
+  ## 
+  ## This code is not cleared after a group has been committed; subsequent
+  ## commits of this group will emit `code` preceding the group's system code.
+  for group in groups:
+    id.add_onEcsCommitGroupCode group, code
+  newStmtList()
+
+
+macro onEcsCommitGroups*(groups: static[openarray[string]], code: untyped): untyped =
+  ## Inserts `code` before the output of `commitGroup` for `group`.
+  ## 
+  ## This code is not cleared after a group has been committed; subsequent
+  ## commits of this group will emit `code` preceding the group's system code.
+  for group in groups:
+    defaultIdentity.add_onEcsCommitGroupCode group, code
+  newStmtList()
+
+
+# -----------------------------------------
+# Manual clearing of system identity events
+# -----------------------------------------
+
+# Note: groups are considered to be 'encapsulated' with their
+# 'onEcsCommitGroups' event, and as such don't offer a clear operation.
+
+
+macro clearOnEcsCommitAll*(id: static[EcsIdentity]): untyped =
+  ## Manually clear the onEcsCommitAll event code.
+  ## 
+  ## This event isn't automatically cleared as an identity may perform
+  ## multiple commits.
+  id.set_onEcsCommitAllCode newStmtList()
+  newStmtList()
+
+
+macro clearOnEcsCommitAll*: untyped =
+  ## Manually clear the onEcsCommitAll event code.
+  ## 
+  ## This event isn't automatically cleared as an identity may perform
+  ## multiple commits.
+  defaultIdentity.set_onEcsCommitAllCode newStmtList()
+  newStmtList()
+
+
+# ------------------
+# Committing systems
+# ------------------
+
+
+proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
+  result = newStmtList()
+
+  let
+    commitHeader = "for \"" & id.string & "\""
+    logTitle =
+      if procName != "":
+        commitHeader & ", wrapped to proc `" & procName & "()`"
+      else:
+        commitHeader
+
+  when defined(ecsLog) and not defined(ecsLogDetails):
+    echo "Committing systems " & commitHeader
+  
+  id.startOperation "Commit systems " & commitHeader
+
+  let
+    toCommit = id.getUncommitted().toHashSet
+  var
+    order = id.systemOrder()
+    systems = newSeqOfCap[SystemIndex](toCommit.len)
+
+  # 'systemOrder' is a list of system indexes, appended to when the system
+  # is first seen by defineSystem or makeSystem.
+  #
+  # All systems should exist in 'systemOrder' before `makeEcs` is invoked.
+  #
+  # 'toCommit' is the unordered subset of `systemOrder` with system
+  # bodies waiting to be committed.
+
+  for sys in order:
+    if sys in toCommit:
+      # Ignore systems that belong to groups.
+      if id.systemGroups(sys).len == 0:
+        systems.add sys
+
+  if id.onEcsNextCommitCode.len > 0 or id.onEcsCommitAllCode.len > 0:
+    result.add(quote do:
+      template curGroup: string = ""
+    )
+
+    # User code to run after everything's defined.
+    if id.onEcsNextCommitCode.len > 0:
+      result.add id.onEcsNextCommitCode.copy
+      # Clear the code for the next commit.
+      id.set_onEcsNextCommitCode newStmtList()
+
+    if id.onEcsCommitAllCode.len > 0:
+      result.add id.onEcsCommitAllCode.copy
+      # This code should not be cleared.
+  
+  # Add the system body procedures and run proc.
+  result.add id.commitSystemList(systems, procName)
+
+  if id.private:
+    id.ecsBuildOperation "remove exports":
+      result.deExport
+
+  let
+    logCodeComment = "Commit systems " & logTitle & "\n"
+  
+  genLog  "\n# " & logCodeComment &
+          "# " & '-'.repeat(logCodeComment.len - 1) & "\n" &
+          result.repr
+
+  when defined(ecsLogCode):
+    result.add id.flushGenLog(defaultGenLogFilename)
+  
+  id.endOperation
+
+
+macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): untyped =
+  ## This macro outputs uncommitted system execution procedures for
+  ## system bodies defined so far in the specified ECS identity.
+  ## 
+  ## Each system procedure is generated as the system name prefixed with
+  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
+  ## 
+  ## These procedures perform all the non-event actions within
+  ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
+  ## state for this system.
+  ## 
+  ## If `wrapperName` is given, a proc is generated that runs
+  ## uncommitted system execution procedures in the order they've been
+  ## defined.
+  ## 
+  ## System execution can be split into multiple procs by including a
+  ## `commitSystems` after each set of body definitions.
+  ## 
+  ## For more explicit grouping and ordering of systems, see
+  ## `groupSystems`.
+  ## 
+  ## For example:
+  ## 
+  ## .. code-block:: nim
+  ##    import polymorph
+  ##
+  ##    registerComponents(defaultCompOpts):
+  ##      type Foo = object
+  ##
+  ##    defineSystem("a", [Foo])
+  ##    defineSystem("b", [Foo])
+  ##    defineSystem("c", [Foo])
+  ##
+  ##    makeEcs()
+  ##
+  ##    makeSystemBody("a"):
+  ##      start: echo "Running A"
+  ##
+  ##    makeSystemBody("b"):
+  ##      start: echo "Running B"
+  ##
+  ##    commitSystems("runAB")
+  ##
+  ##    makeSystemBody("c"):
+  ##      start: echo "Running C"
+  ##
+  ##    commitSystems("runC")
+  ##
+  id.doCommitSystems(wrapperName)
+
+
+macro commitSystems*(wrapperName: static[string]): untyped =
+  ## This macro outputs uncommitted system execution procedures for
+  ## system bodies defined so far in the default ECS identity.
+  ## 
+  ## Each system procedure is generated as the system name prefixed with
+  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
+  ## 
+  ## These procedures perform all the non-event actions within
+  ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
+  ## state for this system.
+  ## 
+  ## If `wrapperName` is given, a proc is generated that runs
+  ## uncommitted system execution procedures in the order they've been
+  ## defined.
+  ## 
+  ## System execution can be split into multiple procs by including a
+  ## `commitSystems` after each set of body definitions.
+  ## 
+  ## For more explicit grouping and ordering of systems, see
+  ## `groupSystems`.
+  ## 
+  ## For example:
+  ## 
+  ## .. code-block:: nim
+  ##    import polymorph
+  ##
+  ##    registerComponents(defaultCompOpts):
+  ##      type Foo = object
+  ##
+  ##    defineSystem("a", [Foo])
+  ##    defineSystem("b", [Foo])
+  ##    defineSystem("c", [Foo])
+  ##
+  ##    makeEcs()
+  ##
+  ##    makeSystemBody("a"):
+  ##      start: echo "Running A"
+  ##
+  ##    makeSystemBody("b"):
+  ##      start: echo "Running B"
+  ##
+  ##    commitSystems("runAB")
+  ##
+  ##    makeSystemBody("c"):
+  ##      start: echo "Running C"
+  ##
+  ##    commitSystems("runC")
+  ##
+  defaultIdentity.doCommitSystems(wrapperName)
+
+
+template makeEcsCommit*(wrapperName: static[string]): untyped =
+  ## Wrap `makeEcs()` and `commitSystems wrapperName`.
+  makeEcs()
+  commitSystems(wrapperName)
+
+
+template makeEcsCommit*(wrapperName: static[string], entOpts: static[EcsEntityOptions]): untyped =
+  ## Wrap `makeEcs(entOpts)` and `commitSystems wrapperName`.
+  makeEcs(entOpts)
+  commitSystems(wrapperName)
+
+
+macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): untyped =
+  ## Output uncommitted system definitions for a group using an ECS identity and wrap in an execution procedure.
+  ## 
+  ## The order of execution matches the order these systems have been defined.
+  ## 
+  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
+  result = newStmtList()
+
+  let systems = id.groupSystems(group.toLowerAscii)
+
+  if systems.len == 0:
+    error "No system bodies defined for group \"" & group & "\""
+  else:
+    let
+      commitAny = id.onEcsCommitAllCode.copy
+      commitGroup = id.onEcsCommitGroupCode group
+
+    if commitAny.len > 0 or commitGroup.len > 0:
+      result.add(quote do:
+        template curGroup: string = `group`
+      )
+
+    result.add commitAny
+    for n in commitGroup:
+      result.add n.copy
+
+    result.add id.commitSystemList(systems, runProc)
+  
+    if id.private:
+      result.deExport
+
+  genLog "# Commit group \"" & group & "\"", result.repr
+
+
+template commitGroup*(group, runProc: static[string]): untyped =
+  ## Output uncommitted system definitions for a group using the default ECS identity and wrap in an execution procedure.
+  ## 
+  ## The order of execution matches the order these systems have been defined.
+  ## 
+  ## It is a compile time error to commit groups with no systems or that contain systems with no body.
+  defaultIdentity.commitGroup(group, runProc)
+
+
+# ----------------
+# System utilities
+# ----------------
+
+
 macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[ComponentTypeId]], actions: untyped): untyped =
   ## Statically perform `actions` only for systems defined for these types.
   ## Note that typeIds must be known at compile time.
@@ -1844,3 +2087,75 @@ template forSystemsUsing*(types: openarray[typedesc], actions: untyped): untyped
   ## Systems may have other types defined but must include all of `types`.
   ## Note that types must be known at compile time.
   forSystemsUsing(defaultIdentity, types, actions)
+
+
+template updateTimings*(sys: untyped): untyped =
+  # per item
+  # max
+  if sys.timePerGroupItem > sys.maxTimePerGroupItem:
+    sys.maxTimePerGroupItem = sys.timePerGroupItem
+  # min
+  if sys.minTimePerGroupItem <= 0.0: 
+    sys.minTimePerGroupItem = sys.timePerGroupItem
+  else:
+    if sys.timePerGroupItem < sys.minTimePerGroupItem:
+      sys.minTimePerGroupItem = sys.timePerGroupItem
+  # per run
+  # max
+  if sys.timePerGroupRun > sys.maxTimePerGroupRun:
+    sys.maxTimePerGroupRun = sys.timePerGroupRun
+  # min
+  if sys.minTimePerGroupRun <= 0.0: 
+    sys.minTimePerGroupRun = sys.timePerGroupRun
+  else:
+    if sys.timePerGroupRun < sys.minTimePerGroupRun:
+      sys.minTimePerGroupRun = sys.timePerGroupRun
+
+
+macro removeComponents*(sys: object, types: varargs[typed]) =
+  ## Remove the components in `types` from all entities in this system.
+  
+  # This macro builds a `removeComponents` with `types` and executes it
+  # for each entity in the system, from the last entity backwards to the
+  # first.
+  # Note that removing a required component implicitly adjust the system
+  # length so we don't need to manually set the 'groups' field length.
+
+  let entity = ident "entity"
+  var `removeInner` = nnkCall.newTree(ident "remove", entity)
+  
+  for ty in types:
+    
+    case ty.kind
+
+      of nnkSym:
+        `removeInner`.add ty
+      
+      of nnkHiddenStdConv:
+        ty.expectMinLen 2
+        ty[1].expectKind nnkBracket
+        
+        for compTy in ty[1]:
+          `removeInner`.add compTy
+      
+      else:
+        `removeInner`.add ty
+
+  quote do:
+    for i in countDown(`sys`.count - 1, 0):
+      let `entity` = `sys`.groups[i].entity
+      `removeInner`
+
+
+template remove*(sys: object, types: varargs[typed]) =
+  ## Remove the components in `types` from all entities in this system.
+  removeComponents(sys, types)
+
+
+template clear*(sys: object) =
+  ## Delete all entities in this system.
+  if `sys`.count > 0:
+    for i in countDown(`sys`.count - 1, 0):
+      `sys`.groups[i].entity.delete
+    # The length of `sys`.groups is set by delete.
+

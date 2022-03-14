@@ -549,8 +549,10 @@ genItemStates(SystemIndex, NimNode, ["instantiation", "definition", "extraFields
 genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents", "ecsSysNegations"])
 
 # System groups
-genListStates(string, SystemIndex, ["groupSystems"])  # Group to list of systems.
-genListStates(SystemIndex, string, ["systemGroups"])  # System to list of groups.
+genListStates(string, SystemIndex, ["groupSystems"])      # Group to list of systems.
+genListStates(SystemIndex, string, ["systemGroups"])      # System to list of groups.
+genListStates(string, NimNode, ["onEcsCommitGroupCode"])  # Code to include before this group is commited.
+
 # System options
 genItemStates(SystemIndex, int, ["maxEntities"])
 genItemStates(SystemIndex, ECSSysStorage, ["storageFormat"])
@@ -632,7 +634,7 @@ genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromS
 
 genGlobalStates(NimNode, ["onEntityStateChange"])
 genGlobalStates(bool, ["private"])
-genGlobalStates(NimNode, ["ecsCurrentOperation", "onEcsBuiltCode"])
+genGlobalStates(NimNode, ["ecsCurrentOperation", "onEcsBuiltCode", "onEcsNextCommitCode", "onEcsCommitAllCode"])
 
 #--------------------
 # Root objects <-> DB

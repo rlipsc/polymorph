@@ -25,8 +25,52 @@ export
   onAddCallback, onRemoveCallback,
   onAdd, onRemove, onInit, onInterceptUpdate, onUpdate, onDelete,
   onSystemAdd, onSystemAddTo, onSystemRemove, onSystemRemoveFrom,
-  onEntityChange,
+  onEntityChange, clearOnEntityChange,
   ecsstatedb
+
+
+# ---------------------
+# Identity build events
+# ---------------------
+
+
+macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
+  ## Includes `code` immediately after makeEcs has finished.
+  ## 
+  ## Useful for initialisations and declaring support routines that use
+  ## the ECS (for example for use within systems).
+
+  var
+    curCode = id.onEcsBuiltCode
+
+  if curCode.isNil:
+    curCode = newStmtList()
+
+  curCode.add code
+  id.set_onEcsBuiltCode curCode
+  newStmtList()
+
+
+macro onEcsBuilt*(code: untyped): untyped =
+  ## Includes `code` immediately after makeEcs has finished.
+  ## 
+  ## Useful for initialisations and declaring support routines that use
+  ## the ECS (for example for use within systems).
+
+  var
+    curCode = defaultIdentity.onEcsBuiltCode
+
+  if curCode.isNil:
+    curCode = newStmtList()
+
+  curCode.add code
+  defaultIdentity.set_onEcsBuiltCode curCode
+  newStmtList()
+
+
+# ---------------------
+# Creating entity state
+# ---------------------
 
 
 proc makeEntityState(options: ECSEntityOptions): NimNode =
@@ -367,38 +411,12 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
   )
 
 
+# ----------------
+# Entity utilities
+# ----------------
+
+
 import algorithm
-
-
-proc getComponentUpdatePerformance(id: EcsIdentity): seq[ComponentUpdatePerfTuple] {.compileTime.} =
-  ## Internal procedure to return the number of systems each component accesses during an update.
-  ## The result is sorted.
-  var r: seq[ComponentUpdatePerfTuple]
-
-  for typeId in id.unsealedComponents:
-    # Each component gets a direct access addComponent
-    let
-      tyNameStr = id.typeName typeId
-      relevantSystems = id.linked typeId
-    r.add((tyNameStr, relevantSystems.len))
-
-  r.sort do (x, y: ComponentUpdatePerfTuple) -> int:
-    cmp(y.systemsUpdated, x.systemsUpdated)
-  r
-
-
-macro componentUpdatePerformance*(id: static[EcsIdentity]): untyped =
-  ## Generates a static sequence of components by the number of systems they update,
-  ## ordered by increasing system accesses.
-  ## 
-  ## This can act as a guide of the cost of performing `addComponent`, `removeComponent` and `newEntityWith`.
-  var items = getComponentUpdatePerformance(id)
-
-  var bracket = nnkBracket.newTree
-  for item in items:
-    bracket.add(quote do: `item`)
-  result = newStmtList(nnkPrefix.newTree(ident "@", bracket))
-
 
 proc makeEntities(id: EcsIdentity): NimNode =
   # Create entity state.
@@ -1243,6 +1261,36 @@ proc makeCompRefAlive: NimNode =
       r
 
 
+proc getComponentUpdatePerformance(id: EcsIdentity): seq[ComponentUpdatePerfTuple] {.compileTime.} =
+  ## Internal procedure to return the number of systems each component accesses during an update.
+  ## The result is sorted.
+  var r: seq[ComponentUpdatePerfTuple]
+
+  for typeId in id.unsealedComponents:
+    # Each component gets a direct access addComponent
+    let
+      tyNameStr = id.typeName typeId
+      relevantSystems = id.linked typeId
+    r.add((tyNameStr, relevantSystems.len))
+
+  r.sort do (x, y: ComponentUpdatePerfTuple) -> int:
+    cmp(y.systemsUpdated, x.systemsUpdated)
+  r
+
+
+macro componentUpdatePerformance*(id: static[EcsIdentity]): untyped =
+  ## Generates a static sequence of components by the number of systems they update,
+  ## ordered by increasing system accesses.
+  ## 
+  ## This can act as a guide of the cost of performing `addComponent`, `removeComponent` and `newEntityWith`.
+  var items = getComponentUpdatePerformance(id)
+
+  var bracket = nnkBracket.newTree
+  for item in items:
+    bracket.add(quote do: `item`)
+  result = newStmtList(nnkPrefix.newTree(ident "@", bracket))
+
+
 proc addPerformanceLog(id: EcsIdentity) {.compileTime.} =
   ## Append system operations per component to the log.
   
@@ -1528,38 +1576,10 @@ template expectSystems*(entity: EntityRef, systems: openArray[string]): untyped 
   expectSystems(defaultIdentity, entity, systems)
 
 
-macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
-  ## Includes `code` immediately after makeEcs has finished.
-  ## 
-  ## Useful for initialisations and declaring support routines that use
-  ## the ECS (for example for use within systems).
+# ---------------
+# Building an ECS
+# ---------------
 
-  var
-    curCode = id.onEcsBuiltCode
-
-  if curCode.isNil:
-    curCode = newStmtList()
-
-  curCode.add code
-  id.set_onEcsBuiltCode curCode
-  newStmtList()
-
-
-macro onEcsBuilt*(code: untyped): untyped =
-  ## Includes `code` immediately after makeEcs has finished.
-  ## 
-  ## Useful for initialisations and declaring support routines that use
-  ## the ECS (for example for use within systems).
-
-  var
-    curCode = defaultIdentity.onEcsBuiltCode
-
-  if curCode.isNil:
-    curCode = newStmtList()
-
-  curCode.add code
-  defaultIdentity.set_onEcsBuiltCode curCode
-  newStmtList()
 
 when defined(ecsLogCode):
   proc doStartLog(id: EcsIdentity): NimNode =
@@ -1758,169 +1778,3 @@ macro makeEcs*(options: static[EcsEntityOptions] = ECSEntityOptions()): untyped 
   ## To create the execution procedures for systems, use `commitSystems`.
   defaultIdentity.makeEcs(options)
 
-
-proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
-  result = newStmtList()
-
-  let
-    commitHeader = "for \"" & id.string & "\""
-    logTitle =
-      if procName != "":
-        commitHeader & ", wrapped to proc `" & procName & "()`"
-      else:
-        commitHeader
-
-  when defined(ecsLog) and not defined(ecsLogDetails):
-    echo "Committing systems " & commitHeader
-  
-  id.startOperation "Commit systems " & commitHeader
-
-  let
-    toCommit = id.getUncommitted().toHashSet
-  var
-    order = id.systemOrder()
-    systems = newSeqOfCap[SystemIndex](toCommit.len)
-
-  # `systemOrder` is appended to when the system is first seen by
-  # `defineSystem` or `makeSystem`. All systems should exist in
-  # `systemOrder` before `makeEcs`.
-  #
-  # `toCommit` is the unordered subset of `systemOrder` with system
-  # bodies waiting to be committed.
-
-  for sys in order:
-    if sys in toCommit:
-      # Ignore systems that belong to groups.
-      if id.systemGroups(sys).len == 0:
-        systems.add sys
-  
-  # Add the system body procedures and run proc.
-  result.add id.commitSystemList(systems, procName)
-
-  if id.private:
-    id.ecsBuildOperation "remove exports":
-      result.deExport
-
-  let
-    logCodeComment = "Commit systems " & logTitle & "\n"
-  
-  genLog  "\n# " & logCodeComment &
-          "# " & '-'.repeat(logCodeComment.len - 1) & "\n" &
-          result.repr
-
-  when defined(ecsLogCode):
-    result.add id.flushGenLog(defaultGenLogFilename)
-  
-  id.endOperation
-
-
-macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): untyped =
-  ## This macro outputs uncommitted system execution procedures for
-  ## system bodies defined so far in the specified ECS identity.
-  ## 
-  ## Each system procedure is generated as the system name prefixed with
-  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
-  ## 
-  ## These procedures perform all the non-event actions within
-  ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
-  ## state for this system.
-  ## 
-  ## If `wrapperName` is given, a proc is generated that runs
-  ## uncommitted system execution procedures in the order they've been
-  ## defined.
-  ## 
-  ## System execution can be split into multiple procs by including a
-  ## `commitSystems` after each set of body definitions.
-  ## 
-  ## For more explicit grouping and ordering of systems, see
-  ## `groupSystems`.
-  ## 
-  ## For example:
-  ## 
-  ## .. code-block:: nim
-  ##    import polymorph
-  ##
-  ##    registerComponents(defaultCompOpts):
-  ##      type Foo = object
-  ##
-  ##    defineSystem("a", [Foo])
-  ##    defineSystem("b", [Foo])
-  ##    defineSystem("c", [Foo])
-  ##
-  ##    makeEcs()
-  ##
-  ##    makeSystemBody("a"):
-  ##      start: echo "Running A"
-  ##
-  ##    makeSystemBody("b"):
-  ##      start: echo "Running B"
-  ##
-  ##    commitSystems("runAB")
-  ##
-  ##    makeSystemBody("c"):
-  ##      start: echo "Running C"
-  ##
-  ##    commitSystems("runC")
-  ##
-  id.doCommitSystems(wrapperName)
-
-
-macro commitSystems*(wrapperName: static[string]): untyped =
-  ## This macro outputs uncommitted system execution procedures for
-  ## system bodies defined so far in the default ECS identity.
-  ## 
-  ## Each system procedure is generated as the system name prefixed with
-  ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
-  ## 
-  ## These procedures perform all the non-event actions within
-  ## `makeSystem`, and can be considered "polling" or "ticking" the ECS
-  ## state for this system.
-  ## 
-  ## If `wrapperName` is given, a proc is generated that runs
-  ## uncommitted system execution procedures in the order they've been
-  ## defined.
-  ## 
-  ## System execution can be split into multiple procs by including a
-  ## `commitSystems` after each set of body definitions.
-  ## 
-  ## For more explicit grouping and ordering of systems, see
-  ## `groupSystems`.
-  ## 
-  ## For example:
-  ## 
-  ## .. code-block:: nim
-  ##    import polymorph
-  ##
-  ##    registerComponents(defaultCompOpts):
-  ##      type Foo = object
-  ##
-  ##    defineSystem("a", [Foo])
-  ##    defineSystem("b", [Foo])
-  ##    defineSystem("c", [Foo])
-  ##
-  ##    makeEcs()
-  ##
-  ##    makeSystemBody("a"):
-  ##      start: echo "Running A"
-  ##
-  ##    makeSystemBody("b"):
-  ##      start: echo "Running B"
-  ##
-  ##    commitSystems("runAB")
-  ##
-  ##    makeSystemBody("c"):
-  ##      start: echo "Running C"
-  ##
-  ##    commitSystems("runC")
-  ##
-  defaultIdentity.doCommitSystems(wrapperName)
-
-template makeEcsCommit*(wrapperName: static[string]): untyped =
-  ## Wrap `makeEcs()` and `commitSystems wrapperName`.
-  makeEcs()
-  commitSystems(wrapperName)
-
-template makeEcsCommit*(wrapperName: static[string], entOpts: static[EcsEntityOptions]): untyped =
-  ## Wrap `makeEcs(entOpts)` and `commitSystems wrapperName`.
-  makeEcs(entOpts)
-  commitSystems(wrapperName)

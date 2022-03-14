@@ -45,12 +45,39 @@ template runGroupsAndOrder* {.dirty.} =
   makeSystem("orderF", [TestOrder]):
     all: systemUpdates.add sys.name
 
+  onEcsBuilt:
+    type InitEvent = enum eeAll, eeGroup
+    var initEvents {.inject.}: seq[(InitEvent, string)]
+
+  onEcsCommitAll:
+    # This code is emitted before every commitSystems and commitGroups.
+    if curGroup.len > 0:
+      echo "[ Commit all for group \"" & curGroup & "\" ]"
+      initEvents.add (eeGroup, curGroup)
+    else:
+      echo "[ Commit all ]"
+      initEvents.add (eeAll, "")
+
+  onEcsCommitGroups ["sysGroup1"]:
+    # This is emitted when sysGroup1 is emitted.
+    assert curGroup == "sysGroup1"
+    echo "[ Committing specific group ", curGroup, " ]"
+    initEvents.add (eeGroup, "specific " & curGroup)
+
+  onEcsNextCommit:
+    # This code is emitted once before the next commitSystems, then reset.
+    echo "[ First commitSystems ]"
+    initEvents.add (eeAll, "Next")
+
   makeEcs()
 
   commitGroup("sysGroup1", "runGroup1")
   commitGroup("sysGroup2", "runGroup2")
   commitSystems("runRest")
-
+  
+  # Clear onEcsCommitAll event for any following ECS.
+  clearOnEcsCommitAll()
+  
   let e {.used.} = newEntityWith(TestOrder())
 
   runGroup1()
@@ -58,6 +85,14 @@ template runGroupsAndOrder* {.dirty.} =
   runRest()
 
   suite "Groups and ordering systems":
+    test "Commit events":
+      check initEvents == @[
+        (eeGroup, "sysGroup1"),
+        (eeGroup, "specific sysGroup1"),
+        (eeGroup, "sysGroup2"),
+        (eeAll, "Next"),
+        (eeAll, ""),
+      ]
     test "Check order":
       check systemUpdates ==
         @[

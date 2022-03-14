@@ -343,6 +343,9 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
       checkEvents("construct", EventTest1.addEvents(allSys, {ekConstruct}))
       checkEvents("construct", EventTest2.addEvents(et2, {ekConstruct}))
 
+  # Make sure onEntityChange doesn't affect other ECS created afterwards.
+  clearOnEntityChange()
+  
   flushGenLog()
 
 when isMainModule:
