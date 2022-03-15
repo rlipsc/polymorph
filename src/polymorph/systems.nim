@@ -1857,7 +1857,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
 
   if id.onEcsNextCommitCode.len > 0 or id.onEcsCommitAllCode.len > 0:
     result.add(quote do:
-      template curGroup: string = ""
+      template curGroup: string {.used.} = ""
     )
 
     # User code to run after everything's defined.
@@ -2023,7 +2023,7 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
 
     if commitAny.len > 0 or commitGroup.len > 0:
       result.add(quote do:
-        template curGroup: string = `group`
+        template curGroup: string {.used.} = `group`
       )
 
     result.add commitAny
