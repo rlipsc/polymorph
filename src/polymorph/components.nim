@@ -289,7 +289,7 @@ proc generateTypeStorage*(id: EcsIdentity): NimNode =
     # Generate an array of instance numbers against each component id
     # This allows us to compare an existing instance with a ComponentRef.
     let instanceIdsName = typeNameStr.instanceIdsName
-    storageFields.add genField(instanceIdsName, exportFields, newIdentNode("int32").storageField(supportStorageSize), useThreadVar)
+    storageFields.add genField(instanceIdsName, exportFields, newIdentNode("IdBaseType").storageField(supportStorageSize), useThreadVar)
 
   quote do:
     `storageFields`
