@@ -659,9 +659,11 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
           # Already in the right format.
           tyDef[1].expectKind nnkStmtList
           tyDef[1].expectMinLen 1
-          let
-            valueType = tyDef[1][0]
-            (_, identDef) = parsePublicPragma(tyDef[0], valueType)
+          let valueType = tyDef[1][0]
+          var (_, identDef) = parsePublicPragma(tyDef[0], valueType)
+          
+          if sysOptions.publicFields and identDef[0].kind != nnkPostfix:
+            identDef[0] = postfix(identDef[0], "*")
 
           extraFieldDefs.add(identDef)
     
@@ -677,7 +679,10 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
           else:
             # Try and work out what type we have.
             valueType = value.assignmentType
-          let (ident, identDef) = parsePublicPragma(tyDef[0], valueType)
+          var (ident, identDef) = parsePublicPragma(tyDef[0], valueType)
+
+          if sysOptions.publicFields and identDef[0].kind != nnkPostfix:
+            identDef[0] = postfix(identDef[0], "*")
 
           # Add assignment to the init procedure.
           fieldSetup.add (ident, value)

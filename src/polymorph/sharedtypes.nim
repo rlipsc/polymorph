@@ -87,6 +87,7 @@ type
     assertItem*: bool ## Add asserts to check the system `item` is within bounds.
     orderedRemove*: bool  ## Maintains the execution order when items are removed from groups. This changes deletion from an O(1) to an O(N) operation.
     threading*: ECSSysThreading ## System threading options.
+    publicFields*: bool ## When `true`, fields passed to a system `fields:` block will be automatically exported.
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect
