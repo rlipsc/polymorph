@@ -28,7 +28,7 @@
 ## - Walking system ownership graphs to find dependencies.
 
 import macros, strutils, tables, deques, sequtils, sets, macrocache
-import ../sharedtypes, ecsstatedb, mutationTracking, debugging
+import ../sharedtypes, ecsstatedb, mutationtracking, debugging
 export debugging
 
 
