@@ -551,7 +551,7 @@ genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComp
 # System groups
 genListStates(string, SystemIndex, ["groupSystems"])      # Group to list of systems.
 genListStates(SystemIndex, string, ["systemGroups"])      # System to list of groups.
-genListStates(string, NimNode, ["onEcsCommitGroupCode"])  # Code to include before this group is commited.
+genListStates(string, NimNode, ["onEcsCommitGroupCode"])  # Code to include before this group is committed.
 
 # System options
 genItemStates(SystemIndex, int, ["maxEntities"])
@@ -632,9 +632,16 @@ genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromS
 # Global events
 #--------------
 
-genGlobalStates(NimNode, ["onEntityStateChange"])
 genGlobalStates(bool, ["private"])
-genGlobalStates(NimNode, ["ecsCurrentOperation", "onEcsBuiltCode", "onEcsNextCommitCode", "onEcsCommitAllCode"])
+genGlobalStates(NimNode, [
+  "onEntityStateChange",
+  "ecsCurrentOperation",
+  "onEcsBuiltCode",
+  "onEcsNextCommitCode",
+  "onEcsCommitAllCode",
+  "ecsMakeImports",
+  "ecsCommitImports"]
+)
 
 #--------------------
 # Root objects <-> DB
