@@ -581,9 +581,6 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
       of upCustom:
         error errPre & "cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
 
-  when defined(ecsLog) or defined(ecsLogDetails):
-    echo "Defining body for system \"", sysName, "\" with types [", componentTypesStr, "]"
-
   for typeId in passedComponentIds:
     let
       curOwner = id.systemOwner typeId
@@ -599,7 +596,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   let sourceLoc = componentTypes.lineInfo
 
   when defined(ecsLog) or defined(ecsLogDetails):
-    echo "[ System generation for \"" & sysName & "\" " & sourceLoc & " ]"
+    echo "[ System generation for \"" & sysName & "\" [" & componentTypesStr & "] " & sourceLoc & " ]"
 
   when defined(ecsLogDetails):
     echo "System \"", sysName, "\" options:\n", sysOptions.repr, "\n"
@@ -1293,7 +1290,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     when defined(ecsLog) or defined(ecsLogDetails):
       echo "Adding body to pre-defined system \"", name, "\" with types [",
-        id.commaSeparate(expectedTypes), "]"
+        id.commaSeparate(expectedTypes), "] " & systemBody.lineInfo
   
   else:
     # This is an inline makeSystem.
