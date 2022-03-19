@@ -432,15 +432,19 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
 
     proc construct*(`construction`: ConstructionTemplate): seq[EntityRef] =
       ## Constructs multiple entities and returns their entity ids.
-      ## The first entity in the list is passed to the others as the "context".
+      ## 
+      ## The first entity in the list is passed to the others as the `context`.
       ## This same entity is also passed to each individual component's constructor,
       ## this allows components to have some reference to their construction environment.
+      ## 
       ## For example, the first entity can contain a physics body component that others may
       ## reference.
-      ## No other structure is assumed, and the meaning of 'context' is defined by the user.
+      ## 
+      ## No other structure is assumed, and the meaning of `context` is defined by the user.
       ## Components are constructed in order, calling manual construction code per type,
       ## then a second pass calls post construction procs with reference to the completed component
       ## lists.
+      ## 
       ## Post construction procs are fed the fully constructed entity and its existing component,
       ## along with the rest of the constructed entities in this template.
       ## This allows fetching components to read/modify initialised values.
@@ -472,10 +476,14 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
 
     proc clone*(entity: EntityRef): EntityRef =
       ## Copy an entity's components to a new entity.
+      ## 
       ## Note that copying objects with pointers/references can have undesirable results.
+      ## 
       ## For special setup, use `registerCloneConstructor` for the type. This gets passed
-      ## the clone type it would have added. You can then add a modified component or 
-      ## entirely different set of components, or ignore it by not adding anything.
+      ## the clone type it would have added.
+      ## 
+      ## You can then add a modified component or entirely different set
+      ## of components, or ignore it by not adding anything.
 
       let `entity` = entity
       assert `entity`.alive, "Cloning a dead entity"

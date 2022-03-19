@@ -158,7 +158,7 @@ template hostEntity* {.pragma.}
 type
   # Base type for all ids.
   IdBaseType* = int32
-  ## Index representing a system.
+  # Index representing a system.
   SystemIndex* = distinct int
 
   EntityId* = distinct IdBaseType
