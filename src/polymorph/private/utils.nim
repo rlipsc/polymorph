@@ -1521,7 +1521,7 @@ proc populated*(node: NimNode): bool =
     else:
       return true
 
-proc unpack*(node: var NimNode, source: NimNode) =
+proc unpack*(node: NimNode, source: NimNode) =
   ## Adds `source` to `node`, unpacking from nnkStmtList if required.
   node.expectKind nnkStmtList
   
@@ -1952,3 +1952,137 @@ proc deExport*(code: var NimNode, suppressUnusedHints = true) =
     code.add(quote do:
       {.pop.}
     )
+
+
+# ---------------
+# Import handling
+# ---------------
+
+
+proc leafFromImport(node: NimNode): NimNode =
+  case node.kind
+    of nnkIdent:
+      node          # Single module.
+    of nnkInfix:
+      leafFromImport(node[^1])
+    of nnkPrefix:
+      leafFromImport(node[^1])
+    of nnkBracket:  # Multiple modules.
+      node
+    else:
+      nil
+
+   
+template getFilename(str: string): string =
+  let dirSep1 = str.rFind('/')
+  if dirSep1 > -1:
+    if dirSep1 == str.high:
+      let dirSep2 = str.rFind('/', last = str.high - 1)
+      if dirSep2 > -1:
+        if dirSep1 - dirSep2 < 1: error "ecsImport: cannot read '//' in " & str
+        str[dirSep2 + 1 ..< dirSep1]
+      else:
+        str[0 ..< dirSep1]
+    else:
+      str[dirSep1 + 1 .. ^1]
+  else:
+    str
+
+
+template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
+  ## Appends a list of `modules`for `import` to the state controlled by `access`.
+  ## The call site path is stored along with.
+  if ecsId.private:
+    warning "Trying to register imports when the ECS is configured for a private scope (e.g., " & string(ecsId) & ".set_private = true)", modules
+
+  var curImports = ecsId.access
+  if curImports.isNil:
+    curImports = nnkImportStmt.newTree()
+  let li = modules.lineInfoObj
+  var callSitePath = li.filename
+
+  let
+    importSep = '/'
+    backSep = '\\'
+  template found(v: int): bool = v > -1
+
+  # Find OS directory separator from 'lineInfo'.
+  var parentSep = callSitePath.rFind backSep
+  let
+    dirSep =
+      if found(parentSep): backSep
+      else:
+        parentSep = callSitePath.rFind importSep
+        importSep
+    
+  if not parentSep.found:
+    error "ecsImport: cannot find a '\\' or '/' separator from the call site: '" & callSitePath & "'"
+  
+  callSitePath = callSitePath[0 .. parentSep]
+  callSitePath = callSitePath.replace " "
+  if dirSep != importSep:
+    callSitePath = callSitePath.replace(dirSep, importSep)
+
+  template unique(p, m): bool =
+    curImports.findChild(
+      it.kind == nnkBracket and
+      it[0].strVal.cmpIgnoreStyle(p) == 0 and
+      it[1] == m
+    ).isNil
+
+  # Import statements bind their location to the macro source.
+  for i, node in modules:
+    let leaf = leafFromImport(node)
+    if leaf.kind == nnkBracket and leaf.len > 0:
+      for m in leaf:
+        if unique(callSitePath, m):
+          # Isolate branch as a separate import.
+          var branch = node
+          branch.del branch.len - 1
+          branch.add m
+          curImports.add nnkBracket.newTree(newLit callSitePath, branch.copy)
+    else:
+      if unique(callSitePath, node):
+        curImports.add nnkBracket.newTree(newLit callSitePath, node.copy)
+
+  ecsId.`set access` curImports
+
+
+proc addConditionalImport*(node: NimNode, id: EcsIdentity, access: proc) =
+  ## Creates conditional import statements from the node given by
+  ## the `access` proc.
+  node.expectKind nnkStmtList
+
+  if access(id).len > 0:
+    const doLog = defined(ecsLog) or defined(ecsLogDetails)
+    when doLog:
+      var importStr: string
+    
+    template notDeclared(ndNode: NimNode): NimNode =
+      prefix(newPar(newCall(ident"declared", ndNode)), "not")
+
+    for moduleNode in access(id):
+      moduleNode.expectKind nnkBracket
+      let
+        (callSite, given) = (moduleNode[0].strVal, moduleNode[1].copy)
+        givenStr = given.repr.replace(" ")
+        localStr = newLit callSite & givenStr
+        module = ident givenStr.getFilename
+        cond = notDeclared(module)
+
+      node.add(quote do:
+        when `cond`:
+          when(compiles do: import `localStr`):
+            import `localStr`
+          else:
+            import `given`
+      )
+
+      when doLog:
+        if importStr.len == 0: importStr = given.repr
+        else: importStr &= ", " & given.repr
+
+    when doLog:
+      if importStr.len > 0:
+        echo "[ Adding imports for: ", importStr, " ]"
+    

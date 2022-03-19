@@ -1717,15 +1717,6 @@ template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
 # ----------------------------
 
 
-template append(id: EcsIdentity, accessProc: untyped, code: NimNode) =
-  # Helper for appending to NimNode DB entries.
-  var curCode = accessProc(id)
-  if curCode.isNil:
-    curCode = newStmtList()
-  curCode.add code
-  id.`set accessProc` curCode
-
-
 macro onEcsNextCommitId*(id: static[EcsIdentity], code: untyped): untyped =
   ## Includes `code` immediately before `commitSystems` starts.
   ## 
@@ -1734,7 +1725,7 @@ macro onEcsNextCommitId*(id: static[EcsIdentity], code: untyped): untyped =
   ## 
   ## This code is cleared for the identity after the nest `commitSystems`
   ## has run.
-  id.append onEcsNextCommitCode, code
+  id.append_onEcsNextCommitCode code
   newStmtList()
 
 
@@ -1746,7 +1737,7 @@ macro onEcsNextCommit*(code: untyped): untyped =
   ## 
   ## This code is cleared for the identity after the nest `commitSystems`
   ## has run.
-  defaultIdentity.append onEcsNextCommitCode, code
+  defaultIdentity.append_onEcsNextCommitCode code
   newStmtList()
 
 
@@ -1755,7 +1746,7 @@ macro onEcsCommitAllId*(id: static[EcsIdentity], code: untyped): untyped =
   ## identity.
   ## 
   ## To clear this event, use `clearOnEcsCommitAll`.
-  id.append onEcsCommitAllCode, code
+  id.append_onEcsCommitAllCode code
   newStmtList()
 
 
@@ -1764,7 +1755,7 @@ macro onEcsCommitAll*(code: untyped): untyped =
   ## default identity.
   ## 
   ## To clear this event, use `clearOnEcsCommitAll`.
-  defaultIdentity.append onEcsCommitAllCode, code
+  defaultIdentity.append_onEcsCommitAllCode code
   newStmtList()
 
 
@@ -1785,6 +1776,22 @@ macro onEcsCommitGroups*(groups: static[openarray[string]], code: untyped): unty
   ## commits of this group will emit `code` preceding the group's system code.
   for group in groups:
     defaultIdentity.add_onEcsCommitGroupCode group, code
+  newStmtList()
+
+
+macro onEcsNextGroupCommitId*(id: static[EcsIdentity], code: untyped): untyped =
+  ## Inserts `code` before the output of the next `commitGroup` for any group.
+  ## 
+  ## This code is cleared after `commitGroup` has run.
+  id.append_onEcsNextGroupCommitCode code
+  newStmtList()
+
+
+macro onEcsNextGroupCommit*(code: untyped): untyped =
+  ## Inserts `code` before the output of the next `commitGroup` for any group.
+  ## 
+  ## This code is cleared after `commitGroup` has run.
+  defaultIdentity.append_onEcsNextGroupCommitCode code
   newStmtList()
 
 
@@ -1814,6 +1821,25 @@ macro clearOnEcsCommitAll*: untyped =
   newStmtList()
 
 
+# ---------------------
+# Commit import control
+# ---------------------
+
+
+macro ecsImportCommitId*(id: static[EcsIdentity], modules: varargs[untyped]): untyped =
+  ## Emits an import statement including `modules` before `commitSystems`.
+  ## Duplicate modules are ignored.
+  ecsImportImpl(id, ecsCommitImports, modules)
+  newStmtList()
+
+
+macro ecsImportCommit*(modules: varargs[untyped]): untyped =
+  ## Emits an import statement including `modules` before `commitSystems`.
+  ## Duplicate modules are ignored.
+  ecsImportImpl(defaultIdentity, ecsCommitImports, modules)
+  newStmtList()
+
+
 # ------------------
 # Committing systems
 # ------------------
@@ -1837,6 +1863,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
 
   let
     toCommit = id.getUncommitted().toHashSet
+    hasCommitEvents = id.onEcsNextCommitCode.len > 0 or id.onEcsCommitAllCode.len > 0
   var
     order = id.systemOrder()
     systems = newSeqOfCap[SystemIndex](toCommit.len)
@@ -1855,21 +1882,22 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
       if id.systemGroups(sys).len == 0:
         systems.add sys
 
-  if id.onEcsNextCommitCode.len > 0 or id.onEcsCommitAllCode.len > 0:
+  result.addConditionalImport id, ecsCommitImports
+
+  if hasCommitEvents:
     result.add(quote do:
-      template curGroup: string {.used.} = ""
+      template group: string {.used.} = ""
+      template context: CommitContext {.used.} = ccCommitSystems
     )
 
-    # User code to run after everything's defined.
+    if id.onEcsCommitAllCode.len > 0:
+      result.add id.onEcsCommitAllCode.copy
+  
     if id.onEcsNextCommitCode.len > 0:
       result.add id.onEcsNextCommitCode.copy
       # Clear the code for the next commit.
       id.set_onEcsNextCommitCode newStmtList()
 
-    if id.onEcsCommitAllCode.len > 0:
-      result.add id.onEcsCommitAllCode.copy
-      # This code should not be cleared.
-  
   # Add the system body procedures and run proc.
   result.add id.commitSystemList(systems, procName)
 
@@ -2017,18 +2045,31 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
   if systems.len == 0:
     error "No system bodies defined for group \"" & group & "\""
   else:
+    
+    result.addConditionalImport id, ecsCommitImports
+
     let
       commitAny = id.onEcsCommitAllCode.copy
       commitGroup = id.onEcsCommitGroupCode group
+      commitGroupNext = id.onEcsNextGroupCommitCode
 
-    if commitAny.len > 0 or commitGroup.len > 0:
+    if commitAny.len > 0 or commitGroup.len > 0 or commitGroupNext.len > 0:
       result.add(quote do:
-        template curGroup: string {.used.} = `group`
+        template group: string {.used.} = `group`
+        template context: CommitContext {.used.} = ccCommitGroup
       )
 
-    result.add commitAny
-    for n in commitGroup:
-      result.add n.copy
+    if commitAny.len > 0:
+      result.add commitAny
+    
+    if commitGroup.len > 0:
+      for n in commitGroup:
+        result.add n.copy
+    
+    if commitGroupNext.len > 0:
+      result.add commitGroupNext
+      # Clear this event after use.
+      id.set_onEcsNextGroupCommitCode newStmtList()
 
     result.add id.commitSystemList(systems, runProc)
   

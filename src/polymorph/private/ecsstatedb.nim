@@ -401,6 +401,7 @@ macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]):
       getItem = ident itemStr
       setItem = ident "set" & itemStr
       value = ident "value"
+      isNimNode = accessNode.isNil
 
       # NOTE: Calling another generated access procs within this quote
       # statement may cause the key to be duplicated and therefore incorrect.
@@ -441,6 +442,21 @@ macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]):
         `key`.add `writeNode`
         {.pop.}
     )
+
+    if isNimNode:
+      # Helper for appending code to NimNode states.
+      let appendItem = ident "append" & itemStr
+
+      result.add(quote do:
+        proc `appendItem`*(`id`: EcsIdentity, `value`: `itemType`) {.compileTime.} =
+          {.push hint[ConvFromXtoItselfNotNeeded]: off.}
+          var curNode = `readNode`
+          if curNode.isNil:
+            curNode = newStmtList()
+          curNode.add `value`
+          `key`.add curNode
+          {.pop.}
+      )
 
 macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string]]): untyped =
   ## Creates typed CacheSeq access procs for each item in `listNames`.
@@ -628,19 +644,24 @@ genLookupListStates(SystemIndex, ComponentTypeId, NimNode, ["onAddToCode", "onRe
 # component.
 genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromSystemComp"])
 
-#--------------
-# Global events
-#--------------
+#------------------------
+# Global events and state
+#------------------------
 
 genGlobalStates(bool, ["private"])
-genGlobalStates(NimNode, [
-  "onEntityStateChange",
-  "ecsCurrentOperation",
-  "onEcsBuiltCode",
-  "onEcsNextCommitCode",
-  "onEcsCommitAllCode",
-  "ecsMakeImports",
-  "ecsCommitImports"]
+genGlobalStates(NimNode,
+  [
+    "ecsCurrentOperation",
+
+    "onEntityStateChange",
+    "onEcsBuildingCode",
+    "onEcsBuiltCode",
+    "onEcsCommitAllCode",
+    "onEcsNextCommitCode",
+    "onEcsNextGroupCommitCode",
+    "ecsMakeEcsImports",
+    "ecsCommitImports"
+  ]
 )
 
 #--------------------

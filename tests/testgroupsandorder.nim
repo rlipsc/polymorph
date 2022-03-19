@@ -45,39 +45,54 @@ template runGroupsAndOrder* {.dirty.} =
   makeSystem("orderF", [TestOrder]):
     all: systemUpdates.add sys.name
 
-  onEcsBuilt:
+  onEcsBuilding:
+    # The code is injected before the output of makeEcs.
+    when defined(ecsLog):
+      echo "[ Started makeEcs build ]"
+
     type InitEvent = enum eeAll, eeGroup
     var initEvents {.inject.}: seq[(InitEvent, string)]
+    initEvents.add (eeAll, "Building")
+
+  onEcsBuilt:
+    # This code is added after makeEcs has created a usable ECS.
+    # System variables are updated but their run procedures have yet to be created.
+    initEvents.add (eeAll, "Built")
+
+  template eventStr: untyped =
+    $context & (if group.len > 0: " " & group else: "")    
 
   onEcsCommitAll:
     # This code is emitted before every commitSystems and commitGroups.
-    if curGroup.len > 0:
+    block:
+      let str = "Commit all - " & eventStr
       when defined(ecsLog):
-        echo "[ Commit all for group \"" & curGroup & "\" ]"
-      initEvents.add (eeGroup, curGroup)
-    else:
-      when defined(ecsLog):
-        echo "[ Commit all ]"
-      initEvents.add (eeAll, "")
+        echo "[ ", str, " ]"
+      initEvents.add (eeAll, str)
 
-  onEcsCommitGroups ["sysGroup1"]:
-    # This is emitted when sysGroup1 is emitted.
-    assert curGroup == "sysGroup1"
+  onEcsNextGroupCommit:
     when defined(ecsLog):
-      echo "[ Committing specific group ", curGroup, " ]"
-    initEvents.add (eeGroup, "specific " & curGroup)
+      echo "[ First commitGroup - " & eventStr & " ]"
+    initEvents.add (eeGroup, "NextGroup")
 
   onEcsNextCommit:
-    # This code is emitted once before the next commitSystems, then reset.
+    # This code is emitted once before the next commitSystems.
     when defined(ecsLog):
-      echo "[ First commitSystems ]"
+      echo "[ First commitSystems - " & eventStr & " ]"
     initEvents.add (eeAll, "Next")
+
+  onEcsCommitGroups ["sysGroup1"]:
+    # This is emitted only when sysGroup1 is emitted.
+    assert group == "sysGroup1"
+    when defined(ecsLog):
+      echo "[ Specific group - ", eventStr, " ]"
+    initEvents.add (eeGroup, "Commit specific - " & group)
 
   makeEcs()
 
-  commitGroup("sysGroup1", "runGroup1")
-  commitGroup("sysGroup2", "runGroup2")
-  commitSystems("runRest")
+  commitGroup("sysGroup1", "runGroup1") # Expected: onEcsCommitAll, onEcsNextGroupCommit, onEcsCommitGroups.
+  commitGroup("sysGroup2", "runGroup2") # Expected: onEcsCommitAll, onEcsCommitGroups.
+  commitSystems("runRest")              # Expected: onEcsCommitAll, onEcsNextCommit
   
   # Clear onEcsCommitAll event for any following ECS.
   clearOnEcsCommitAll()
@@ -90,12 +105,16 @@ template runGroupsAndOrder* {.dirty.} =
 
   suite "Groups and ordering systems":
     test "Commit events":
+      # Commit events are in widest to smallest scope.
       check initEvents == @[
-        (eeGroup, "sysGroup1"),
-        (eeGroup, "specific sysGroup1"),
-        (eeGroup, "sysGroup2"),
+        (eeAll, "Building"),
+        (eeAll, "Built"),
+        (eeAll, "Commit all - ccCommitGroup sysGroup1"),
+        (eeGroup, "Commit specific - sysGroup1"),
+        (eeGroup, "NextGroup"),
+        (eeAll, "Commit all - ccCommitGroup sysGroup2"),
+        (eeAll, "Commit all - ccCommitSystems"),
         (eeAll, "Next"),
-        (eeAll, ""),
       ]
     test "Check order":
       check systemUpdates ==

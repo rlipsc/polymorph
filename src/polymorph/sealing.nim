@@ -15,8 +15,7 @@
 # limitations under the License.
 
 
-import
-  macros, sharedtypes, private/[utils, ecsstatedb, eventutils]
+import macros, sharedtypes, private/[utils, ecsstatedb, eventutils]
 import components, entities, statechanges, runtimeconstruction
 import tables, strutils, stats, sets
 
@@ -35,36 +34,75 @@ export
 
 
 macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
-  ## Includes `code` immediately after makeEcs has finished.
+  ## Includes `code` immediately after `makeEcs` has finished.
   ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
 
-  var
-    curCode = id.onEcsBuiltCode
-
+  var curCode = id.onEcsBuiltCode
   if curCode.isNil:
     curCode = newStmtList()
-
   curCode.add code
   id.set_onEcsBuiltCode curCode
   newStmtList()
 
 
 macro onEcsBuilt*(code: untyped): untyped =
-  ## Includes `code` immediately after makeEcs has finished.
+  ## Includes `code` immediately after `makeEcs` has finished.
   ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
 
-  var
-    curCode = defaultIdentity.onEcsBuiltCode
-
+  var curCode = defaultIdentity.onEcsBuiltCode
   if curCode.isNil:
     curCode = newStmtList()
-
   curCode.add code
   defaultIdentity.set_onEcsBuiltCode curCode
+  newStmtList()
+
+
+macro onEcsBuildingId*(id: static[EcsIdentity], code: untyped) =
+  ## Inserts `code` at the start of `makeEcs` output.
+  ## 
+  ## Useful for initialisations and declaring support routines that are
+  ## used to compile the ECS (for example for use within inline events).
+
+  id.append_onEcsBuildingCode code
+  newStmtList()
+
+
+macro onEcsBuilding*(code: untyped) =
+  ## Inserts `code` at the start of `makeEcs` output.
+  ## 
+  ## Useful for initialisations and declaring support routines that are
+  ## used to compile the ECS (for example for use within inline events).
+  defaultIdentity.append_onEcsBuildingCode code
+  newStmtList()
+
+
+# --------------
+# Import control
+# --------------
+
+
+macro ecsImportId*(id: static[EcsIdentity], modules: varargs[untyped]): untyped =
+  ## Emits `import modules` when `makeEcs` runs.
+  ## 
+  ## The paths in `modules` are first tried relative to the call site of
+  ## `ecsImportId` before being tried relative to `makeEcs`.
+  ## 
+  ## Duplicate modules are ignored.
+  ecsImportImpl(id, ecsMakeEcsImports, modules)
+  newStmtList()
+
+
+macro ecsImport*(modules: varargs[untyped]): untyped =
+  ## Emits an import statement including `modules` before `makeEcs`.
+  ## Duplicate modules are ignored.
+  ## 
+  ## The parameter `modules` are given relative to the call site of `ecsImport`,
+  ## not the call site of `makeEcs`.
+  ecsImportImpl(defaultIdentity, ecsMakeEcsImports, modules)
   newStmtList()
 
 
@@ -1621,6 +1659,13 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   id.debugMessage "Building ECS \"" & id.string & "\""
 
   result = newStmtList()
+  
+  # Include `ecsImport` statements.
+  result.addConditionalImport id, ecsMakeEcsImports
+  
+  # Include onEcsBuilding event.
+  if id.onEcsBuildingCode.len > 0:
+    result.add id.onEcsBuildingCode
 
   when defined(ecsLogCode):
     result.add id.doStartLog()
@@ -1748,7 +1793,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     id.ecsBuildOperation "generate makeEcs() log":
       genLog("\n# makeEcs() code generation output:\n" & result.repr)
       result.add id.flushGenLog(defaultGenLogFilename)
-  
+
   when defined(ecsLog) or defined(ecsLogDetails):
     echo "ECS \"" & id.string & "\" built."
 

@@ -196,7 +196,9 @@ type
     ekRowAddedCB =        "addedCallback",
     ekRowRemovedCB =      "removedCallback",
 
-  # TODO: this could be minimised to bytes as the set size is.
+  CommitContext* = enum ccCommitSystems, ccCommitGroup
+
+  # TODO: this could be minimised to bytes like the set size.
   ComponentTypeIDBase* = uint16
   ComponentTypeId* = distinct ComponentTypeIDBase
 
