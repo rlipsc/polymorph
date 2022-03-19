@@ -718,7 +718,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   id.add_ecsSysDefined sysIndex
 
   if id.private:
-    result.deExport
+    result = result.deExport
 
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
@@ -1903,7 +1903,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
 
   if id.private:
     id.ecsBuildOperation "remove exports":
-      result.deExport
+      result = result.deExport
 
   let
     logCodeComment = "Commit systems " & logTitle & "\n"
@@ -2074,7 +2074,7 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
     result.add id.commitSystemList(systems, runProc)
   
     if id.private:
-      result.deExport
+      result = result.deExport
 
   genLog "# Commit group \"" & group & "\"", result.repr
 

@@ -200,7 +200,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   result.add afterComponentDef  # 'Component' descendant types and utility templates.
 
   if id.private:
-    result.deExport
+    result = result.deExport
 
   genLog("\n# Register components:\n" & result.repr)  
 

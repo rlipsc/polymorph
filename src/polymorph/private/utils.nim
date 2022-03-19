@@ -1888,6 +1888,19 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
 # --------------
 
 
+proc unType(node: NimNode): NimNode =
+  case node.kind:
+  of {nnkIdent, nnkSym}:
+    return ident(node.strVal)
+  else:
+    if result.len > 0:
+      result = node.kind.newTree()
+      for child in node:
+        result.add unType(child)
+    else:
+      return node.copy
+
+
 template isExport(n: NimNode): bool =
   if n.kind == nnkPostFix and n[0].kind == nnkIdent and n[0].strVal == "*":
     true
@@ -1904,52 +1917,50 @@ proc remExport(node: NimNode, id: int) =
       node[id] = node[id][1]
 
 
-proc deExport*(code: var NimNode, suppressUnusedHints = true) =
+proc deExport*(code: NimNode, suppressUnusedHints = true): NimNode =
   ## Removes top level export markers from templates, procs, funcs,
   ## macros, and var, let, and const sections.
+
+  result = unType(code)
 
   let hasCode = code.populated
 
   if suppressUnusedHints and hasCode:
-    code.insert(0, quote do:
+    result.insert(0, quote do:
       {.push used.}
     )
 
-  for i in 0 ..< code.len:
+  for i in 0 ..< result.len:
 
     # Unpack postfix export markers in place.
 
-    case code[i].kind
+    case result[i].kind
 
       of nnkProcDef, nnkTemplateDef, nnkIteratorDef, nnkMethodDef, nnkFuncDef, nnkMacroDef:
-        if code[i][0].isExport:
-          code[i][0] = code[i][0][1]
+        if result[i][0].isExport:
+          result[i][0] = result[i][0][1]
 
       of nnkWhenStmt:
-        for def in 0 ..< code[i].len:
-          if code[i][def].kind in [nnkElifBranch]:
-            code[i][def][1].expectKind nnkStmtList
-            var temp = code[i][def][1]
-            temp.deExport
-            code[i][def][1] = temp
+        for def in 0 ..< result[i].len:
+          if result[i][def].kind in [nnkElifBranch]:
+            result[i][def][1].expectKind nnkStmtList
+            result[i][def][1] = result[i][def][1].deExport
 
       of nnkConstSection, nnkLetSection, nnkVarSection, nnkTypeSection:
-        for def in 0 ..< code[i].len:
-          if code[i][def].kind in [nnkConstDef, nnkIdentDefs, nnkTypeDef, nnkElifBranch]:
-            for id in 0 ..< code[i][def].len:
-              code[i][def].remExport id
+        for def in 0 ..< result[i].len:
+          if result[i][def].kind in [nnkConstDef, nnkIdentDefs, nnkTypeDef, nnkElifBranch]:
+            for id in 0 ..< result[i][def].len:
+              result[i][def].remExport id
 
       of nnkStmtList:
-        var temp = code[i]
         # Only the top level should push and pop {.used.}.
-        temp.deExport(suppressUnusedHints = false)
-        code[i] = temp
+        result[i] = result[i].deExport(suppressUnusedHints = false)
 
       else:
         discard
 
   if suppressUnusedHints and hasCode:
-    code.add(quote do:
+    result.add(quote do:
       {.pop.}
     )
 

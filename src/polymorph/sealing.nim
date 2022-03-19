@@ -1785,7 +1785,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
 
   if id.private:
     id.ecsBuildOperation "remove exports":
-      result.deExport
+      result = result.deExport
   
   id.set_onEcsBuiltCode newStmtList()
 
