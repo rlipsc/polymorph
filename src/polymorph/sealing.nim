@@ -509,6 +509,13 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       componentId.caseComponent:
         `res` = `compName`() & " (" & `strOp`(int(componentId)) & ")"
 
+    proc `strOp`*(componentIds: seq[ComponentTypeId]): string =
+      ## Display the name and id for a list of component types.
+      if componentIds.len > 0:
+        `res` = `strOp`(componentIds[0])
+      for i in 1 ..< componentIds.len:
+        `res` &= ", " & `strOp`(componentIds[i])
+
     func typeName*(componentId: ComponentTypeId): string = 
       componentId.caseComponent:
         `res` = `compName`()
