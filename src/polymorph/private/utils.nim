@@ -2034,10 +2034,9 @@ template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
   if dirSep != importSep:
     callSitePath = callSitePath.replace(dirSep, importSep)
 
-  template unique(p, m): bool =
+  template unique(m): bool =
     curImports.findChild(
       it.kind == nnkBracket and
-      it[0].strVal.cmpIgnoreStyle(p) == 0 and
       it[1] == m
     ).isNil
 
@@ -2046,14 +2045,14 @@ template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
     let leaf = leafFromImport(node)
     if leaf.kind == nnkBracket and leaf.len > 0:
       for m in leaf:
-        if unique(callSitePath, m):
+        if unique(m):
           # Isolate branch as a separate import.
           var branch = node
           branch.del branch.len - 1
           branch.add m
           curImports.add nnkBracket.newTree(newLit callSitePath, branch.copy)
     else:
-      if unique(callSitePath, node):
+      if unique(node):
         curImports.add nnkBracket.newTree(newLit callSitePath, node.copy)
 
   ecsId.`set access` curImports
