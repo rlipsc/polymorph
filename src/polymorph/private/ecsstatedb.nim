@@ -340,6 +340,7 @@ macro genItemStates(indexType, itemType: typedesc, itemNames: static[openarray[s
       getItem = ident itemStr
       setItem = ident "set" & itemStr
       value = ident "value"
+      isNimNode = accessNode.isNil
 
       # NOTE: Calling another generated access procs within this quote
       # statement may cause the key to be duplicated and therefore incorrect.
@@ -382,6 +383,22 @@ macro genItemStates(indexType, itemType: typedesc, itemNames: static[openarray[s
         `key`.add `writeNode`
         {.pop.}
     )
+
+    if isNimNode:
+      # Helper for appending code to NimNode states.
+      let appendItem = ident "append" & itemStr
+
+      result.add(quote do:
+        proc `appendItem`*(`id`: EcsIdentity, `param`: `indexType`, `value`: `itemType`) {.compileTime.} =
+          {.push hint[ConvFromXtoItselfNotNeeded]: off.}
+          var curNode = `readNode`
+          if curNode.isNil:
+            curNode = newStmtList()
+          curNode.add `value`
+          `key`.add curNode
+          {.pop.}
+      )
+
 
 macro genGlobalStates(itemType: typedesc, itemNames: static[openarray[string]]): untyped =
   ## Creates typed CacheSeq access procs for each item in `itemNames`.
@@ -482,6 +499,7 @@ macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string
       listLen = ident "len" & cList
       value = ident "value"
       item = ident "item"
+      listAccess = ident "cacheSeq" & cList
 
       readNode =
         if nodeGet != nil:
@@ -517,6 +535,8 @@ macro genGlobalListStates(itemType: typedesc, listNames: static[openarray[string
 
       proc `listLen`*(`id`: EcsIdentity): Natural {.compileTime.} =
         `key`.len
+
+      proc `listAccess`*(`id`: EcsIdentity): CacheSeq {.compileTime.} = `key`
 
       proc `listAppend`*(`id`: EcsIdentity, `value`: `itemType`) {.compileTime.} =
         `key`.add `writeNode`
@@ -561,13 +581,14 @@ genItemStates(ComponentTypeId, EcsCompInvalidAccess, ["invalidAccess"])
 
 # System properties
 genItemStates(SystemIndex, bool, ["sealed", "useThreadVar", "bodyDefined"])
-genItemStates(SystemIndex, NimNode, ["instantiation", "definition", "extraFields"])
+genItemStates(SystemIndex, NimNode, ["instantiation", "ecsSysBodyDefinition", "extraFields"])
 genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents", "ecsSysNegations"])
+genItemStates(SystemIndex, NimNode, ["ecsDeferredSysDef", "onEcsCommitSystemCode"])
 
 # System groups
 genListStates(string, SystemIndex, ["groupSystems"])      # Group to list of systems.
 genListStates(SystemIndex, string, ["systemGroups"])      # System to list of groups.
-genListStates(string, NimNode, ["onEcsCommitGroupCode"])  # Code to include before this group is committed.
+genListStates(string, NimNode, ["onEcsCommitGroupCode"])
 
 # System options
 genItemStates(SystemIndex, int, ["maxEntities"])
@@ -575,13 +596,13 @@ genItemStates(SystemIndex, ECSSysStorage, ["storageFormat"])
 genItemStates(SystemIndex, ECSSysIndexFormat, ["indexFormat"])
 genItemStates(SystemIndex, ECSSysTimings, ["timings"])
 genItemStates(SystemIndex, ECSSysEcho, ["echoRunning"])
-genItemStates(SystemIndex, bool, ["assertItem"])
-genItemStates(SystemIndex, bool, ["orderedRemove"])
+genItemStates(SystemIndex, bool, ["assertItem", "orderedRemove"])
 genItemStates(SystemIndex, ECSSysThreading, ["threading"])
+genItemStates(SystemIndex, ECSSysDefCommit, ["ecsSysCommitInstance"])
 
 # Source locations
 genItemStates(SystemIndex, string, ["ecsSystemSourceLoc", "ecsSystemBodySourceLoc"])
-genGlobalStates(string, ["ecsMakeEcsSourceLoc"])
+genGlobalStates(string, ["ecsMakeEcsSourceLoc", "ecsSystemDeleteLoc", "ecsSystemRemoveLoc"])
 
 # Current build info
 genGlobalListStates(ComponentTypeId, [
@@ -649,6 +670,7 @@ genListStates(SystemIndex, ComponentTypeId, ["onAddToSystemComp", "onRemoveFromS
 #------------------------
 
 genGlobalStates(bool, ["private"])
+genGlobalStates(string, ["ecsDefineSystemsAsGroup", "ecsCodeLogFilename"])
 genGlobalStates(NimNode,
   [
     "ecsCurrentOperation",
@@ -660,7 +682,9 @@ genGlobalStates(NimNode,
     "onEcsNextCommitCode",
     "onEcsNextGroupCommitCode",
     "ecsMakeEcsImports",
-    "ecsCommitImports"
+    "ecsCommitImports",
+    "ecsMakeEcsImportFrom",
+    "ecsCommitImportFrom",
   ]
 )
 
@@ -972,6 +996,7 @@ proc setOptions*(id: EcsIdentity, sysId: SystemIndex, opts: ECSSysOptions) =
   id.set_assertItem(sysId, opts.assertItem)
   id.set_orderedRemove(sysId, opts.orderedRemove)
   id.set_threading(sysId, opts.threading)
+  id.set_ecsSysCommitInstance(sysId, opts.commit)
 
 proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.maxEntities = id.maxEntities(sysId)
@@ -983,3 +1008,4 @@ proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.assertItem = id.assertItem(sysId)
   result.orderedRemove = id.orderedRemove(sysId)
   result.threading = id.threading(sysId)
+  result.commit = id.ecsSysCommitInstance(sysId)

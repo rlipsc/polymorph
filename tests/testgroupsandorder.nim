@@ -4,11 +4,27 @@ template runGroupsAndOrder* {.dirty.} =
       TestOrder = object
 
   # defineSystem sets order.
+  const
+    sOptsIP = ECSSysOptions(commit: sdcInPlace)
+    sOptsDM = ECSSysOptions(commit: sdcDeferMakeEcs)
 
-  defineSystem("orderA", [TestOrder])
-  defineSystem("orderB", [TestOrder])
-  defineSystem("orderC", [TestOrder])
+  # OrderA's type and instance definition has been deferred to 'makeEcs()'
+  # with 'sdcDeferMakeEcs'. This is the default.
+  defineSystem("orderA", [TestOrder], sOptsDM)
+  assert not compiles(sysOrderA.count)
+
+  # OrderB is defined with 'sdcInPlace' to immediately output the
+  # system's type and initialise an instance.
+  defineSystem("orderB", [TestOrder], sOptsIP)
+  assert compiles(sysOrderB.count)
+
+  defineGroupStart "adHocGroup"       # Put following systems into a group.
+  defineSystem("orderC", [TestOrder], sOptsIP)
+  assert compiles(sysOrderC.count)    # Check the system variable is instantiated.
+  defineGroupEnd()                    # Stop registering to a group.
+
   defineSystem("orderD", [TestOrder])
+  assert not compiles(sysOrderD.count)  # Check system instantiation is deferred.
 
   # Group and order a selection of systems.
 
@@ -17,6 +33,7 @@ template runGroupsAndOrder* {.dirty.} =
 
   defineGroup("sysGroup1", ["orderB", "orderA"])
   defineGroup("sysGroup2", ["orderA", "orderB"])
+
 
   var systemUpdates: seq[string]
 
@@ -30,7 +47,8 @@ template runGroupsAndOrder* {.dirty.} =
   makeSystemBody("orderC"):
     all: systemUpdates.add sys.name
 
-  makeSystemOpts("orderB", [TestOrder], defaultSysOpts):
+  makeSystemOpts("orderB", [TestOrder], sOptsIP):
+    # tOptions must match
     all: systemUpdates.add sys.name
 
   makeSystemBody("orderA"):
@@ -42,65 +60,92 @@ template runGroupsAndOrder* {.dirty.} =
   makeSystem("orderE", [TestOrder]):
     all: systemUpdates.add sys.name
 
+  # Pull currently ungrouped systems into a group.
+  defineGroupCurrent "groupCurrent"
+
   makeSystem("orderF", [TestOrder]):
     all: systemUpdates.add sys.name
 
   onEcsBuilding:
-    # The code is injected before the output of makeEcs.
+    # The code is injected *before* the output of 'makeEcs'.
     when defined(ecsLog):
-      echo "[ Started makeEcs build ]"
+      echo "Started makeEcs build"
 
     type InitEvent = enum eeAll, eeGroup
     var initEvents {.inject.}: seq[(InitEvent, string)]
     initEvents.add (eeAll, "Building")
 
   onEcsBuilt:
-    # This code is added after makeEcs has created a usable ECS.
-    # System variables are updated but their run procedures have yet to be created.
+    # This code is added after 'makeEcs' has finished building the ECS
+    # and entities can be created and modified.
     initEvents.add (eeAll, "Built")
+    # OrderB definition is deferred to the beginning of 'makeEcs()'.
+    assert compiles(sysOrderB.count)
 
   template eventStr: untyped =
     $context & (if group.len > 0: " " & group else: "")    
 
   onEcsCommitAll:
-    # This code is emitted before every commitSystems and commitGroups.
+    # This code is injected before every 'commitSystems' and 'commitGroups'
+    # outputs the system run procedures.
     block:
       let str = "Commit all - " & eventStr
       when defined(ecsLog):
-        echo "[ ", str, " ]"
+        echo str
       initEvents.add (eeAll, str)
 
-  onEcsNextGroupCommit:
+  onEcsCommitNextGroup:
+    # This code is emitted once before the next 'commitGroup'.
     when defined(ecsLog):
-      echo "[ First commitGroup - " & eventStr & " ]"
+      echo "First commitGroup - " & eventStr
     initEvents.add (eeGroup, "NextGroup")
 
-  onEcsNextCommit:
-    # This code is emitted once before the next commitSystems.
+  onEcsCommitNext:
+    # This code is emitted once before the next 'commitSystems'.
     when defined(ecsLog):
-      echo "[ First commitSystems - " & eventStr & " ]"
+      echo "First commitSystems - " & eventStr
     initEvents.add (eeAll, "Next")
 
   onEcsCommitGroups ["sysGroup1"]:
-    # This is emitted only when sysGroup1 is emitted.
+    # This is emitted before the "sysGroup1" group is committed.
     assert group == "sysGroup1"
     when defined(ecsLog):
-      echo "[ Specific group - ", eventStr, " ]"
+      echo "Specific group - ", eventStr
     initEvents.add (eeGroup, "Commit specific - " & group)
+
+  onEcsCommitSystem "orderD":
+    # Emitted after the run procedure is defined for a specific system.
+    when defined(ecsLog):
+      echo "Order D's run procedure now exists"
+    assert compiles(doOrderD())
+    assert not compiles(doOrderE())
+  
+  onEcsCommitSystem "orderE":
+    # Emitted after the run procedure is defined for a specific system.
+    when defined(ecsLog):
+      echo "Order E's run procedure now exists"
+    assert compiles(doOrderD())
+    assert compiles(doOrderE())
 
   makeEcs()
 
-  commitGroup("sysGroup1", "runGroup1") # Expected: onEcsCommitAll, onEcsNextGroupCommit, onEcsCommitGroups.
+  commitGroup("sysGroup1", "runGroup1") # Expected: onEcsCommitAll, onEcsCommitNextGroup, onEcsCommitGroups.
   commitGroup("sysGroup2", "runGroup2") # Expected: onEcsCommitAll, onEcsCommitGroups.
-  commitSystems("runRest")              # Expected: onEcsCommitAll, onEcsNextCommit
+  commitGroup("adHocGroup", "runAdHocGroup")
+  commitGroup("groupCurrent", "runCurGroup")
+  commitSystems("runRest")              # Expected: onEcsCommitAll, onEcsCommitNext
   
-  # Clear onEcsCommitAll event for any following ECS.
+  # Clear identity events for any following ECS.
+  clearOnEcsBuilding()
+  clearOnEcsBuilt()
   clearOnEcsCommitAll()
   
   let e {.used.} = newEntityWith(TestOrder())
 
   runGroup1()
   runGroup2()
+  runAdHocGroup()
+  runCurGroup()
   runRest()
 
   suite "Groups and ordering systems":
@@ -113,6 +158,8 @@ template runGroupsAndOrder* {.dirty.} =
         (eeGroup, "Commit specific - sysGroup1"),
         (eeGroup, "NextGroup"),
         (eeAll, "Commit all - ccCommitGroup sysGroup2"),
+        (eeAll, "Commit all - ccCommitGroup adHocGroup"),
+        (eeAll, "Commit all - ccCommitGroup groupCurrent"),
         (eeAll, "Commit all - ccCommitSystems"),
         (eeAll, "Next"),
       ]
@@ -128,6 +175,7 @@ template runGroupsAndOrder* {.dirty.} =
           "orderE",
           "orderF",
         ]
+  flushGenLog()
 
 when isMainModule:
   

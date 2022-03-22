@@ -36,6 +36,8 @@ export
 macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
   ## Includes `code` immediately after `makeEcs` has finished.
   ## 
+  ## This code is cleared after being included by `makeEcs`.
+  ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
 
@@ -49,6 +51,8 @@ macro onEcsBuiltId*(id: static[EcsIdentity], code: NimNode) =
 
 macro onEcsBuilt*(code: untyped): untyped =
   ## Includes `code` immediately after `makeEcs` has finished.
+  ## 
+  ## This code is cleared after being included by `makeEcs`.
   ## 
   ## Useful for initialisations and declaring support routines that use
   ## the ECS (for example for use within systems).
@@ -64,6 +68,8 @@ macro onEcsBuilt*(code: untyped): untyped =
 macro onEcsBuildingId*(id: static[EcsIdentity], code: untyped) =
   ## Inserts `code` at the start of `makeEcs` output.
   ## 
+  ## This code is cleared after being included by `makeEcs`.
+  ## 
   ## Useful for initialisations and declaring support routines that are
   ## used to compile the ECS (for example for use within inline events).
 
@@ -74,9 +80,31 @@ macro onEcsBuildingId*(id: static[EcsIdentity], code: untyped) =
 macro onEcsBuilding*(code: untyped) =
   ## Inserts `code` at the start of `makeEcs` output.
   ## 
+  ## This code is cleared after being included by `makeEcs`.
+  ## 
   ## Useful for initialisations and declaring support routines that are
   ## used to compile the ECS (for example for use within inline events).
   defaultIdentity.append_onEcsBuildingCode code
+  newStmtList()
+
+
+macro clearOnEcsBuilt*(id: static[EcsIdentity]): untyped =
+  id.set_onEcsBuiltCode newStmtList()
+  newStmtList()
+
+
+macro clearOnEcsBuilt*: untyped =
+  defaultIdentity.set_onEcsBuiltCode newStmtList()
+  newStmtList()
+
+
+macro clearOnEcsBuilding*(id: static[EcsIdentity]): untyped =
+  id.set_onEcsBuildingCode newStmtList()
+  newStmtList()
+
+
+macro clearOnEcsBuilding*: untyped =
+  defaultIdentity.set_onEcsBuildingCode newStmtList()
   newStmtList()
 
 
@@ -89,7 +117,8 @@ macro ecsImportId*(id: static[EcsIdentity], modules: varargs[untyped]): untyped 
   ## Emits `import modules` when `makeEcs` runs.
   ## 
   ## The paths in `modules` are first tried relative to the call site of
-  ## `ecsImportId` before being tried relative to `makeEcs`.
+  ## `ecsImportId` and if not found is run unchanged (i.e., relative to
+  ## `makeEcs`).
   ## 
   ## Duplicate modules are ignored.
   ecsImportImpl(id, ecsMakeEcsImports, modules)
@@ -97,12 +126,40 @@ macro ecsImportId*(id: static[EcsIdentity], modules: varargs[untyped]): untyped 
 
 
 macro ecsImport*(modules: varargs[untyped]): untyped =
-  ## Emits an import statement including `modules` before `makeEcs`.
-  ## Duplicate modules are ignored.
+  ## Emits `import modules` when `makeEcs` runs.
   ## 
-  ## The parameter `modules` are given relative to the call site of `ecsImport`,
-  ## not the call site of `makeEcs`.
+  ## The paths in `modules` are first tried relative to the call site of
+  ## `ecsImportId` and if not found is run unchanged (i.e., relative to
+  ## `makeEcs`).
+  ## 
+  ## Duplicate modules are ignored.
   ecsImportImpl(defaultIdentity, ecsMakeEcsImports, modules)
+  newStmtList()
+
+
+macro ecsImportFromId*(id: static[EcsIdentity], module: untyped, symbols: varargs[untyped]): untyped =
+  ## Emits a `from module import symbols` statement before `makeEcs`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `makeEcs`).
+  id.append_ecsMakeEcsImportFrom nnkBracket.newTree(
+    newLit module.getCallSitePath,
+    module.copy,
+    symbols
+  )
+  newStmtList()
+
+
+macro ecsImportFrom*(module: untyped, symbols: varargs[untyped]): untyped =
+  ## Emits a `from module import symbols` statement before `makeEcs`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `makeEcs`).
+  defaultIdentity.append_ecsMakeEcsImportFrom nnkBracket.newTree(
+    newLit module.getCallSitePath,
+    module.copy,
+    symbols
+  )
   newStmtList()
 
 
@@ -1668,21 +1725,22 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   result = newStmtList()
   
   # Include `ecsImport` statements.
-  result.addConditionalImport id, ecsMakeEcsImports
+  result.add conditionalImport(id, ecsMakeEcsImports)
+  result.add conditionalImportFrom(id, ecsMakeEcsImportFrom)
   
   # Include onEcsBuilding event.
   if id.onEcsBuildingCode.len > 0:
     result.add id.onEcsBuildingCode
-
-  when defined(ecsLogCode):
-    result.add id.doStartLog()
+    id.set_onEcsBuildingCode newStmtList()
 
   let
     unsealedSystems = id.allUnsealedSystems
     unsealedComponents = id.allUnsealedComponents
-  var
-    eventProcs = newStmtList()
-  
+  var eventProcs = newStmtList()
+
+  # Add deferred system definitions.
+  result.add id.addDeferredDefs(unsealedSystems, sdcDeferMakeEcs)
+
   id.ecsBuildOperation "component processing":
 
     for typeId in unsealedComponents:
@@ -1777,6 +1835,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   # User code to run after everything's defined.
   if id.onEcsBuiltCode.len > 0:
     result.add id.onEcsBuiltCode
+    id.set_onEcsBuiltCode newStmtList()
 
   id.ecsBuildOperation "user event callbacks":
     result.add eventProcs
@@ -1786,7 +1845,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     for typeId in unsealedComponents:
       id.add_ecsSealedComponents typeId
 
-    # Flag systems as generated.
+    # Flag systems as final.
     for sys in unsealedSystems:
       id.set_sealed sys, true
 

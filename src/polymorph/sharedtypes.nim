@@ -76,6 +76,7 @@ type
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
   ECSSysThreading* = enum sthNone, sthDistribute
+  ECSSysDefCommit* = enum sdcDeferMakeEcs = "defer to 'makeEcs'", sdcInPlace = "commit in-place"
 
   ECSSysOptions* = object
     maxEntities*: int ## Maximum entities this system can hold.
@@ -88,6 +89,7 @@ type
     orderedRemove*: bool  ## Maintains the execution order when items are removed from groups. This changes deletion from an O(1) to an O(N) operation.
     threading*: ECSSysThreading ## System threading options.
     publicFields*: bool ## When `true`, fields passed to a system `fields:` block will be automatically exported.
+    commit*: ECSSysDefCommit ## Choose where to output the system instance variable.
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect

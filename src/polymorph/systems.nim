@@ -403,6 +403,7 @@ proc instantiateSystem(id: EcsIdentity, sysIndex: SystemIndex, sysName: string, 
       `sysHasEntity`  
   )
 
+
 proc processPragma(identNode, valueType: NimNode): tuple[ident: NimNode, def: NimNode] =
   ## Process and remove `public` pragma if present.
   identNode[1].expectKind nnkPragma
@@ -596,7 +597,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   let sourceLoc = componentTypes.lineInfo
 
   when defined(ecsLog) or defined(ecsLogDetails):
-    echo "[ System generation for \"" & sysName & "\" [" & componentTypesStr & "] " & sourceLoc & " ]"
+    echo "[ Created system \"" & sysName & "\" [" & componentTypesStr & "] " & sourceLoc & " ]"
 
   when defined(ecsLogDetails):
     echo "System \"", sysName, "\" options:\n", sysOptions.repr, "\n"
@@ -717,6 +718,19 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   if id.private:
     result = result.deExport
 
+  let groupName = id.ecsDefineSystemsAsGroup
+
+  if groupName.len > 0:
+    let lcGroup = groupName.toLowerAscii()
+
+    # Add to list of systems for this group.
+    if sysIndex notin id.groupSystems(lcGroup):
+      id.add_groupSystems(lcGroup, sysIndex)
+
+    # Add the group to this system.
+    if lcGroup notin id.systemGroups(sysIndex):
+      id.add_systemGroups(sysIndex, lcGroup)
+
   genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
 
@@ -731,17 +745,35 @@ proc embedOwned(componentTypes, ownedComponents: NimNode): NimNode =
 # -----------------
 
 
+proc maybeDeferSysDef(code: NimNode, id: EcsIdentity, name: string): NimNode =
+  ## Passes the system definition through or stores it for later.
+  let
+    findSys = id.findSystemIndex name
+    sys = findSys.index
+  if not findSys.found:
+    error "Internal error: cannot find system \"" & name & "\""
+  case id.ecsSysCommitInstance sys
+    of sdcDeferMakeEcs:
+      if id.ecsDeferredSysDef(sys).len > 0:
+        error "Trying to overwrite a deferred system definition"
+      id.set_ecsDeferredSysDef(sys, code)
+      newStmtList()
+    of sdcInPlace:
+      # Note: the system definition isn't stored for this option.
+      code
+
+
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system and providing extra fields.
-  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, extraFields, options)
+  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, extraFields, options).maybeDeferSysDef(id, name)
 
 macro defineSystemOwner*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, ownedComponents: openarray[typedesc], options: static[ECSSysOptions]): untyped =
   ## Define a system using an ECS identity, declaring types that are owned by this system.
-  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, nil, options)
+  result = id.createSystem(name, componentTypes.embedOwned ownedComponents, nil, options).maybeDeferSysDef(id, name)
 
 macro defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions], extraFields: untyped): untyped =
   ## Define a system and its types using an ECS identity, providing extra fields to incorporate into the resultant system instance.
-  result = id.createSystem(name, componentTypes, extraFields, options)
+  result = id.createSystem(name, componentTypes, extraFields, options).maybeDeferSysDef(id, name)
 
 template defineSystem*(id: static[EcsIdentity], name: static[string], componentTypes: untyped, options: static[ECSSysOptions]): untyped =
   ## Define a system and its types using an ECS identity with specific options.
@@ -795,6 +827,26 @@ template defineSystem*(name: static[string]): untyped =
 # ----------------
 
 
+macro defineGroupStart*(id: static[EcsIdentity], group: static[string]): untyped =
+  ## Systems defined from here until the next `defineGroupEnd` will be placed in `group`.
+  id.set_ecsDefineSystemsAsGroup group
+
+
+macro defineGroupStart*(group: static[string]): untyped =
+  ## Systems defined from here until the next `defineGroupEnd` will be placed in `group`.
+  defaultIdentity.set_ecsDefineSystemsAsGroup group
+
+
+macro defineGroupEnd*(id: static[EcsIdentity]): untyped =
+  ## Counterpart to `defineGroupStart`, this stops marking systems as part of `group`.
+  id.set_ecsDefineSystemsAsGroup ""
+
+
+macro defineGroupEnd*(): untyped =
+  ## Counterpart to `defineGroupStart`, this stops marking systems as part of `group`.
+  defaultIdentity.set_ecsDefineSystemsAsGroup ""
+
+
 macro defineGroup*(id: static[EcsIdentity], group: static[string], systems: openarray[string]): untyped =
   ## Assign specific systems to a group using an ECS identity.
   ## 
@@ -834,37 +886,29 @@ template defineGroup*(group: static[string], systems: openarray[string]): untype
   defaultIdentity.defineGroup(group, systems)
 
 
-macro defineGroup*(id: static[EcsIdentity], group: static[string]): untyped =
-  ## Assign previously defined and ungrouped systems to a group using an ECS identity.
+macro defineGroupCurrent*(id: static[EcsIdentity], group: static[string]): untyped =
+  ## Assign previously defined and currently ungrouped systems to a group using an ECS identity.
   ## 
   ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
   ## 
   ## Systems may be part of multiple groups.
-  var
-    order = id.systemOrder()
-  let
-    lcGroup = group.toLowerAscii
-
-  for sys in order:
-    # Ignore systems that already belong to groups.
-    if id.systemGroups(sys).len == 0:
-
-      # Add to list of systems for this group.
-      if sys notin id.groupSystems(lcGroup):
-        id.add_groupSystems(lcGroup, sys)
-
-      # Add the group to this system.
-      if lcGroup notin id.systemGroups(sys):
-        id.add_systemGroups(sys, lcGroup)
+  let lcGroup = group.toLowerAscii
+  for sys in id.orderedUncommitted:
+    # Add to list of systems for this group.
+    if sys notin id.groupSystems(lcGroup):
+      id.add_groupSystems(lcGroup, sys)
+    # Add the group to this system.
+    if lcGroup notin id.systemGroups(sys):
+      id.add_systemGroups(sys, lcGroup)
 
 
-template defineGroup*(group: static[string]): untyped =
+template defineGroupCurrent*(group: static[string]): untyped =
   ## Assign previously defined and ungrouped systems to a group using the default ECS identity.
   ## 
   ## These systems will not be output as part of `commitSystems` and must be output with `commitGroup`.
   ## 
   ## Systems may be part of multiple groups.
-  defaultIdentity.defineGroup(group)
+  defaultIdentity.defineGroupCurrent(group)
 
 
 # -------------------------
@@ -1289,13 +1333,13 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         "\nPassed options:\n" & $options
 
     when defined(ecsLog) or defined(ecsLogDetails):
-      echo "Adding body to pre-defined system \"", name, "\" with types [",
-        id.commaSeparate(expectedTypes), "] " & systemBody.lineInfo
+      echo "[ Adding body to \"", name, "\" [",
+        id.commaSeparate(expectedTypes), "] " & systemBody.lineInfo & " ]"
   
   else:
     # This is an inline makeSystem.
     
-    result.add createSystem(id, name, componentTypes, extraFields, options)
+    result.add createSystem(id, name, componentTypes, extraFields, options).maybeDeferSysDef(id, name)
 
     sysIdxSearch = id.findSystemIndex(name)
     assert sysIdxSearch.found, "Internal error: cannot find system \"" & name & "\" after adding it"
@@ -1631,7 +1675,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
   # Store the body of the do proc.
   # The procs themselves are only accessible after commitSystem is called.
-  id.set_definition(sysIndex, systemProc)
+  id.set_ecsSysBodyDefinition(sysIndex, systemProc)
 
   # Add to the list of systems with a defined body.
   # This allows detection of trying to set a body multiple times.
@@ -1714,7 +1758,7 @@ template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
 # ----------------------------
 
 
-macro onEcsNextCommitId*(id: static[EcsIdentity], code: untyped): untyped =
+macro onEcsCommitNextId*(id: static[EcsIdentity], code: untyped): untyped =
   ## Includes `code` immediately before `commitSystems` starts.
   ## 
   ## This can be useful for including imports or other code that might
@@ -1726,7 +1770,7 @@ macro onEcsNextCommitId*(id: static[EcsIdentity], code: untyped): untyped =
   newStmtList()
 
 
-macro onEcsNextCommit*(code: untyped): untyped =
+macro onEcsCommitNext*(code: untyped): untyped =
   ## Includes `code` immediately before `commitSystems` starts.
   ## 
   ## This can be useful for including imports or other code that might
@@ -1776,7 +1820,7 @@ macro onEcsCommitGroups*(groups: static[openarray[string]], code: untyped): unty
   newStmtList()
 
 
-macro onEcsNextGroupCommitId*(id: static[EcsIdentity], code: untyped): untyped =
+macro onEcsCommitNextGroupid*(id: static[EcsIdentity], code: untyped): untyped =
   ## Inserts `code` before the output of the next `commitGroup` for any group.
   ## 
   ## This code is cleared after `commitGroup` has run.
@@ -1784,11 +1828,28 @@ macro onEcsNextGroupCommitId*(id: static[EcsIdentity], code: untyped): untyped =
   newStmtList()
 
 
-macro onEcsNextGroupCommit*(code: untyped): untyped =
+macro onEcsCommitNextGroup*(code: untyped): untyped =
   ## Inserts `code` before the output of the next `commitGroup` for any group.
   ## 
   ## This code is cleared after `commitGroup` has run.
   defaultIdentity.append_onEcsNextGroupCommitCode code
+  newStmtList()
+
+
+proc addCommitSystem(id: EcsIdentity, sysName: string, code: NimNode) =
+  let sys = id.findSysIdx sysName
+  if sys == InvalidSystemIndex: error "Cannot find system \"" & sysName & "\" in identity \"" & string(id) & "\""
+  id.append_onEcsCommitSystemCode sys, code
+
+
+macro onEcsCommitSystem*(id: static[EcsIdentity], sysName: static[string], code: untyped): untyped =
+  ## Inserts `code` after the output of the `sys` system.
+  id.addCommitSystem sysName, code
+  newStmtList()
+
+macro onEcsCommitSystem*(sysName: static[string], code: untyped): untyped =
+  ## Inserts `code` after the output of the `sys` system.
+  defaultIdentity.addCommitSystem sysName, code
   newStmtList()
 
 
@@ -1825,6 +1886,10 @@ macro clearOnEcsCommitAll*: untyped =
 
 macro ecsImportCommitId*(id: static[EcsIdentity], modules: varargs[untyped]): untyped =
   ## Emits an import statement including `modules` before `commitSystems`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `commitSystems`).
+  ## 
   ## Duplicate modules are ignored.
   ecsImportImpl(id, ecsCommitImports, modules)
   newStmtList()
@@ -1832,9 +1897,40 @@ macro ecsImportCommitId*(id: static[EcsIdentity], modules: varargs[untyped]): un
 
 macro ecsImportCommit*(modules: varargs[untyped]): untyped =
   ## Emits an import statement including `modules` before `commitSystems`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `commitSystems`).
+  ## 
   ## Duplicate modules are ignored.
   ecsImportImpl(defaultIdentity, ecsCommitImports, modules)
   newStmtList()
+
+
+macro ecsImportCommitFromId*(id: static[EcsIdentity], module: untyped, symbols: varargs[untyped]): untyped =
+  ## Emits a `from module import <symbols>` statement before `commitSystems`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `commitSystems`).
+  id.append_ecsCommitImportFrom nnkBracket.newTree(
+    newLit module.getCallSitePath,
+    module.copy,
+    symbols
+  )
+  newStmtList()
+
+
+macro ecsImportCommitFrom*(module: untyped, symbols: varargs[untyped]): untyped =
+  ## Emits a `from module import <symbols>` statement before `commitSystems`.
+  ## 
+  ## The `import` is first tried relative to the call site, and if not
+  ## found is run unchanged (i.e., relative to `commitSystems`).
+  defaultIdentity.append_ecsCommitImportFrom nnkBracket.newTree(
+    newLit module.getCallSitePath,
+    module.copy,
+    symbols
+  )
+  newStmtList()
+
 
 
 # ------------------
@@ -1859,27 +1955,11 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   id.startOperation "Commit systems " & commitHeader
 
   let
-    toCommit = id.getUncommitted().toHashSet
+    systems = id.orderedUncommitted()
     hasCommitEvents = id.onEcsNextCommitCode.len > 0 or id.onEcsCommitAllCode.len > 0
-  var
-    order = id.systemOrder()
-    systems = newSeqOfCap[SystemIndex](toCommit.len)
 
-  # 'systemOrder' is a list of system indexes, appended to when the system
-  # is first seen by defineSystem or makeSystem.
-  #
-  # All systems should exist in 'systemOrder' before `makeEcs` is invoked.
-  #
-  # 'toCommit' is the unordered subset of `systemOrder` with system
-  # bodies waiting to be committed.
-
-  for sys in order:
-    if sys in toCommit:
-      # Ignore systems that belong to groups.
-      if id.systemGroups(sys).len == 0:
-        systems.add sys
-
-  result.addConditionalImport id, ecsCommitImports
+  result.add conditionalImport(id, ecsCommitImports)
+  result.add conditionalImportFrom(id, ecsCommitImportFrom)
 
   if hasCommitEvents:
     result.add(quote do:
@@ -2043,7 +2123,8 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
     error "No system bodies defined for group \"" & group & "\""
   else:
     
-    result.addConditionalImport id, ecsCommitImports
+    result.add conditionalImport(id, ecsCommitImports)
+    result.add conditionalImportFrom(id, ecsCommitImportFrom)
 
     let
       commitAny = id.onEcsCommitAllCode.copy
@@ -2068,6 +2149,7 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
       # Clear this event after use.
       id.set_onEcsNextGroupCommitCode newStmtList()
 
+    # Add the system body procedures and run proc.
     result.add id.commitSystemList(systems, runProc)
   
     if id.private:

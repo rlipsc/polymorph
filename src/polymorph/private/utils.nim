@@ -355,6 +355,17 @@ proc addUncommitted*(id: EcsIdentity, sys: SystemIndex) =
   curSystems.add sys
   id.setUncommitted curSystems
 
+proc orderedUncommitted*(id: EcsIdentity): seq[SystemIndex] =
+  ## Return uncommitted systems in definition order.
+  let toCommit = id.getUncommitted().toHashSet
+  var order = id.systemOrder()
+  result = newSeqOfCap[SystemIndex](toCommit.len)
+  for sys in order:
+    if sys in toCommit:
+      # Ignore systems that belong to groups.
+      if id.systemGroups(sys).len == 0:
+        result.add sys
+
 
 # --------------------
 # Generating set types
@@ -1127,13 +1138,15 @@ proc getTypeStr(compNode: NimNode): string =
   let
     tyInst = compNode.getTypeInst()
   
-  if tyInst.kind == nnkBracketExpr and tyInst[0].kind == nnkSym and
-      tyInst[0].strVal.toLowerAscii == "typedesc":
-    # Extract T from typedesc[T].
-    tyInst[1].expectKind nnkSym
-    tyInst[1].strVal
+  if tyInst.kind == nnkBracketExpr:
+    if tyInst[0].kind == nnkSym and tyInst[0].strVal.toLowerAscii == "typedesc":
+      # Extract T from typedesc[T].
+      tyInst[1].expectKind nnkSym
+      return tyInst[1].strVal
+    else:
+      error "Cannot process type string for tree:\n" & tyInst.treerepr
   else:
-    tyInst.strVal
+    return tyInst.strVal
 
 proc findType*(compNode: NimNode): string =
   ## Expects a typed node and tries to extract the type name.
@@ -1787,6 +1800,37 @@ proc inclDependents*[T: ComponentIterable](id: EcsIdentity, comps: T): T =
 # System commit utils
 # -------------------
 
+
+proc getDeferredSysDef(id: EcsIdentity, sys: SystemIndex, context: ECSSysDefCommit): NimNode =
+  ## Add the system variable definitions code depending on `context`.
+  result = newStmtList()
+  let commitOpt = id.ecsSysCommitInstance(sys)
+  if commitOpt == context:
+    let def = id.ecsDeferredSysDef(sys).copy
+    if def.len > 0:
+      result.add def
+
+
+proc addDeferredDefs*(id: EcsIdentity, systems: SystemIterable, context: ECSSysDefCommit): NimNode =
+  ## Call `getDeferredSysDef` for `systems` and output to log if required.
+  result = newStmtList()
+
+  const logDefs = defined(ecsLog) or defined(ecsLogDetails)
+  when logDefs:
+    var defSys: seq[SystemIndex]
+
+  for sys in systems:
+    let sysDef = id.getDeferredSysDef(sys, context)
+    result.add sysDef
+    when logDefs:
+      if sysDef.len > 0: defSys.add sys
+
+  when logDefs:
+    if defSys.len > 0:
+      let sysList = id.commaSeparate defSys
+      echo "[ Added deferred systems (" & $context & "): " & sysList & " ]"
+
+
 proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc: string): NimNode =
   ## Output any uncommitted system body procs in `systems`.
   ## 
@@ -1807,7 +1851,7 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
 
   for sys in systems:
     let
-      definition = id.definition sys
+      definition = id.ecsSysBodyDefinition sys
       sysName = id.getSystemName sys
   
     if definition.len > 0:
@@ -1826,6 +1870,11 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
         # uncommitted list.
         uncommitted.delete ucIndex
 
+        # Add user event for committing specific systems.
+        let sysCode = id.onEcsCommitSystemCode sys
+        if not sysCode.isNil:
+          result.add sysCode
+
         id.endOperation
 
       # Call all the parameter systems within the runProc.
@@ -1838,7 +1887,7 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
       noBodies.add "\"" & sysName & "\""
 
   # Write back list with committed systems removed.
-  id.setUncommitted uncommitted
+  id.set_uncommitted uncommitted
 
   if runProc.len > 0:
     # Include a wrapper proc to execute the above systems.
@@ -1882,6 +1931,7 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
             {.warning: `emptyProcStr`.}
             discard
         )
+
 
 # --------------
 # Source parsing
@@ -1985,9 +2035,11 @@ proc leafFromImport(node: NimNode): NimNode =
 
    
 template getFilename(str: string): string =
+  ## Extract filename from a path.
   let dirSep1 = str.rFind('/')
   if dirSep1 > -1:
     if dirSep1 == str.high:
+      # String ends with separator, check for previous separator.
       let dirSep2 = str.rFind('/', last = str.high - 1)
       if dirSep2 > -1:
         if dirSep1 - dirSep2 < 1: error "ecsImport: cannot read '//' in " & str
@@ -2000,47 +2052,49 @@ template getFilename(str: string): string =
     str
 
 
-template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
-  ## Appends a list of `modules`for `import` to the state controlled by `access`.
-  ## The call site path is stored along with.
-  if ecsId.private:
-    warning "Trying to register imports when the ECS is configured for a private scope (e.g., " & string(ecsId) & ".set_private = true)", modules
-
-  var curImports = ecsId.access
-  if curImports.isNil:
-    curImports = nnkImportStmt.newTree()
-  let li = modules.lineInfoObj
-  var callSitePath = li.filename
+proc getCallSitePath*(node: NimNode): string =
+  let li = node.lineInfoObj
+  result = li.filename
 
   let
     importSep = '/'
     backSep = '\\'
+  
   template found(v: int): bool = v > -1
 
   # Find OS directory separator from 'lineInfo'.
-  var parentSep = callSitePath.rFind backSep
-  let
-    dirSep =
-      if found(parentSep): backSep
-      else:
-        parentSep = callSitePath.rFind importSep
-        importSep
+  var parentSep = result.rFind backSep
+  let dirSep =
+    if found(parentSep): backSep
+    else:
+      parentSep = result.rFind importSep
+      importSep
     
   if not parentSep.found:
-    error "ecsImport: cannot find a '\\' or '/' separator from the call site: '" & callSitePath & "'"
+    error "ECS import cannot find a '\\' or '/' separator from the call site: '" & result & "'"
   
-  callSitePath = callSitePath[0 .. parentSep]
-  callSitePath = callSitePath.replace " "
+  result = result[0 .. parentSep]
+  result = result.replace " "
   if dirSep != importSep:
-    callSitePath = callSitePath.replace(dirSep, importSep)
+    result = result.replace(dirSep, importSep)
+
+
+proc splitModules*(curImports: NimNode, modules: NimNode): NimNode =
+  ## Returns a node with deduplicated modules and their call site.
+  if curImports.isNil:
+    result = newStmtList()
+  else:
+    result = curImports.copy
 
   template unique(m): bool =
-    curImports.findChild(
+    result.findChild(
       it.kind == nnkBracket and
       it[1] == m
     ).isNil
 
   # Import statements bind their location to the macro source.
+  let callSitePath = modules.getCallSitePath
+
   for i, node in modules:
     let leaf = leafFromImport(node)
     if leaf.kind == nnkBracket and leaf.len > 0:
@@ -2050,18 +2104,25 @@ template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
           var branch = node
           branch.del branch.len - 1
           branch.add m
-          curImports.add nnkBracket.newTree(newLit callSitePath, branch.copy)
+          result.add nnkBracket.newTree(newLit callSitePath, branch.copy)
     else:
       if unique(node):
-        curImports.add nnkBracket.newTree(newLit callSitePath, node.copy)
-
-  ecsId.`set access` curImports
+        result.add nnkBracket.newTree(newLit callSitePath, node.copy)
 
 
-proc addConditionalImport*(node: NimNode, id: EcsIdentity, access: proc) =
+template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =
+  ## Appends a list of `modules`for `import` to the state controlled by `access`.
+  ## The call site path is stored along with the list of modules.
+  if ecsId.private:
+    warning "Trying to register imports when the ECS is configured for a private scope (e.g., '" & string(ecsId) & ".set_private true')", modules
+
+  `set access`(ecsId, splitModules(ecsId.access, modules))
+
+
+proc conditionalImport*(id: EcsIdentity, access: proc): NimNode =
   ## Creates conditional import statements from the node given by
   ## the `access` proc.
-  node.expectKind nnkStmtList
+  result = newStmtList()
 
   if access(id).len > 0:
     const doLog = defined(ecsLog) or defined(ecsLogDetails)
@@ -2080,7 +2141,7 @@ proc addConditionalImport*(node: NimNode, id: EcsIdentity, access: proc) =
         module = ident givenStr.getFilename
         cond = notDeclared(module)
 
-      node.add(quote do:
+      result.add(quote do:
         when `cond`:
           when(compiles do: import `localStr`):
             import `localStr`
@@ -2095,4 +2156,53 @@ proc addConditionalImport*(node: NimNode, id: EcsIdentity, access: proc) =
     when doLog:
       if importStr.len > 0:
         echo "[ Adding imports for: ", importStr, " ]"
-    
+
+
+proc conditionalImportFrom*(id: EcsIdentity, access: proc): NimNode =
+  result = newStmtList()
+
+  if access(id).len > 0:
+    const doLog = defined(ecsLog) or defined(ecsLogDetails)
+
+    template notDeclared(mNode, ndNode: NimNode): NimNode =
+      prefix(
+        newPar(
+          newCall(ident"declared", nnkAccQuoted.newTree(mNode, ident".", ndNode))
+        )
+        , "not"
+      )
+
+    for moduleNode in access(id):
+      moduleNode.expectKind nnkBracket
+
+      let
+        callSite = moduleNode[0].strVal
+        moduleStr = moduleNode[1].repr.replace(" ")
+        symbols = moduleNode[2].copy
+        module = ident moduleStr.getFilename
+        localStr = newLit callSite & moduleStr
+
+      when doLog:
+        var importStr: string
+
+      for symbol in symbols:
+        let cond = notDeclared(module, symbol)
+
+        result.add(quote do:
+          {.push hint[DuplicateModuleImport]:off.}
+          when `cond`:
+            when(compiles do: from `localStr` import `symbol`):
+              from `localStr` import `symbol`
+            else:
+              from `module` import `symbol`
+          {.pop.}
+        )
+
+        when doLog:
+          if importStr.len == 0: importStr = symbol.repr
+          else: importStr &= ", " & symbol.repr
+
+      when doLog:
+        if importStr.len > 0:
+          echo "[ Adding import from ", moduleStr, " ", importStr, " ]"
+
