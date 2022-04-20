@@ -911,6 +911,20 @@ template defineGroupCurrent*(group: static[string]): untyped =
   defaultIdentity.defineGroupCurrent(group)
 
 
+template defineToGroup*(id: EcsIdentity, name: string, groupDefs: untyped) {.dirty.} =
+  ## Wrap `groupDefs` with `defineGroupStart name` and `defineGroupEnd`.
+  defineGroupStart(id, name)
+  groupDefs
+  defineGroupEnd(id)
+
+
+template defineToGroup*(name: string, groupDefs: untyped) {.dirty.} =
+  ## Wrap `groupDefs` with `defineGroupStart name` and `defineGroupEnd`.
+  defineGroupStart name
+  groupDefs
+  defineGroupEnd()
+
+
 # -------------------------
 # Wrapping iteration blocks
 # -------------------------
