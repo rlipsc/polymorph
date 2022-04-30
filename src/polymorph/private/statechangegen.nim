@@ -258,7 +258,7 @@ proc gateSystemActions(details: var StateChangeDetails, sys: SystemBuildInfo, ac
 
 
 proc gateSystemUpdates(details: var StateChangeDetails, sys: SystemBuildInfo, sysUpdate: SystemUpdate): SystemUpdate =
-  ## Perform `actions` when `sys` is available at run time.
+  ## Build the update and event code for `sysUpdate`.
   
   result = newSystemUpdate()
   result.sysFetches = sysUpdate.sysFetches
@@ -295,6 +295,7 @@ proc gateSystemUpdates(details: var StateChangeDetails, sys: SystemBuildInfo, sy
 
 
 proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetails, change: SystemChange) =
+  ## 'Add' state change for a system.
 
   assert change.kind == sckAdd
 
@@ -474,7 +475,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
 
 
 proc removeFromSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetails, change: SystemChange) =
-  ## Remove state change for a system.
+  ## 'Remove' state change for a system.
 
   assert change.kind == sckRemove
 
