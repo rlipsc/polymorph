@@ -20,14 +20,13 @@ when defined(ecsLogDetails) or defined(ecsPerformanceHints):
   from strutils import capitalizeAscii, repeat
 
 
-proc debugMessage*(id: EcsIdentity, op: string, extraIndent = 0): int {.compileTime, discardable.} = 
+proc debugMessage*(id: EcsIdentity, op: string, extraIndent = 0) = 
   when defined(ecsLogDetails):
     let
       curIndent = id.ecsCurrentOperation.len
       identStr = "  ".repeat curIndent + extraIndent
 
     debugEcho identStr & "[ " & capitalizeAscii(op) & " ]"
-    curIndent
   else:
     discard
 
