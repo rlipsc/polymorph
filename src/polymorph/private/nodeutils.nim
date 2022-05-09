@@ -44,7 +44,7 @@ proc getFieldsFromRecCase(recCaseNode: NimNode): FieldList =
 
   # Add kind var.
   let kindVar = recCaseNode[0]
-  result.add (kindVar[0].baseName, kindVar[1].toIdent)
+  result.add (kindVar[0].basename, kindVar[1].toIdent)
 
   # All fields from of branches.
   for fieldIdx in 1 ..< recCaseNode.len:
@@ -53,7 +53,7 @@ proc getFieldsFromRecCase(recCaseNode: NimNode): FieldList =
     let recList = field[1]
     recList.expectKind nnkRecList
     for ofField in recList:
-      result.add (ofField[0].baseName, ofField[1].toIdent)
+      result.add (ofField[0].basename, ofField[1].toIdent)
 
 
 proc getFieldsFromTypeDef(typeDefNode: NimNode): tuple[typeName: string, fields: FieldList] =
@@ -75,7 +75,7 @@ proc getFieldsFromTypeDef(typeDefNode: NimNode): tuple[typeName: string, fields:
         else:
           let fType = field[^2].toIdent
           for i in 0 ..< field.len - 2:
-            result.fields.add (field[i].baseName, fType)
+            result.fields.add (field[i].basename, fType)
 
   of nnkRefTy:
     tyNode.expectMinLen 1
@@ -87,14 +87,14 @@ proc getFieldsFromTypeDef(typeDefNode: NimNode): tuple[typeName: string, fields:
       for field in recList:
         let fType = field[^2].toIdent
         for i in 0 ..< field.len - 2:
-          result.fields.add (field[i].baseName, fType)
+          result.fields.add (field[i].basename, fType)
 
   of nnkTupleTy:
     typeDefNode.expectMinLen 3
     for field in typeDefNode[2]:
       let fType = field[^2].toIdent
       for i in 0 ..< field.len - 2:
-        result.fields.add (field[i].baseName, fType)
+        result.fields.add (field[i].basename, fType)
 
   else:
     echo "getFieldsFromTypeDef: Unknown kind: " & $tyNode.kind
@@ -148,7 +148,7 @@ proc checkDefForTy(chkNode: NimNode, typeName: string = ""): NimNode =
         if (typeName == "" or chkNode[0][0][1].basename.strVal == typeName):
           return chkNode.extractNode()
       else:
-        echo "checkDefForTy: Cannot process node \n", chkNode.treerepr
+        echo "checkDefForTy: Cannot process node \n", chkNode.treeRepr
         return newEmptyNode()
 
 
@@ -173,7 +173,7 @@ proc recList*(node: NimNode, typeName: string = ""): NimNode =
     if fieldNode.kind != nnkEmpty: return fieldNode
   else: discard
   let tName = if typeName == "": "<Any type>" else: typeName
-  echo "Unable to extract record list from type " & tName & ", given this node:\n" & node.treerepr
+  echo "Unable to extract record list from type " & tName & ", given this node:\n" & node.treeRepr
   newEmptyNode()
 
 

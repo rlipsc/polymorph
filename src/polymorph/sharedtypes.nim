@@ -171,14 +171,16 @@ type
 
   EventKind* = enum
     ekNoEvent =           "<none>",
+
+    # Entity events.
     ekConstruct =         "construct",
     ekClone =             "clone",
     ekDeleteEnt =         "delete",
-  
     ekNewEntityWith =     "newEntityWith",
-    ekAddComponents =     "addComponent",
-    ekRemoveComponents =  "removeComponent",
+    ekAddComponents =     "addComponents",
+    ekRemoveComponents =  "removeComponents",
 
+    # Component events.
     ekInit =              "onInit",
     ekUpdate =            "onUpdate",
     ekAdd =               "onAdd",
@@ -187,16 +189,17 @@ type
     ekRemoveCB =          "onRemoveCallback",
     ekDeleteComp =        "onDelete",
   
+    # Component-system events.
     ekSystemAddAny =      "onSystemAdd",
     ekSystemRemoveAny =   "onSystemRemove",
-  
     ekCompAddTo =         "onSystemAddTo",
     ekCompRemoveFrom =    "onSystemRemoveFrom",
 
+    # System events.
     ekRowAdded =          "added",
     ekRowRemoved =        "removed",
     ekRowAddedCB =        "addedCallback",
-    ekRowRemovedCB =      "removedCallback",
+    ekRowRemovedCB =      "removedCallback"
 
   CommitContext* = enum ccCommitSystems, ccCommitGroup
 

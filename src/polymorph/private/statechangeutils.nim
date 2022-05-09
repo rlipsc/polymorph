@@ -58,8 +58,8 @@ iterator satisfiedSystems*(id: EcsIdentity, compList: ComponentIterable): System
             break
     
         if found:
-          for req in id.ecsSysNegations(sys):
-            if req in compList:
+          for neg in id.ecsSysNegations(sys):
+            if neg in compList:
               found = false
               break
           

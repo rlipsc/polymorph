@@ -292,11 +292,9 @@ proc trackMutation*(node: var NimNode, id: EcsIdentity, mutationType: EventKind,
 
     startOp =
       if announce:
-        let
-          strOp = initEventState(mutationType, indexes).toStr(id)
-        
+        let strOp = initEventState(mutationType, indexes).toStr(id)
         quote do:
-          startOperation(`ecsId`, "Event " & `strOp`)
+          startOperation(`ecsId`, "Checking event " & `strOp`)
       else:
         newStmtList()
 

@@ -440,14 +440,14 @@ proc genSystemSet*(id: EcsIdentity): NimNode =
 
 
 proc enterIteration*(id: EcsIdentity): NimNode =
-  ## Statically nark the start of an iteration block.
+  ## Statically mark the start of an iteration block.
   let cacheId = quote do: EcsIdentity(`id`)
   quote do:
     static: `cacheId`.set_ecsSysIterating `cacheId`.ecsSysIterating + 1
 
 
 proc exitIteration*(id: EcsIdentity): NimNode =
-  ## Statically nark the end of an iteration block.
+  ## Statically mark the end of an iteration block.
   let cacheId = quote do: EcsIdentity(`id`)
   quote do:
     {.line.}:
