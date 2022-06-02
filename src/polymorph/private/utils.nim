@@ -751,12 +751,10 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
 
   let
     cacheId = quote do: EcsIdentity(`id`)
-    undefinedItemMsg = "Potentially unsafe access of 'item' here: the current system row may be " &
-      "undefined due to an earlier "
-    undefinedItemRemoveMsg = undefinedItemMsg & "removal of components that affect this system. "
-    undefinedItemDeleteMsg = undefinedItemMsg & "deletion of an entity. "
-    msgPostfix = "Use the 'entity' variable or the system's 'deleteList' " &
-      "to avoid this error."
+    undefinedItemMsg = "potentially unsafe access of 'item' due to a "
+    undefinedItemRemoveMsg = undefinedItemMsg & "removal of component(s) that affect this system (source: "
+    undefinedItemDeleteMsg = undefinedItemMsg & "deletion of an entity (source: "
+    msgPostfix = "Use the 'entity' variable or the system's 'deleteList' to avoid this error"
 
   if not defined(ecsPermissive):
     node.add(quote do:
@@ -781,9 +779,11 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
             # underlying system.
 
             if `sysRemoveAffectedThisSystem`(`cacheId`):
-              error `undefinedItemRemoveMsg` & `msgPostfix`
+              error `undefinedItemRemoveMsg` & `ecsSystemRemoveLoc`(`cacheId`) & "). " &
+              `msgPostfix`
             elif `systemCalledDelete`(`cacheId`):
-              error `undefinedItemDeleteMsg` & `msgPostfix`
+              error `undefinedItemDeleteMsg` & `ecsSystemDeleteLoc`(`cacheId`) & "). " &
+              `msgPostfix`
     )
 
 
