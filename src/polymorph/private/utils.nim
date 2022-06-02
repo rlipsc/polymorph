@@ -1168,6 +1168,10 @@ proc findType*(compNode: NimNode): string =
       let callerTypeStr = $caller[3][0]
       callerTypeStr
     
+    of nnkConv:
+      compNode[0].expectKind {nnkSym, nnkIdent}
+      $compNode[0]
+    
     else:
       let
         tyStr = compNode.getTypeStr
