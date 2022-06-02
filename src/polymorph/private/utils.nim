@@ -443,7 +443,7 @@ proc enterIteration*(id: EcsIdentity): NimNode =
   ## Statically mark the start of an iteration block.
   let cacheId = quote do: EcsIdentity(`id`)
   quote do:
-    static: `cacheId`.set_ecsSysIterating `cacheId`.ecsSysIterating + 1
+    static: `set_ecsSysIterating`(`cacheId`, `ecsSysIterating`(`cacheId`) + 1)
 
 
 proc exitIteration*(id: EcsIdentity): NimNode =
@@ -452,8 +452,8 @@ proc exitIteration*(id: EcsIdentity): NimNode =
   quote do:
     {.line.}:
       static:
-        `cacheId`.set_ecsSysIterating `cacheId`.ecsSysIterating - 1
-        if `cacheId`.ecsSysIterating < 0:
+        `set_ecsSysIterating`(`cacheId`, `ecsSysIterating`(`cacheId`) - 1)
+        if `ecsSysIterating`(`cacheId`) < 0:
           error "Internal error: unbalanced system iterations - exited more iterations than entered"
 
 
@@ -762,7 +762,7 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
     node.add(quote do:
       {.line.}:
         static:
-          if `cacheId`.ecsSysIterating == 0 or (`cacheId`.ecsSysIterating > 0 and `cacheId`.ecsEventEnv.len == 0):
+          if `ecsSysIterating`(`cacheId`) == 0 or (`ecsSysIterating`(`cacheId`) > 0 and `ecsEventEnv`(`cacheId`).len == 0):
             # Note: events within system iteration can skip this error
             # for two reasons:
             #
@@ -780,9 +780,9 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
             # they detect they're in a callback and will remove the
             # underlying system.
 
-            if `cacheId`.sysRemoveAffectedThisSystem:
+            if `sysRemoveAffectedThisSystem`(`cacheId`):
               error `undefinedItemRemoveMsg` & `msgPostfix`
-            elif `cacheId`.systemCalledDelete:
+            elif `systemCalledDelete`(`cacheId`):
               error `undefinedItemDeleteMsg` & `msgPostfix`
     )
 

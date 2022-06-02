@@ -594,12 +594,12 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
     block:
       static:
         startOperation(`cacheId`, `opStr`)
-        if `cacheId`.ecsSysIterating > 0:
-          if `cacheId`.inSystemIndex in `negatedSystemsSeq`:
+        if `ecsSysIterating`(`cacheId`) > 0:
+          if `inSystemIndex`(`cacheId`) in `negatedSystemsSeq`:
             # This addComponent negates the currently iterating system,
             # and therefore acts as a remove operation, so we need to
             # add in extra loop checking logic.
-            `cacheId`.set_sysRemoveAffectedThisSystem true
+            `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
       
       `op`
       
@@ -659,19 +659,18 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
       static:
         startOperation(`cacheId`, `opStr`)
 
-        if `cacheId`.ecsSysIterating > 0:
-          if `cacheId`.inSystemIndex in `relevantSystemsSeq`:
+        if `ecsSysIterating`(`cacheId`) > 0:
+          if `inSystemIndex`(`cacheId`) in `relevantSystemsSeq`:
             # Calling removeComponent from within a system that uses the component.
             # We don't know if its the current row's entity or some other entity.
-            `cacheId`.set_sysRemoveAffectedThisSystem true
+            `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
         else:
-          if `cacheId`.ecsEventEnv.len > 0:
-            if eventOccurred(`cacheId`, {ekAddCB, ekRowAddedCB, ekRemoveCB, ekRowRemovedCB},
+          if `ecsEventEnv`(`cacheId`).len > 0:
+            if `eventOccurred`(`cacheId`, {ekAddCB, ekRowAddedCB, ekRemoveCB, ekRowRemovedCB},
                 `relevantSystemInts`):
               # Callback events set sysRemoveAffectedThisSystem to ensure
               # 'item' catches use after remove.
-              `cacheId`.set_sysRemoveAffectedThisSystem true
-
+              `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
 
     endOperation = quote do:
       static: endOperation(`cacheId`)

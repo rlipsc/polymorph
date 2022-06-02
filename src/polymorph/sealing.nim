@@ -25,7 +25,7 @@ export
   onAdd, onRemove, onInit, onInterceptUpdate, onUpdate, onDelete,
   onSystemAdd, onSystemAddTo, onSystemRemove, onSystemRemoveFrom,
   onEntityChange, clearOnEntityChange,
-  ecsstatedb
+  newEcsIdentity, defaultIdentity, private, set_private, typeIdRange
 
 
 # ---------------------
@@ -1467,12 +1467,12 @@ proc sealStateChanges(id: EcsIdentity): NimNode =
     proc `delProcName`*(`deleteEntParam`: EntityRef)    
 
     template `delTemplName`*(`deleteEntParam`: EntityRef) =
-      when `cacheId`.inSystem:
+      when `inSystem`(`cacheId`):
         static:
           # Systems are allowed to delete their iterating entity and
           # alter their loop checks to accommodate.
-          `cacheId`.set_systemCalledDelete true
-      elif `cacheId`.ecsEventEnv.len > 0:
+          `set_systemCalledDelete`(`cacheId`, true)
+      elif `ecsEventEnv`(`cacheId`).len > 0:
         # Events are not allowed to delete their host entity.
         `protectEventEntity`
         when declared(curEntity):

@@ -973,9 +973,9 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
   result = initTiming(sys, options, quote do:
     block:
       static:
-        if `cacheId`.inSystemAll:
+        if `inSystemAll`(`cacheId`):
           error "Cannot embed 'all' blocks within themselves"
-        `cacheId`.set_inSystemAll true
+        `set_inSystemAll`(`cacheId`, true)
         `enterIteration`
 
       var
@@ -999,8 +999,8 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
           # Inject the user's statements from `all:`
           `code`
 
-          when `cacheId`.systemCalledDelete or
-            `cacheId`.sysRemoveAffectedThisSystem:
+          when `systemCalledDelete`(`cacheId`) or
+            `sysRemoveAffectedThisSystem`(`cacheId`):
               `sysLen` = `sys`.count()
               if `sysLen` > 0 and (`idx` < `sysLen` and `sys`.groups[`idx`].entity == `rowEnt`):
                 # This row wasn't deleted so move forward.
@@ -1008,7 +1008,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
           else:
             `idx` = `idx` + 1
       static:
-        `cacheId`.set_inSystemAll false
+        `set_inSystemAll`(`cacheId`, false)
         `exitIteration`
   )
 
@@ -1162,9 +1162,9 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
 
   result = initTiming(sys, options, quote do:
     static:
-      if `cacheId`.inSystemStream:
+      if `inSystemStream`(`cacheId`):
         error "Cannot embed 'stream' blocks within themselves"
-      `cacheId`.set_inSystemStream  true
+      `set_inSystemStream`(`cacheId`, true)
       `enterIteration`
     block:
       # loop per entity in system
@@ -1198,7 +1198,7 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
         `processNext`
       
       static:
-        `cacheId`.set_inSystemStream false
+        `set_inSystemStream`(`cacheId`, false)
         `exitIteration`
   )
 
@@ -1559,15 +1559,15 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       
       # Record entry into system iteration in the static environment.
 
-      `cacheId`.set_inSystem true
-      `cacheId`.set_inSystemIndex `sysIndex`.SystemIndex
-      `cacheId`.set_sysRemoveAffectedThisSystem false
-      `cacheId`.set_systemCalledDelete false
+      `set_inSystem`(`cacheId`, true)
+      `set_inSystemIndex`(`cacheId`, `sysIndex`.SystemIndex)
+      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
+      `set_systemCalledDelete`(`cacheId`, false)
       const
         errPrelude = "Internal error: "
         internalError = " macrocache storage is unexpectedly populated for system \"" & `name` & "\""
-      assert `cacheId`.readsFrom(`sysIndex`.SystemIndex).len == 0, errPrelude & "readsFrom" & internalError
-      assert `cacheId`.writesTo(`sysIndex`.SystemIndex).len == 0, errPrelude & "writesTo" & internalError
+      assert `readsFrom`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "readsFrom" & internalError
+      assert `writesTo`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "writesTo" & internalError
 
     reportPerformance =
       when defined(ecsPerformanceHints):
@@ -1576,16 +1576,20 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           # Each component access is displayed in order of access
           # within the system.
           const prefix {.used.} = "System \"" & `name` & "\""
-          when `cacheId`.len_readsFrom(`sysIndex`.SystemIndex) > 0:
+          when `len_readsFrom`(`cacheId`, `sysIndex`.SystemIndex) > 0:
             debugPerformance `cacheId`, prefix & ": Reads from: " &
-              `cacheId`.commaSeparate(`cacheId`.readsFrom(`sysIndex`.SystemIndex))
-          when `cacheId`.len_writesTo(`sysIndex`.SystemIndex) > 0:
+              `commaSeparate`(`cacheId`, `readsFrom`(`cacheId`, `sysIndex`.SystemIndex))
+          when `len_writesTo`(`cacheId`, `sysIndex`.SystemIndex) > 0:
             debugPerformance `cacheId`, prefix & ": Writes to: " &
-              `cacheId`.commaSeparate(`cacheId`.writesTo(`sysIndex`.SystemIndex))
-          when `cacheId`.systemCalledDelete:
-            debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration"
-          elif `cacheId`.sysRemoveAffectedThisSystem:
-            debugPerformance `cacheId`, prefix & " can remove items from this system, length must be checked each iteration"
+              `commaSeparate`(`cacheId`, `writesTo`(`cacheId`, `sysIndex`.SystemIndex))
+          when `systemCalledDelete`(`cacheId`):
+            debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration (source: " &
+              `ecsSystemDeleteLoc`(`cacheId`) & ")"
+          elif `sysRemoveAffectedThisSystem`(`cacheId`):
+            debugPerformance `cacheId`, prefix &
+              " can remove items from this system, length must be checked each iteration (source: " &
+              `ecsSystemRemoveLoc`(`cacheId`) & ")"
+
       else:
         newStmtList()
 
@@ -1595,11 +1599,11 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
       # Record exit of system iteration in the static environment.
 
-      `cacheId`.set_inSystem false
-      `cacheId`.set_inSystemIndex InvalidSystemIndex
+      `set_inSystem`(`cacheId`, false)
+      `set_inSystemIndex`(`cacheId`, InvalidSystemIndex)
 
-      `cacheId`.set_sysRemoveAffectedThisSystem false
-      `cacheId`.set_systemCalledDelete false
+      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
+      `set_systemCalledDelete`(`cacheId`, false)
 
   var
     sysTypeNames: string
