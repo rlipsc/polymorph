@@ -115,7 +115,7 @@ else:
     # as their component state operations have already been generated.
     "ecsSealedComponents"])
 
-  genGlobalListStates(string, ["codeLog"])
+  genGlobalListStates(string, ["ecsCodeLog"])
   genGlobalStates(int, ["codeLogStart", "ecsSysIterating"])
 
   genGlobalListStates(SystemIndex, [

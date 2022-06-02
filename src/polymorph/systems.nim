@@ -731,7 +731,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
     if lcGroup notin id.systemGroups(sysIndex):
       id.add_systemGroups(sysIndex, lcGroup)
 
-  genLog "\n# System \"" & sysName & "\":\n" & result.repr
+  id.genLog "\n# System \"" & sysName & "\":\n" & result.repr
 
 
 proc embedOwned(componentTypes, ownedComponents: NimNode): NimNode =
@@ -1871,6 +1871,7 @@ macro onEcsCommitSystem*(sysName: static[string], code: untyped): untyped =
 # Manual clearing of system identity events
 # -----------------------------------------
 
+
 # Note: groups are considered to be 'encapsulated' with their
 # 'onEcsCommitGroups' event, and as such don't offer a clear operation.
 
@@ -1952,21 +1953,25 @@ macro ecsImportCommitFrom*(module: untyped, symbols: varargs[untyped]): untyped 
 # ------------------
 
 
+proc commitCommentStr(id: EcsIdentity, title, procName: string): string =
+  let
+    logComment =
+      if procName != "":
+        title & ", wrapped to proc '" & procName & "()'"
+      else:
+        title
+  "\n# " & logComment & "\n# " &
+    '-'.repeat(logComment.len) & "\n"
+
+
 proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
   result = newStmtList()
-
-  let
-    commitHeader = "for \"" & id.string & "\""
-    logTitle =
-      if procName != "":
-        commitHeader & ", wrapped to proc `" & procName & "()`"
-      else:
-        commitHeader
-
-  when defined(ecsLog) and not defined(ecsLogDetails):
-    echo "Committing systems " & commitHeader
   
-  id.startOperation "Commit systems " & commitHeader
+  let idStr = " for \"" & id.string & "\""
+  when defined(ecsLog) and not defined(ecsLogDetails):
+    echo "Committing systems" & idStr
+  
+  id.startOperation "Commit systems" & idStr
 
   let
     systems = id.orderedUncommitted()
@@ -1996,15 +2001,10 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
     id.ecsBuildOperation "remove exports":
       result = result.deExport
 
-  let
-    logCodeComment = "Commit systems " & logTitle & "\n"
-  
-  genLog  "\n# " & logCodeComment &
-          "# " & '-'.repeat(logCodeComment.len - 1) & "\n" &
-          result.repr
 
   when defined(ecsLogCode):
-    result.add id.flushGenLog(defaultGenLogFilename)
+    id.genLog id.commitCommentStr("Commit systems" & idStr, procName) & result.repr
+    result.add id.doFlushGenLog()
   
   id.endOperation
 
@@ -2165,11 +2165,12 @@ macro commitGroup*(id: static[EcsIdentity], group, runProc: static[string]): unt
 
     # Add the system body procedures and run proc.
     result.add id.commitSystemList(systems, runProc)
-  
+
     if id.private:
       result = result.deExport
 
-  genLog "# Commit group \"" & group & "\"", result.repr
+  let idStr = " for \"" & id.string & "\""
+  id.genLog id.commitCommentStr("Commit group \"" & group & "\"" & idStr, runProc) & result.repr
 
 
 template commitGroup*(group, runProc: static[string]): untyped =
@@ -2205,7 +2206,7 @@ macro forSystemsUsing*(id: static[EcsIdentity], typeIds: static[openarray[Compon
             template sysType: untyped = `curTupType`
             actions
         )
-  genLog "# forSystemsUsing:\n", result.repr
+  id.genLog "# forSystemsUsing:\n", result.repr
 
 
 macro forSystemsUsing*(id: static[EcsIdentity], types: openarray[typedesc], actions: untyped): untyped =

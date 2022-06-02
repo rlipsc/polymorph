@@ -1396,7 +1396,7 @@ macro componentUpdatePerformance*(id: static[EcsIdentity]): untyped =
 proc addPerformanceLog(id: EcsIdentity) {.compileTime.} =
   ## Append system operations per component to the log.
   
-  genLog """
+  id.genLog """
 
 
 ##
@@ -1413,11 +1413,11 @@ proc addPerformanceLog(id: EcsIdentity) {.compileTime.} =
   
   for item in perf:
     if item.systemsUpdated == 0:
-      genLog commentStart & item.componentType & ": <No systems using this component>"
+      id.genLog commentStart & item.componentType & ": <No systems using this component>"
     else:
-      genLog commentStart & item.componentType & ": " & $item.systemsUpdated & " systems"
+      id.genLog commentStart & item.componentType & ": " & $item.systemsUpdated & " systems"
   
-  genLog "# " & '-'.repeat(24)
+  id.genLog "# " & '-'.repeat(24)
 
 
 proc sealEntities(id: EcsIdentity): NimNode =
@@ -1683,14 +1683,24 @@ template expectSystems*(entity: EntityRef, systems: openArray[string]): untyped 
 # ---------------
 
 
-when defined(ecsLogCode):
-  proc doStartLog(id: EcsIdentity): NimNode =
-    if not id.logInitialised:
-      id.set_logInitialised true
-      quote do:
-        startGenLog(`defaultGenLogFilename`)
-    else:
-      newStmtList()
+macro setCodeLogFile*(id: static[EcsIdentity], filename: static[string]): untyped =
+  ## Set the filename for code logging for this identity.
+  id.set_ecsCodeLogFilename filename
+
+
+macro flushGenLog*(id: static[EcsIdentity]): untyped =
+  ## When compiling with `-d:ecsLogCode`, this macro appends any
+  ## code generated after `makeEcs` in the code log.
+  ## 
+  ## This includes the code for adding and removing components, and
+  ## creating new entities with `newEntityWith`.
+  ## 
+  ## When placed at the expected exit point, all generated code is
+  ## logged to file.
+  ## 
+  ## NOTE: this currently stores the log in the executable and writes
+  ## at **run time** start up.
+  id.doFlushGenLog()
 
 
 macro flushGenLog*: untyped =
@@ -1702,10 +1712,10 @@ macro flushGenLog*: untyped =
   ## 
   ## When placed at the expected exit point, all generated code is
   ## logged to file.
-  when defined(ecsLogCode):
-    defaultIdentity.flushGenLog(defaultGenLogFilename)
-  else:
-    newStmtList()
+  ## 
+  ## NOTE: this currently stores the log in the executable and writes
+  ## at **run time** start up.
+  defaultIdentity.doFlushGenLog()
 
 
 proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
@@ -1806,14 +1816,14 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     when defined(ecsLogDetails): ": " & id.commaSeparate(id.allUnsealedComponents)
     else: ""
 
-  id.ecsBuildOperation "sealing " & $id.unsealedComponentCount() & " components" & compInfoStr:
+  id.ecsBuildOperation "create " & $id.unsealedComponentCount() & " components" & compInfoStr:
     if id.unsealedComponentCount == 0:
       error "No components have been defined by this ECS"
 
     result.add generateTypeStorage(id)
     result.add genTypeAccess(id)
 
-  id.ecsBuildOperation "seal entities":
+  id.ecsBuildOperation "entities":
     result.add sealEntities(id)
 
   id.ecsBuildOperation "run time debug output":
@@ -1840,7 +1850,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   id.ecsBuildOperation "user event callbacks":
     result.add eventProcs
   
-  id.ecsBuildOperation "sealing":
+  id.ecsBuildOperation "sealing ECS":
     # Flag components as generated.
     for typeId in unsealedComponents:
       id.add_ecsSealedComponents typeId
@@ -1853,12 +1863,13 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
     id.ecsBuildOperation "remove exports":
       result = result.deExport
   
-  id.set_onEcsBuiltCode newStmtList()
-
   when defined(ecsLogCode):
     id.ecsBuildOperation "generate makeEcs() log":
-      genLog("\n# makeEcs() code generation output:\n" & result.repr)
-      result.add id.flushGenLog(defaultGenLogFilename)
+      id.genLog("\n# makeEcs() code generation output:\n" & result.repr)
+      result.add id.doFlushGenLog()
+      if not id.logInitialised:
+        id.set_logInitialised true
+        result.insert(0, startGenLog(id))
 
   when defined(ecsLog) or defined(ecsLogDetails):
     echo "ECS \"" & id.string & "\" built."

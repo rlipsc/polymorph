@@ -1308,46 +1308,49 @@ proc hasIntersection*[T](s1, s2: HashSet[T]): bool =
 
 when defined(ecsLogCode):
   from os import joinPath, parentDir, `/`
-  const defaultGenLogFilename* = getProjectPath() / "ecs_code_log.nim"
+  const
+    defaultGenLogFilename = "_ecsCodeLog.nim"
+    defaultGenLogPath = getProjectPath()
+    preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
 
 
-macro startGenLog*(id: static[EcsIdentity], fileName: static[string]): untyped =
+proc getCodeLogFilename*(id: EcsIdentity): string {.compileTime.} =
+  ## Returns the user's file path to the code log, or if not set, the
+  ## project's path with the filename in the form "<EcsIdentity>_ecsCodeLog.nim".
+  result = id.ecsCodeLogFilename
+  when defined(ecsLogCode):
+    if result.len == 0:
+      result = defaultGenLogPath.joinPath string(id) & defaultGenLogFilename
+
+
+proc startGenLog*(id: EcsIdentity): NimNode =
   ## Creates/clears the log file.
   when defined(ecsLogCode):
     let
-      fn = newLit fileName
-      preludeFn = currentSourcePath.parentDir.parentDir.joinPath "sharedtypes.nim"
+      fn = newLit id.getCodeLogFilename
       prelude = staticRead(`preludeFn`)
-
-    result = quote do:
+    quote do:
+      echo "Starting ECS code log '", `fn`, "'"
       let f = `fn`.open(fmWrite)
       f.write `prelude`
       f.close
-      echo "Started file \"", `fn`, "\""  
   else:
     newStmtList()
 
-proc genLog*(id: static[EcsIdentity], params: varargs[string]) {.compileTime.} =
+
+proc genLog*(id: EcsIdentity, params: varargs[string]) {.compileTime.} =
   ## Allows macros to generate a log that is then written to file.
   when defined(ecsLogCode):
     var s = ""
     for item in params:
       s &= $item
     s &= "\n"
-    id.add_codeLog s
+    id.add_ecsCodeLog s
   else:
     discard
 
-template genLog*(params: varargs[string]) =
-  genLog(defaultIdentity, params)
 
-template startGenLog*(fileName: static[string]): untyped =
-  startGenLog(defaultIdentity, fileName)
-
-template startGenLog*() =
-  startGenLog(defaultGenLogFilename)
-
-proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
+proc doFlushGenLog*(id: EcsIdentity): NimNode =
   when defined(ecsLogCode):
     ## Write log to file.
     ## Because we cannot `import c` at compile time and write the log then,
@@ -1356,26 +1359,31 @@ proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
     ## written to the actual log file at run time start up.
     ## To activate the code log pass `-d:ecsLogCode` flag when compiling.
     result = newStmtList()
-    var logText = ""
     let
-      fn = newLit fileName
-      log = id.codeLog()
-      start = id.codeLogStart()
-      newLogItems = log[start .. ^1]
-    
-    if newLogItems.len > 0:
-      for line in newLogItems:
-        logText &= line
-      let text = newLit logText
+      fn = id.getCodeLogFilename
+      cs = id.cacheSeq_ecsCodeLog
+      #log = id.ecsCodeLog()
+      first = id.codeLogStart()
+      lines = cs.len - first
+
+    if lines > 0:
+      var text = newLit ""
+      for i in first ..< first + lines:
+        text = newLit text.strVal & cs[i].strVal
+      
+      let
+        logBytes = text.strVal.len
+        logContextStr = " for identity \"" & string(id) & "\""
+        logBytesStr = $logBytes & " bytes"
+        lbLit = newLit logBytes
+
+      echo "[ Including ECS code log", logContextStr, ": '", fn, "' (", logBytesStr, ") ]"
 
       # Update new log start index.
-      id.set_codeLogStart id.len_codeLog()
-
-      echo "Recording log from line " & $start & " to " &
-        $newLogItems.len & ", " & $logText.len & " bytes"
-
+      id.set_codeLogStart cs.len
       # Generate *runtime* file output of static log string.
       result.add(quote do:
+        echo "Appending ECS code log", `logContextStr`, ": '", `fn`, "' (", `logBytesStr`, ")"
         let
           f = `fn`.open(fmAppend)
           total = `text`.len
@@ -1384,7 +1392,9 @@ proc flushGenLog*(id: EcsIdentity, fileName: static[string]): NimNode =
         finally:
           f.close
         
-        echo "Appended to ECS generation log '", `fn`, "': ", total, " characters written"
+        if total != `lbLit`:
+          echo "  Warning: code log expected to write " &
+            $`lbLit` & " but OS returned " & $total
       )
   else:
     newStmtList()

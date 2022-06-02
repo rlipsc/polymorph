@@ -510,7 +510,8 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
       static: endOperation(EcsIdentity(`id`))
       `entitySym`
 
-  genLog "\n# macro newEntityWith(" & id.commaSeparate(details.passed) & "):\n", result.repr
+  id.genLog "\n# macro newEntityWith(" & id.commaSeparate(details.passed) & ") " &
+    passedValues.lineInfo & ":\n", result.repr
 
 
 proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode): NimNode =
@@ -607,8 +608,9 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
       
       `returnType`
 
-  genLog "\n# macro addComponents(" & id.commaSeparate(details.passed) & "):\n", result.repr
-
+  id.genLog "\n# macro addComponents(" & id.commaSeparate(details.passed) & ") " &
+    componentValues.lineInfo & ":\n", result.repr
+  
 
 proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode): NimNode =
   #[
@@ -699,7 +701,8 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
 
   result = newBlockStmt(op)
 
-  genLog "\n# macro removeComponents(" & id.commaSeparate(details.passed) & "):\n", result.repr
+  id.genLog "\n# macro removeComponents(" & id.commaSeparate(details.passed) & ") " &
+    componentList.lineInfo & ":\n", result.repr
 
 
 proc makeStateChanges*(id: EcsIdentity): NimNode =
@@ -928,7 +931,7 @@ proc makeStateChanges*(id: EcsIdentity): NimNode =
 
   )
   
-  genLog "\n# State changes operations:\n", result.repr
+  id.genLog "\n# State changes operations:\n", result.repr
 
 
 proc doFetchComponents(id: EcsIdentity, entity: NimNode, components: NimNode): NimNode =
@@ -980,7 +983,8 @@ proc doFetchComponents(id: EcsIdentity, entity: NimNode, components: NimNode): N
         let `resultSym` = `fetchOp`
         `resultSym`
 
-  genLog "\n## macro fetchComponents(" & id.commaSeparate(passedTypes) & "):\n", result.repr
+  id.genLog "\n# macro fetchComponents(" & id.commaSeparate(passedTypes) & ") " &
+    components.lineInfo & ":\n", result.repr
 
 
 proc makeFetchComponents*(id: EcsIdentity): NimNode =

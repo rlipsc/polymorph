@@ -35,7 +35,7 @@ proc addComponentTypeId(id: EcsIdentity, typeNameStr: string): ComponentTypeId {
   id.set_ecsInstanceType(result, instanceTypeName typeNameStr)
   id.set_refType(result, refTypeName typeNameStr)
   
-  genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
+  id.genLog "# Added component type: \"", typeNameStr, "\" = ", $result.int
 
 
 macro instanceType*(id: static[EcsIdentity], ty: typedesc): untyped =
@@ -202,7 +202,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   if id.private:
     result = result.deExport
 
-  genLog("\n# Register components:\n" & result.repr)  
+  id.genLog("\n# Register components " & body.lineInfo & ":\n" & result.repr)  
 
 
 proc generateTypeStorage*(id: EcsIdentity): NimNode =

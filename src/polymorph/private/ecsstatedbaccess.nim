@@ -1634,21 +1634,21 @@ proc ecsSealedComponents*(id: EcsIdentity): seq[ComponentTypeId] {.compileTime.}
 
 {.pop.}
 {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
-proc lenCodeLog*(id: EcsIdentity): Natural {.compileTime.} =
-  CacheSeq(id.string & "CodeLogstring").len
+proc lenEcsCodeLog*(id: EcsIdentity): Natural {.compileTime.} =
+  CacheSeq(id.string & "EcsCodeLogstring").len
 
-proc cacheSeqCodeLog*(id: EcsIdentity): CacheSeq {.compileTime.} =
-  CacheSeq(id.string & "CodeLogstring")
+proc cacheSeqEcsCodeLog*(id: EcsIdentity): CacheSeq {.compileTime.} =
+  CacheSeq(id.string & "EcsCodeLogstring")
 
-proc addCodeLog*(id: EcsIdentity; value: string) {.compileTime.} =
-  CacheSeq(id.string & "CodeLogstring").add(newLit(string(value)))
+proc addEcsCodeLog*(id: EcsIdentity; value: string) {.compileTime.} =
+  CacheSeq(id.string & "EcsCodeLogstring").add(newLit(string(value)))
 
-proc codeLog*(id: EcsIdentity): seq[string] {.compileTime.} =
+proc ecsCodeLog*(id: EcsIdentity): seq[string] {.compileTime.} =
   let
-    keyVal = CacheSeq(id.string & "CodeLogstring")
-    lenCodeLog = keyVal.len
-  if lenCodeLog > 0:
-    result.setLen lenCodeLog
+    keyVal = CacheSeq(id.string & "EcsCodeLogstring")
+    lenEcsCodeLog = keyVal.len
+  if lenEcsCodeLog > 0:
+    result.setLen lenEcsCodeLog
     var i: int
     for item in keyVal.items:
       result[i] = string(item.strVal)
