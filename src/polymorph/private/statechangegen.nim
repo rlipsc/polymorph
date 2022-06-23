@@ -14,12 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-## This module generates code to perform a state change.
+## This module generates code to perform ECS state changes like adding
+## and removing components or entities.
 ## 
-## The `StateChangeDetails` object holds the parameters and output code
-## to create the state transition.
+## `newStateChangeDetails` creates a `StateChangeDetails` object to hold
+## the state change parameters and context.
 ## 
+## Use `applyChange` to input state changes to `StateChangeDetails`.
 ## 
+## Once the state change has been set up, calling `buildStateChange`
+## populates `StateChangeDetails` with the code for the required tasks
+## involved, such as updating entity metadata, syncing systems, and
+## running user events.
+## 
+## By default, `buildStateChange` uses `StateChangeDetails.values`
+## to access user parameters where appropriate.
+## 
+## This behaviour can be changed by passing procedures that generate
+## 'get' and 'has' code. This is used for example in `construct` and
+## `clone` to access a run time hash table for the operation parameters.
+## 
+## The resultant task code in `StateChangeDetails` can then be assembled
+## into user facing state change operations, such as `newEntityWith`,
+## `addComponents`, `construct`, and so on.
 
 
 import macros, strutils, sets, tables
@@ -34,6 +51,7 @@ import utils, eventutils, statechangeutils, mutationtracking
 type
   ComponentGroup* = object
     required*: ComponentSet
+    requiredOr*: ComponentSet
     negated*: ComponentSet
 
   SystemUpdate* = ref object
@@ -188,22 +206,17 @@ proc buildRemoveCompEvents(id: EcsIdentity, context: var EventContext, c: Compon
 
 proc removeComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateChangeDetails) =
   ## Invoke remove events for details.passed.
-  ## 
 
   if not details.iterating.isNil:
     assert details.passed.len > 0, "Internal error: there must be at least one component passed when iterating"
-
     let c = id.getInfo(details.passed[0])
-
     var context = newEventContext(entity, c, details.iterating)
     let events = id.buildRemoveCompEvents(context, c)
     if events.len > 0:
       details.allEvents.add events
 
   else:
-    
     for c in id.building(details.passed):
-
       let fetchedIdent = details.compAccess(c, details.suffix)
       var context = newEventContext(entity, c, fetchedIdent)
       let events = id.buildRemoveCompEvents(context, c)
@@ -226,15 +239,14 @@ proc addComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateChan
 
   if not details.iterating.isNil:
     assert details.passed.len > 0, "Internal error: there must be at least one component when iterating"
-    
     let c = id.getInfo(details.passed[0])
     var context = newEventContext(entity, c, details.iterating)
-
     details.allEvents.buildAddCompEvents(id, context, c)
 
   else:
     for c in id.building(details.passed):
-      var context = newEventContext(entity, c, details.compAccess(c, details.suffix))
+      let fetchedIdent = details.compAccess(c, details.suffix)
+      var context = newEventContext(entity, c, fetchedIdent)
       details.allEvents.buildAddCompEvents(id, context, c)
 
 
@@ -320,7 +332,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
     else:
       details.compFetches.excl details.passedSet
   
-    details.compFetches.incl (change.checkIncl + change.checkExcl)
+    details.compFetches.incl (change.checkIncl + change.checkExcl + change.checkInclOr)
   
   let
     sys = id.getInfo change.sys
@@ -349,6 +361,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
         entity,
         sys.index,
         change.checkIncl,
+        change.checkInclOr,
         change.checkExcl,
         details.suffix,
         details.compValid
@@ -370,6 +383,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
       addCompGroup = details.componentGroups.mgetOrPut(
         ComponentGroup(
           required: change.checkIncl,
+          requiredOr: change.checkInclOr,
           negated: change.checkExcl
         ),
         newSystemUpdate()
@@ -607,14 +621,18 @@ proc buildSystemUpdates(id: EcsIdentity, entity: NimNode, details: var StateChan
 
   # Actions depending on component presence.
   for group, sysUpdate in details.componentGroups:
+    let
+      guard = id.buildSysCheck(
+        group.required,
+        group.requiredOr,
+        group.negated,
+        details.suffix,
+        details.compValid)
+
     id.doSysUpdate(
       entity,
       sysUpdate,
-      guard = id.buildSysCheck(
-        group.required,
-        group.negated,
-        details.suffix,
-        details.compValid),
+      guard,
       details
     )
 

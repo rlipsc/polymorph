@@ -75,7 +75,7 @@ type
     fromNegation*: bool
     case kind*: SystemChangeKind
       of sckAdd:
-        checkIncl*, checkExcl*: ComponentSet
+        checkIncl*, checkInclOr*, checkExcl*: ComponentSet
       of sckRemove:
         discard
 
@@ -203,7 +203,10 @@ iterator removeStateChanges*(id: EcsIdentity, removing: seq[ComponentTypeId]): S
                   # are present to be removed in order for this state change
                   # to occur. This handles remove ops where the component to
                   # be removed isn't on the entity.
-                  checkIncl: req + negIntersect,
+                  checkIncl: req,
+                  # At least one negation must be present in this remove
+                  # operation to match the add for a negated system.
+                  checkInclOr: negIntersect,
                   checkExcl: otherNegs
                 )
             else:
@@ -443,13 +446,12 @@ proc buildSysItem*(id: EcsIdentity, entity: NimNode, sys: SystemBuildInfo,
       )
 
 
-proc buildSysCheck*(id: EcsIdentity, requirements, negations: ComponentIterable, suffix: string, compValid: ComponentValidProc): NimNode =
+proc buildSysCheck*(id: EcsIdentity, requirements, reqOrs, negations: ComponentIterable, suffix: string, compValid: ComponentValidProc): NimNode =
   ## Returns the infix for an 'if' statement from the system requirements.
   ## For example: `comp1 and comp2 and not(comp3)`.
 
-  var
-    reqElements: seq[NimNode]
-  
+  var reqElements: seq[NimNode]
+
   for c in id.building requirements:
     reqElements.add c.compValid(suffix)
 
@@ -460,11 +462,18 @@ proc buildSysCheck*(id: EcsIdentity, requirements, negations: ComponentIterable,
     reqElements.add(quote do:
       (not `isValid`)
     )
+  
+  var orGroup: seq[NimNode]
+  for c in id.building reqOrs:
+    orGroup.add c.compValid(suffix)
+
+  if orGroup.len > 0:
+    reqElements.add genInfixes(orGroup, "or")
 
   genInfixes(reqElements, "and")
 
 
-proc checkRequired*(id: EcsIdentity, entity: NimNode, sysIndex: SystemIndex, req, neg: ComponentSet, suffix: string,
+proc checkRequired*(id: EcsIdentity, entity: NimNode, sysIndex: SystemIndex, req, reqOr, neg: ComponentSet, suffix: string,
     compValid: ComponentValidProc): NimNode =
   ## Run time check to ensure required components exist to satisfy owned systems.
   result = newStmtList()
@@ -472,11 +481,8 @@ proc checkRequired*(id: EcsIdentity, entity: NimNode, sysIndex: SystemIndex, req
   if req.len == 0 and neg.len == 0:
     return
 
-  let
-    matchesSystem = id.buildSysCheck(req, neg, suffix, compValid)
-  
-  var
-    reqStr = id.commaSeparate(req)
+  let matchesSystem = id.buildSysCheck(req, reqOr, neg, suffix, compValid)
+  var reqStr = id.commaSeparate(req)
 
   if neg.len > 0:
     reqStr &= " and not " & id.commaSeparate(neg)
