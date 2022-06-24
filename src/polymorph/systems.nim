@@ -1456,18 +1456,17 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
       template curNode: NimNode =
         parent[blockIndex]
 
+      var handled: bool
+      
       if curNode.isBlockNode:
-
-        let
-          blockTitle = ($curNode[0]).toLowerAscii
-
-        case blockTitle
+        case ($curNode[0]).toLowerAscii
 
           of $sbAll:
             if not hasComponents:
               error needComponentsMsg & $sbAll & "'"
             activeBlocks.incl sbkAll
             parent[blockIndex] = id.wrapAllBlock(name, sysIndex, options, parent[blockIndex][1])
+            handled = true
 
           of $sbStream:
             if not hasComponents:
@@ -1476,10 +1475,9 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
             # Note: passes `curNode` rather than the code in [1], as
             # stream has to further parse the node for commands.
             parent[blockIndex] = wrapStreamBlock(id, name, sysIndex, options, curNode())
+            handled = true
           
-          else:
-            discard
-      else:
+      if not handled:
         # We have to go deeper.
         curNode.applyIterationBlocks
 
