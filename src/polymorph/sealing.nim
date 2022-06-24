@@ -1466,12 +1466,16 @@ proc sealStateChanges(id: EcsIdentity): NimNode =
   result.add(quote do:
     proc `delProcName`*(`deleteEntParam`: EntityRef)    
 
+    macro getLiStr(param: untyped): untyped = newLit $param.lineInfo
+
     template `delTemplName`*(`deleteEntParam`: EntityRef) =
       when `inSystem`(`cacheId`):
         static:
           # Systems are allowed to delete their iterating entity and
           # alter their loop checks to accommodate.
           `set_systemCalledDelete`(`cacheId`, true)
+          `set_ecsSystemDeleteLoc`(`cacheId`, getLiStr(`deleteEntParam`))
+
       elif `ecsEventEnv`(`cacheId`).len > 0:
         # Events are not allowed to delete their host entity.
         `protectEventEntity`

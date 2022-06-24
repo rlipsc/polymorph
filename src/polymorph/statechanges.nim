@@ -556,6 +556,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
 
   let
     cacheId = quote do: EcsIdentity(`id`)
+    locStr = $componentValues.lineInfo
   result = quote do:
     block:
       static:
@@ -566,6 +567,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
             # and therefore acts as a remove operation, so we need to
             # add in extra loop checking logic.
             `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
+            `set_ecsSystemRemoveLoc`(`cacheId`, `locStr`)
       
       `op`
       
@@ -610,12 +612,11 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
 
   let
     opStr = "removeComponents: " & id.commaSeparate(details.passed)
-
     cacheId = quote do:
       EcsIdentity(`id`)
-    
     relevantSystemsSeq = relevantSystems.toSeq
     relevantSystemInts = relevantSystemsSeq.toIntList
+    locStr = $componentList.lineInfo
     
     catchUseInSystem = quote do:
       static:
@@ -626,6 +627,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
             # Calling removeComponent from within a system that uses the component.
             # We don't know if its the current row's entity or some other entity.
             `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
+            `set_ecsSystemRemoveLoc`(`cacheId`, `locStr`)
         else:
           if `ecsEventEnv`(`cacheId`).len > 0:
             if `eventOccurred`(`cacheId`, {ekAddCB, ekRowAddedCB, ekRemoveCB, ekRowRemovedCB},
@@ -633,6 +635,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
               # Callback events set sysRemoveAffectedThisSystem to ensure
               # 'item' catches use after remove.
               `set_sysRemoveAffectedThisSystem`(`cacheId`, true)
+              `set_ecsSystemRemoveLoc`(`cacheId`, `locStr`)
 
     endOperation = quote do:
       static: endOperation(`cacheId`)
