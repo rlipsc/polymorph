@@ -33,7 +33,8 @@ proc allSysReq*(id: EcsIdentity): SystemReqSets =
     )
 
 
-proc buildConstructionCaseStmt(id: EcsIdentity,
+proc buildConstructionCaseStmt(
+    id: EcsIdentity,
     sysReq: SystemReqSets,
     kind: StateChangeDetailsKind,
     entityIdent, sysProcessed, getTypeIdent, getCompIdx: NimNode,
@@ -57,37 +58,30 @@ proc buildConstructionCaseStmt(id: EcsIdentity,
     quote do:
       types.hasKey(`id`)
 
+  # Populate case statement with state changes for each component.
   for c in id.building allComponents:
-    # Populate case statements for events and each component.
 
-    var
-      details = newStateChangeDetails(kind, compAccess, compHasKey)
-
+    var details = newStateChangeDetails(kind, compAccess, compHasKey)    
     details.values = nnkBracket.newTree()
     details.passed = @[c.typeId]
 
     if c.isOwned:
       # Pass values for owned construction.
-
       details.values.add compValue(c, suffix)
       
-      var
-        required = id.inclDependents(sysReq[c.owner].req)
-      
+      var required = id.inclDependents(sysReq[c.owner].req)
       required.excl c.typeId
-
       for owned in id.building(required):
         details.passed.add owned.typeId
         details.values.add compValue(owned, suffix)
     
+    let instTy = c.instanceTy
+    details.iterating = quote do:
+      `instTy`(`getCompIdx`)
+    
     details.passedSet = details.passed.toHashSet
     details.suffix = suffix
 
-    let
-      instTy = c.instanceTy
-
-    details.iterating = quote do:
-      `instTy`(`getCompIdx`)
     details.sysProcessed = sysProcessed
 
     for sys in id.building(id.linked(c.typeId)):
@@ -156,6 +150,9 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     callback = ident "callback"
     systemReqSets = id.allSysReq
 
+  # These procedures change the 'read' and 'exists' operations for
+  # 'newStateChangeDetails' to access the 'types' table.
+  
   proc compAccessConstruct(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
     let
       typeId = newLit typeInfo.typeId.int
@@ -186,9 +183,12 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
   proc compValueClone(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
     compAccessClone(typeInfo, suffix).newDotExpr ident"access"
 
+  # Create case statements for construct and clone.
+
   let
     sysSet = ident systemsEnumName()
 
+    # Construct's case statement reads parsed info from a ComponentList.
     constructCaseInfo = id.buildConstructionCaseStmt(
       systemReqSets,
       scdkConstruct,
@@ -203,7 +203,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       compHasKey,
     )
 
-    # Build the core construct process.
+    # Build the core construct loop.
     constructCase = constructCaseInfo.sysCase
     constructLoop =
       if constructCase.len > 1:
@@ -216,6 +216,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
 
     eventCase = constructCaseInfo.eventCase
 
+    # Clone's case statement reads parsed info from an existing entity.
     cloneCaseInfo = id.buildConstructionCaseStmt(
       systemReqSets,
       scdkClone,
@@ -230,7 +231,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     cloneCase = cloneCaseInfo.sysCase
     userCloneEvents = cloneCaseInfo.eventCase
 
-    # Build the core clone process.
+    # Build the core clone loop.
     cloneLoop =
       if cloneCase.len > 1:
         quote do:
@@ -245,17 +246,17 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
 
     entId = quote do: `entity`.entityId
     entCompCount = componentRefsLen(entId, componentStorageFormat)
-
-  # Entity events.
-  var
-    entContext = newEventContext(res)
+    entContext = newEventContext(res) # Entity events.
   
+  # Build a loop to process user construct events.
   if eventCase.len > 1:
     constructEvents.add(
       quote do:
         for `compIndexInfo` in `types`.pairs:
           `eventCase`
     )
+  
+  # Build a loop to process user clone events.
   if userCloneEvents.len > 1:
     cloneEvents.add(
       quote do:
@@ -263,6 +264,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
           `userCloneEvents`
     )
 
+  # Build entity events for construct and clone.
   constructEvents.invokeEvent(id, entContext, ekConstruct)
   cloneEvents.invokeEvent(id, entContext, ekClone)
 
@@ -272,7 +274,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
   if cloneEvents.len > 0:
     cloneEvents.trackMutation(id, ekClone, id.allUnsealedComponents, announce = false)
   
-  # Find component type bounds for the current set of components.
+  # Find component type bounds for the current set of unsealed components.
   var
     lowCompId = id.ecsComponentsToBeSealed[^1].int
     highCompId: int
@@ -291,6 +293,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     postConstruct = ident "postConstruct"
     cloneConstruct = ident "cloneConstruct"
 
+    # Invoke post-construction callbacks.
     postConstruction =
       case componentStorageFormat
       of csSeq, csArray:
@@ -324,7 +327,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       # Clone constructors allow custom handling of components by type when `clone` is called on an entity.
       `cloneConstruct`: array[`lowCompId`..`highCompId`, CloneConstructorProc]
 
-    # Do not rely on the order a callback is invoked when constructing templates
+    # Note: do not rely on the order a callback is invoked when constructing templates.
 
     proc registerConstructor*(`typeId`: ComponentTypeId, `callback`: ConstructorProc) = `manualConstruct`[`typeId`.int] = `callback`
     template registerConstructor*(t: typedesc[`tcIdent`], `callback`: ConstructorProc) = registerConstructor(t.typeId, `callback`)
@@ -338,10 +341,13 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
     proc construct*(`cList`: ComponentList, `context`: EntityRef = NO_ENTITY_REF): EntityRef =
       ## Create a runtime entity from a list of components.
       ## 
-      ## The user may use `registerCallback` to control construction of particular types.
+      ## The user may use `registerCallback` to control construction of
+      ## particular types.
       ## 
-      ## When called from a `ConstructionList`, `context` is set to the first entity constructed.
-      ## If no `context` is specified, the currently constructed entity is used.
+      ## `context` contains the constructing entity when not passed.
+      ## 
+      ## When this called from a `ConstructionTemplate`, `context` will
+      ## be the first entity to be constructed.
 
       static: startOperation(EcsIdentity(`id`), "construct")
       `res` = newEntity()
@@ -465,6 +471,11 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
           `postConstruction`
           `iterVar` += 1
 
+    proc construct*(`construction`: ConstructionTemplate, amount: int): seq[Entities] {.discardable.} =
+      result.setLen amount
+      for i in 0 ..< amount:
+        result[i] = construct(`construction`)
+
     proc toTemplate*(`entity`: EntityRef): seq[Component] =
       ## Creates a list of components ready to be used for construction.
       assert `entity`.alive
@@ -473,6 +484,11 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
       for i, compRef in `entity`.entityId.pairs:
         caseComponent(compRef.typeId):
           `res`[i] = componentInstanceType()(compRef.index).makeContainer()
+
+    proc toTemplate*(entities: Entities): ConstructionTemplate =
+      result.setLen entities.len
+      for i, e in entities:
+        result[i] = e.toTemplate
 
     proc clone*(entity: EntityRef): EntityRef =
       ## Copy an entity's components to a new entity.
