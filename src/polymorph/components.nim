@@ -388,7 +388,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       sysOwner = c.owner
 
     typeAccess.add(quote do:
-      template accessType*(`tyParam`: `instanceTypeIdent` | typedesc[`instanceTypeIdent`]): untyped =
+      template accessType*(`tyParam`: `instanceTypeIdent` | typedesc[`instanceTypeIdent`] | `typeNameIdent` | typedesc[`typeNameIdent`]): untyped =
         ## Returns the source component type of a component instance.
         ## This can also be achieved with `instance.access.type`.
         typedesc[`typeNameIdent`]
