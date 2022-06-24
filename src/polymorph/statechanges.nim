@@ -117,44 +117,24 @@ proc setupOnInterceptUpdate(id: EcsIdentity, typeToUse: NimNode, actions: NimNod
   result = newStmtList()
 
 macro onInterceptUpdate*(id: static[EcsIdentity], typeToUse: typedesc, actions: untyped): untyped =
-  ## Add some code to be executed when a new component is instantiated,
-  ## but before data has been added.
-  ## The data being added can be accessed in `curComponent`, and is of
-  ## the native type, not the instance type.
+  ## Add some code to be executed when `update` is called for a component type.
   ## Each invocation will append to the code that will be inserted.
-  ## Note: When this is hooked, the user must call `commit` if they don't
-  ## want the update parameters to be ignored.
   id.setupOnInterceptUpdate(typeToUse, actions)
 
 macro onInterceptUpdate*(typeToUse: typedesc, actions: untyped): untyped =
-  ## Add some code to be executed when a new component is instantiated,
-  ## but before data has been added.
-  ## The data being added can be accessed in `curComponent`, and is of
-  ## the native type, not the instance type.
+  ## Add some code to be executed when `update` is called for a component type.
   ## Each invocation will append to the code that will be inserted.
-  ## Note: When this is hooked, the user must call `commit` if they don't
-  ## want the update parameters to be ignored.
   defaultIdentity.setupOnInterceptUpdate(typeToUse, actions)
 
 
 macro onUpdate*(id: static[EcsIdentity], typeToUse: typedesc, actions: untyped): untyped =
-  ## Add some code to be executed when a new component is instantiated,
-  ## but before data has been added.
-  ## The data being added can be accessed in `curComponent`, and is of
-  ## the native type, not the instance type.
+  ## Add some code to be executed when `update` is called for a component type.
   ## Each invocation will append to the code that will be inserted.
-  ## Note: When this is hooked, the user must call `commit` if they don't
-  ## want the update parameters to be ignored.
   id.setupOnInterceptUpdate(typeToUse, actions)
 
 macro onUpdate*(typeToUse: typedesc, actions: untyped): untyped =
-  ## Add some code to be executed when a new component is instantiated,
-  ## but before data has been added.
-  ## The data being added can be accessed in `curComponent`, and is of
-  ## the native type, not the instance type.
+  ## Add some code to be executed when `update` is called for a component type.
   ## Each invocation will append to the code that will be inserted.
-  ## Note: When this is hooked, the user must call `commit` if they don't
-  ## want the update parameters to be ignored.
   defaultIdentity.setupOnInterceptUpdate(typeToUse, actions)
 
 
@@ -427,19 +407,13 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
   
   result = newStmtList()
 
-  let
-    entitySym = genSym(nskLet, "entity")
-
-  var
-    details = id.newStateChangeDetails(scdkNewEntity, passedValues)
-
+  let entitySym = genSym(nskLet, "entity")
+  var details = id.newStateChangeDetails(scdkNewEntity, passedValues)
   details.suffix =
     if defined(ecsNoMangle): ""
     else: signatureHash entitySym
   
-  var
-    satisfied: SystemSet
-  
+  var satisfied: SystemSet
   for sys in id.satisfiedSystems(details.passed):
     # Update systems that are full satisfied by the parameters.
     satisfied.incl sys
@@ -450,11 +424,8 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
     needComps: seq[ComponentTypeId]
 
   # Check any owned components passed fully satisfy their systems.
-
   for c in details.passed:
-    let
-      owner = id.systemOwner c
-
+    let owner = id.systemOwner c
     if owner != InvalidSystemIndex and owner notin satisfied:
       unsatisfiedComps.add c
 
@@ -468,11 +439,9 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
       id.commaSeparate(needComps) & "] to satisfy their owning systems"
 
   # Generate system state changes and events.
-
   id.buildStateChange entitySym, details
 
   # Assemble generated code.
-
   let
     newDecls = details.newDecls
     sysUpdates = details.systemUpdates
@@ -524,16 +493,12 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
       quote do:
         let `entitySym` = `entity`
 
-  var
-    details = id.newStateChangeDetails(scdkAdd, componentValues)
-  
+  var details = id.newStateChangeDetails(scdkAdd, componentValues)
   details.suffix =
     if defined(ecsNoMangle): ""
     else: signatureHash entitySym
 
-  var
-    returnType = nnkPar.newTree()
-  
+  var returnType = nnkPar.newTree()
   for i in 0 ..< details.passed.len:
     let
       c = id.getInfo details.passed[i]
@@ -564,6 +529,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
 
   id.buildStateChange entitySym, details
   
+  # Assemble generated code.
   var
     op = newStmtList()
     opStr = "Add components " & id.commaSeparate(details.passed)
@@ -621,8 +587,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
     the item with the last one in the list and reducing the list length.
   ]#
 
-  var
-    details = id.newStateChangeDetails(scdkRemove, componentList)
+  var details = id.newStateChangeDetails(scdkRemove, componentList)
   let
     entitySym = genSym(nskLet, "entity")
     defineEntity =
@@ -631,15 +596,12 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
 
   # Extend to include dependent owned components.
   details.passed = id.inclDependents(details.passed)
-  
   details.passedSet = details.passed.toHashSet
   details.suffix =
     if defined(ecsNoMangle): ""
     else: signatureHash entitySym
 
-  var
-    relevantSystems: SystemSet
-
+  var relevantSystems: SystemSet
   for change in id.removeStateChanges(details.passed):
     relevantSystems.incl change.sys
     id.applyChange entitySym, details, change
@@ -688,14 +650,12 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
   op.unpack details.fetches
   op.unpack remEntEvent
   op.unpack details.allEvents
-  op.unpack id.removeFromEntityList(entitySym, details.passedSet + details.compRemoves, details.suffix)
   op.unpack details.systemUpdates
   op.unpack details.deferredEvents
+  op.unpack id.removeFromEntityList(entitySym, details.passedSet + details.compRemoves, details.suffix)
   op.unpack endOperation
 
-  let
-    compInts = details.passed.toInts
-  
+  let compInts = details.passed.toInts
   op.trackMutation(id, ekRemoveComponents, compInts, announce = false)
 
   result = newBlockStmt(op)
@@ -971,7 +931,7 @@ proc doFetchComponents(id: EcsIdentity, entity: NimNode, components: NimNode): N
         {.line.}:
           assert `entity`.alive,
             "Fetch component on a dead entity. Entity ID: " & $`entity`.entityId.int &
-            ", Instance: " & $`entity`.instance.int    
+            ", Instance: " & $`entity`.instance.int
     )
   fetchOp.buildFetchComponents(id, entity, passedTypes, suffix, earlyExit = true, byFetchedIdent)
   fetchOp.add resultTuple
@@ -1071,14 +1031,13 @@ proc makeDelete*(id: EcsIdentity): NimNode =
   ## Generates delete procedures for the current entity.
   ## Delete will be created with all the systems that have been seen since the last
   ## `makeEcs` invocation.
-  let
-    entitySym = ident "entity"
 
   # This operation parses the entity's components by building 'case'
   # statements that process associated systems.
   # with each component.
 
   let
+    entitySym = ident "entity"
     allComponents = id.allUnsealedComponents
     curComp = genSym(nskForVar, "curComp")
     sysProcessed = genSym(nskVar, "sysProcessed")
@@ -1102,17 +1061,15 @@ proc makeDelete*(id: EcsIdentity): NimNode =
   for c in id.building allComponents:
     # Populate case statements for events and each component.
 
-    var
-      details = newStateChangeDetails(scdkDelete)
-    let
-      instTy = c.instanceTy
+    var details = newStateChangeDetails(scdkDelete)
+    let instTy = c.instanceTy
     
     details.passed = @[c.typeId]
     details.passedSet = details.passed.toHashSet
     details.suffix = suffix
+    details.sysProcessed = sysProcessed
     details.iterating = quote do:
       `instTy`(`curComp`.index)
-    details.sysProcessed = sysProcessed
 
     # Calculate the effect of removing this component.
     for sys in id.linked(c.typeId):
@@ -1190,9 +1147,8 @@ proc makeDelete*(id: EcsIdentity): NimNode =
   var
     entContext = newEventContext(deleteEntParam)
     userStateChangeEvent = newStmtList()
-  
-  userStateChangeEvent.invokeEvent(id, entContext, ekDeleteEnt)
 
+  userStateChangeEvent.invokeEvent(id, entContext, ekDeleteEnt)
   userStateChangeEvent.trackMutation(id, ekDeleteEnt, [0], announce = false)
 
   result = quote do:
