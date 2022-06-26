@@ -1058,19 +1058,9 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
           # `stream N:`
           result.amount = code[1]
         
-        of nnkIdent:
-          # `stream x:`
-          result.command = code[1].getCommand
-
-          if result.command == cmdNone:
-            # Pass through user's identifier.
-            result.amount = code[1]
-        
         of nnkCommand:
           # `stream x y:`
-
           result.command = code[1][0].getCommand
-
           if result.command != cmdNone:
             # `stream command x:`
             result.amount = code[1][1]
@@ -1078,7 +1068,6 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
           else:
             # Check for `stream x command:`
             result.command = code[1][1].getCommand
-
             if result.command == cmdNone:
               # No commands found.
               error formatError
@@ -1086,7 +1075,11 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
               result.amount = code[1][0]
 
         else:
-          error formatError
+          # `stream x:`
+          result.command = code[1].getCommand
+          if result.command == cmdNone:
+            # Pass through user's identifier.
+            result.amount = code[1]
 
     of nnkCall:
       # `stream:`
@@ -1094,6 +1087,7 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
         error formatError
       else:
         result.body = code[1]
+    
     else:
       error formatError
 
