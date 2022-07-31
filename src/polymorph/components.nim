@@ -334,16 +334,16 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       perfRead =
         when defined(ecsPerformanceHints): quote do:
           static:
-            if `identity`.inSystem:
-              `identity`.add_readsFrom `identity`.inSystemIndex, `typeId`.ComponentTypeId
+            if `inSystem`(`identity`):
+              `add_readsFrom`(`identity`, `inSystemIndex`(`identity`), `typeId`.ComponentTypeId)
         else:
           newStmtList()
       
       perfWrite =
         when defined(ecsPerformanceHints): quote do:
           static:
-            if `identity`.inSystem:
-              `identity`.add_writesTo `identity`.inSystemIndex, `typeId`.ComponentTypeId
+            if `inSystem`(`identity`):
+              `add_writesTo`(`identity`, `inSystemIndex`(`identity`), `typeId`.ComponentTypeId)
         else:
           newStmtList()
 

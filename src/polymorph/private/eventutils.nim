@@ -8,34 +8,105 @@ import macros, ../sharedtypes, ecsstatedb, utils, mutationtracking
 
 
 proc userEntAccess*(entitySym: NimNode): NimNode =
-  let
-    ent = ident "entity"
-  
+  let ent = ident "entity"
   result = quote do:
     {.line.}:
       let `ent` {.used, inject, hostEntity.} = `entitySym`
       template curEntity: untyped {.used.} = `ent`
 
 
-proc userCompAccess(compInstance: NimNode): NimNode =
-  ## User access to the current component.
-  quote do:
-    template curComponent: untyped {.used.} = `compInstance`
-
-
-proc userSysAccess(id: EcsIdentity, rowEntity: NimNode, sysIndex: SystemIndex, sysVar, row: NimNode): NimNode =
-  ## Returns user access templates for a system.
-  
+proc userCompNameAccess(id: EcsIdentity, compId: ComponentTypeId, comp: NimNode): NimNode =
+  ## User access to a component.
+  # For owned components, 'comp' should refer to the value rather than an instance.
   let
-    sysItem = id.systemItem(sysIndex, rowEntity, sysVar, row)
+    tyStr = id.typeName(compId)
+    tyIdent = ident tyStr
+    field = ident tyStr.unCap
+    ty =
+      if id.isOwned compId: ident tyStr
+      else: ident instanceTypeName(tyStr)
+  result = quote do:
+    template `field`: `ty` {.used.} = `comp`
+    template access(ty: typedesc[`tyIdent`]): `ty` {.used.} = `field`()
 
-  quote do:
 
+proc userCompAccess(id: EcsIdentity, compId: ComponentTypeId, comp: NimNode): NimNode =
+  ## User access to the current component.
+  # For owned components, 'comp' should refer to the value rather than an instance.
+  let
+    tyStr = id.typeName(compId)
+    ty =
+      if isOwned(id, compId): ident tyStr
+      else: ident instanceTypeName(tyStr)
+  
+  result = quote do:
+    template curComponent: `ty` {.used.} = `comp`
+    template component: `ty` {.used.} = `comp`
+  
+  if id.eventTemplates(compId) == cetEnabled:
+    result.add id.userCompNameAccess(compId, comp)
+
+
+proc userSysCompAccess*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNode, sysVar, row: NimNode): NimNode =
+  ## User access to a system row.
+  result = newStmtList()
+  var aliased: seq[ComponentTypeId]
+
+  if id.ecsSysComponentAliases(sysIndex).len > 0:
+    # Add alias templates.
+    for aliasNode in id.ecsSysComponentAliases(sysIndex):
+      let
+        compId = aliasNode[0].intVal.ComponentTypeId
+        aliasNode = ident aliasNode[1].strVal
+        tyStr = id.typeName(compId)
+        tyIdent = ident tyStr
+        field = ident tyStr.unCap
+        ty =
+          if id.isOwned compId: ident tyStr
+          else: ident instanceTypeName(tyStr)
+        # The item core is used here to save the extra template expansion
+        # of 'item'.
+        itemCore = systemItemCore(id, sysIndex, rowEntity, sysVar, row)
+      
+      result.add(quote do:
+        template `aliasNode`: `ty` {.used.} =
+          `itemCore`.`field`
+        template access(ty: typedesc[`tyIdent`]): `ty` {.used.} = `aliasNode`()
+      )
+      aliased.add compId
+  
+  if id.ecsSysItemTemplates(sysIndex) == sitEnabled:
+    # Add templates for system fields.
+    for compId in id.ecsSysRequirements(sysIndex):
+      if compId notin aliased:
+        let
+          field = ident id.typeName(compId).unCap
+          # The 'field' template we're making has the same name as the
+          # object field we want to access, preventing use of 'item.field'
+          # without recursing the template again (then reporting it's
+          # been given too many parameters).
+          # To save these complications, the 'item' internals are used
+          # directly.
+          itemCore = systemItemCore(id, sysIndex, rowEntity, sysVar, row)
+        
+        result.add id.userCompNameAccess(compId, quote do:
+          `itemCore`.`field`
+        )
+
+
+proc userSysAccess(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNode, sysVar, row: NimNode): NimNode =
+  ## Returns user access templates for a system.
+
+  let sysItem = id.systemItem(sysIndex, rowEntity, sysVar, row)
+  
+  result = newStmtList()
+  result.add(quote do:
     `sysItem`
-    
     template sys: untyped {.used.} = `sysVar`
     template curSystem: untyped {.used.} = `sysVar`
     template groupIndex: untyped {.used.} = `row`
+  )
+  result.add id.userSysCompAccess(sysIndex, rowEntity, sysVar, row)
 
 
 proc eventCb(ent, compInst: NimNode, typeInfo: ComponentBuildInfo, cbProcName: NimNode): NimNode =
@@ -106,6 +177,23 @@ proc newEventContext*(id: EcsIdentity, entity: NimNode, sys: SystemBuildInfo, ro
   )
 
 
+proc maybeDeref(context: EventContext): NimNode =
+  ## Transforms owned component instances to value lookups for user
+  ## access in events.
+  ## 
+  ## When an owned component hosts an event such as 'onAdd', the
+  ## 'context' refers to the instance and needs translating into a value
+  ## lookup with `access(instance)`.
+  ## 
+  ## However, when a system row hosts an event (e.g., 'added'), the
+  ## 'context' refers to 'item.component' which is already the source
+  ## value.
+  if context.component.info.isOwned and context.system.row.isNil:
+    newCall(ident"access", context.component.instance)
+  else:
+    context.component.instance
+
+
 proc echoRunningEvent(node: var NimNode, id: EcsIdentity, eventKind: EventKind, context: EventContext) =
   ## Announce a system event.
   
@@ -121,22 +209,15 @@ proc echoRunningEvent(node: var NimNode, id: EcsIdentity, eventKind: EventKind, 
 
 proc buildAccess(node: var NimNode, id: EcsIdentity, context: EventContext, access: AccessUtilities) =
   ## Create access templates after the context has been populated.
-
   for util in access:
-
     case util
-
       of auEntity:
         node.unpack userEntAccess(context.entity)
-      
       of auComponent:
-        node.unpack userCompAccess(context.component.instance)
-      
+        node.unpack id.userCompAccess(context.component.info.typeId, maybeDeref(context))
       of auSystem:
-        let
-          (info, row, _) = context.system
-        
-        node.unpack id.userSysAccess(context.entity, info.index, info.variable, row)
+        let (info, row, _) = context.system
+        node.unpack id.userSysAccess(info.index, context.entity, info.variable, row)
 
 
 proc read*(id: EcsIdentity, eventKind: EventKind, context: EventContext): NimNode =
@@ -283,16 +364,15 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     if id.eventOccurred({eventKind}, data):
       error de & $eventKind & "'" & br & id.eventMutationsStr
 
-  if id.ecsEventEnv.len > 0:
+  # Check state change against history.
 
+  if id.ecsEventEnv.len > 0:
     case paramKind
       of pkNone:
-
         checkRecursion([0])
         eventCode.trackMutation(id, eventKind, [0])
 
       of pkCompCT:
-
         if context.entityComps.len == 0:
           error ie & tc
         let intComps = context.entityComps.toIntList
@@ -301,7 +381,6 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         eventCode.trackMutation(id, eventKind, intComps)
 
       of pkComp:
-
         if context.component.info.typeId == InvalidComponent:
           error ie & tc
         checkRecursion([typeInfo.typeId.int])
@@ -316,7 +395,6 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         eventCode.trackMutation(id, eventKind, [sysInfo.index.int])
 
       of pkSysComp:
-
         if context.system.info.index == InvalidSystemIndex:
           error ie & sc
         if context.component.info.typeId == InvalidComponent:
@@ -327,6 +405,8 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         eventCode.trackMutation(id, eventKind, [sysInfo.index.int, typeInfo.typeId.int])
 
     node.add prelude
+
+  # Build the event.
 
   case eventKind
 
@@ -375,25 +455,20 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
         st = ident "state"
         types = ident "types"
       
-      let
-        userAccess = userEntAccess(context.entity)
-
+      let userAccess = userEntAccess(context.entity)
       node.add(quote do:
         block:
-          const
-            `st` {.inject, used.} = `eventKind`.EventKind
-          let
-            `types` {.inject, used.} = `tIds`
+          const `st` {.inject, used.} = `eventKind`.EventKind
+          let `types` {.inject, used.} = `tIds`
           
           `userAccess`
           `eventCode`
       )
-
+  
     of ekInit, ekUpdate:
       var userAccess = newStmtList()
-
       # These events occur directly on the component without any other context.
-      userAccess.unpack userCompAccess(context.component.instance)
+      userAccess.unpack id.userCompAccess(context.component.info.typeId, maybeDeref(context))
 
       node.add(quote do:
         block:
@@ -419,9 +494,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
 
     of ekSystemAddAny, ekSystemRemoveAny, ekCompAddTo, ekCompRemoveFrom:
       # Component-system events.
-      var
-        userAccess = newStmtList()
-
+      var userAccess = newStmtList()
       userAccess.buildAccess(id, context, {auEntity, auComponent, auSystem})
 
       node.add(quote do:
@@ -435,9 +508,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
 
       checkRecursion([sysInfo.index.int])
 
-      var
-        userAccess = newStmtList()
-      
+      var userAccess = newStmtList()
       userAccess.buildAccess(id, context, {auEntity, auSystem})
       
       node.add(quote do:
@@ -477,10 +548,16 @@ proc buildEventCallback*(id: EcsIdentity, typeId: ComponentTypeId, mutation: Eve
     else:
       error "Cannot process " & $mutation & " here"
   
-  # Use access templates.
+  # Add access templates within the callback body.
+
   let
     entAccess = userEntAccess(ce)
-    compAccess = userCompAccess(cc)
+    # We don't need 'maybeDefer' here as the callback parameter is always
+    # an instance, even for owned components.
+    comp =
+      if id.isOwned(typeId): newCall(ident"access", cc)
+      else: cc
+    compAccess = id.userCompAccess(typeId, comp)
 
   body.trackMutation(id, mutation, [typeId.int])
 

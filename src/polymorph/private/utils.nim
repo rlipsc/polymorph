@@ -787,13 +787,11 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
     )
 
 
-proc systemItem*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, itemIdx: NimNode): NimNode =
-  ## Creates an `item` template to access the system row represented by `itemIdx`.
-  
+proc systemItemCore*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, itemIdx: NimNode): NimNode =
+  ## Outputs code to return a system row item.
   var
     itemCore = newStmtList()
     assertItem = id.assertItem(sysIndex)
-    sysItemType = ident itemTypeName(id.getSystemName sysIndex)
   
   # Compile time check for potentially invalid 'item' use.
   itemCore.strictCatchCheck(id, sysIndex)
@@ -816,6 +814,12 @@ proc systemItem*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, itemIdx
   itemCore.add(quote do:
     `sys`.groups[`itemIdx`]
   )
+
+proc systemItem*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, itemIdx: NimNode): NimNode =
+  ## Creates an `item` template to access the system row represented by `itemIdx`.
+  let
+    itemCore = systemItemCore(id, sysindex, rowEntity, sys, itemIdx)
+    sysItemType = ident itemTypeName(id.getSystemName sysIndex)
 
   result = quote do:
     template item: `sysItemType` {.used.} =
@@ -1677,8 +1681,6 @@ proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc
             {.warning: `emptyProcStr`.}
             discard
         )
-
-
 
 
 template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =

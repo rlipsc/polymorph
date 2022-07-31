@@ -60,6 +60,7 @@ type
   ECSCompItemStorage* = enum cisSeq, cisArray
   ECSCompRecyclerFormat* = enum crfSeq, crfArray
   ECSCompInvalidAccess* = enum iaIgnore, iaAssert
+  ECSCompEventTemplates* = enum cetEnabled, cetDisabled
 
   ECSCompOptions* = object
     maxComponents*: Natural   ## Maximum amount of components for all component types in this prefix.
@@ -69,14 +70,15 @@ type
     clearAfterDelete*: bool ## Zeros memory of component after deletion.
     useThreadVar*: bool ## Declare the component arrays as {.threadVar.}.
     invalidAccess*: ECSCompInvalidAccess  ## Allow inserting assert checks for each instance field access.
+    eventTemplates*: ECSCompEventTemplates ## Controls whether to add a template with the name of this component for easy access in events.
 
-  # System storage options
   ECSSysStorage* = enum ssSeq, ssArray
   ECSSysIndexFormat* = enum sifTable, sifArray, sifAllocatedSeq
   ECSSysTimings* = enum stNone, stRunEvery, stProfiling
   ECSSysEcho* = enum seNone, seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished, seEchoAll
   ECSSysThreading* = enum sthNone, sthDistribute
   ECSSysDefCommit* = enum sdcDeferMakeEcs = "defer to 'makeEcs'", sdcInPlace = "commit in-place"
+  ECSSysItemTemplates* = enum sitEnabled, sitDisabled
 
   ECSSysOptions* = object
     maxEntities*: int ## Maximum entities this system can hold.
@@ -90,6 +92,7 @@ type
     threading*: ECSSysThreading ## System threading options.
     publicFields*: bool ## When `true`, fields passed to a system `fields:` block will be automatically exported.
     commit*: ECSSysDefCommit ## Choose where to output the system instance variable.
+    itemTemplates*: ECSSysItemTemplates ## Controls whether to add access templates for each component (respecting aliases) in system blocks and system events.
 
   ComponentUpdatePerfTuple* = tuple[componentType: string, systemsUpdated: int]
   EntityOverflow* = object of OverflowDefect

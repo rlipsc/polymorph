@@ -16,7 +16,7 @@
 
 import macros, strutils, strformat, sequtils, sharedtypes,
   private/[ecsstatedb, utils], tables, sets
-from private/eventutils import userEntAccess
+from private/eventutils import userEntAccess, userSysCompAccess
 import random
 
 
@@ -51,6 +51,7 @@ type
   
   UnpackedArg = object
     typeName: string
+    alias: string
     typeId: ComponentTypeId
     prefix: UnpackedPrefix
 
@@ -64,6 +65,11 @@ proc unpackComponentArg(id: EcsIdentity, node: NimNode): UnpackedArg =
 
   result =
     case node.kind
+      
+      of nnkExprColonExpr:
+        var uArg = id.unpackComponentArg(node[1])
+        uArg.alias = node[0].baseName.strVal
+        uArg
       
       of nnkIdent, nnkSym:
         UnpackedArg(
@@ -544,6 +550,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   let
     (uArgs, componentTypesStr {.used.}) = id.unpackArgs(componentTypes)
 
+  # Parse for duplicates.
   for uArg in uArgs:
     let
       typeId = uArg.typeId
@@ -582,6 +589,7 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
       of upCustom:
         error errPre & "cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
 
+  # Parse for existing ownership.
   for typeId in passedComponentIds:
     let
       curOwner = id.systemOwner typeId
@@ -602,12 +610,11 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
   when defined(ecsLogDetails):
     echo "System \"", sysName, "\" options:\n", sysOptions.repr, "\n"
 
-  let typeName = ($sysName).capitalizeAscii
-  # Create the node for the variable for this system.
-  let inst = ident(systemVarName(typeName))
-
-  # Create a new system index.
   let
+    typeName = ($sysName).capitalizeAscii
+    # Create the node for the variable for this system.
+    inst = ident(systemVarName(typeName))
+    # Create a new system index.
     sysIndex = id.addSystem sysName
 
   id.set_ecsSystemSourceLoc(sysIndex, sourceLoc)
@@ -631,7 +638,9 @@ proc createSystem(id: EcsIdentity, sysName: string, componentTypes: NimNode, ext
     id.add_ecsSysNegations sysIndex, compId
     id.add_systems compId, sysIndex
 
-  for compId in passedComponentIds:
+  for i, compId in passedComponentIds:
+    if uArgs[i].alias.len > 0:
+      id.append_ecsSysComponentAliases sysIndex, nnkBracketExpr.newTree(newLit compId.int, newLit uArgs[i].alias)
     id.add_ecsSysRequirements sysIndex, compId
     id.add_systems compId, sysIndex
 
@@ -967,7 +976,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
     # if `entity` != `item.entity` then this row has been removed.
     rowEnt = ident "entity"
     entAccess = userEntAccess(quote do: `sys`.groups[`idx`].entity)
-
+    compAccess = id.userSysCompAccess(sysIndex, rowEnt, sys, groupIndex)
     sysItem = id.systemItem(sysIndex, rowEnt, sys, groupIndex)
 
   result = initTiming(sys, options, quote do:
@@ -989,12 +998,10 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
 
           `entAccess`
 
-          let
-            ## Read-only index into `groups`.
-            `groupIndex` {.used, inject.} = `idx`
+          let `groupIndex` {.used, inject.} = `idx` ## Read-only index into `groups`.
 
-          # System `item` template.
           `sysItem`
+          `compAccess`
 
           # Inject the user's statements from `all:`
           `code`
@@ -1333,6 +1340,26 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
               errMsg()
           of upCustom:
             error "Cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
+        if uArg.alias.len > 0:
+          let
+            lcAlias = uArg.alias.toLowerAscii
+            aliases = id.ecsSysComponentAliases sysIndex
+          var found: bool
+
+          for aliasNode in aliases:
+            let
+              compId = aliasNode[0].intVal.ComponentTypeId
+              aliasStr = aliasNode[1].strVal
+            if compId == uArg.typeId:
+              found = true
+              if not(aliasStr.toLowerAscii == lcAlias):
+                error "Alias for field " & id.typeName(compId) & " '" & uArg.alias &
+                  "' doesn't match definition alias '" & aliasStr & "'"
+          if not found:
+            # This alias hasn't been set up by the defineSystem so add it now.
+            id.append_ecsSysComponentAliases sysIndex, nnkBracketExpr.newTree(
+              newLit uArg.typeId.int, newLit uArg.alias
+            )
 
     # Options must match with the original definition.
     if existingOpts != options:
@@ -1560,6 +1587,9 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         internalError = " macrocache storage is unexpectedly populated for system \"" & `name` & "\""
       assert `readsFrom`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "readsFrom" & internalError
       assert `writesTo`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "writesTo" & internalError
+    
+    # Explicitly bind 'commaSeparate' to avoid injection ambiguity.
+    comSep = bindSym("commaSeparate")
 
     reportPerformance =
       when defined(ecsPerformanceHints):
@@ -1570,10 +1600,10 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
           const prefix {.used.} = "System \"" & `name` & "\""
           when `len_readsFrom`(`cacheId`, `sysIndex`.SystemIndex) > 0:
             debugPerformance `cacheId`, prefix & ": Reads from: " &
-              `commaSeparate`(`cacheId`, `readsFrom`(`cacheId`, `sysIndex`.SystemIndex))
+              `comSep`(`cacheId`, `readsFrom`(`cacheId`, `sysIndex`.SystemIndex))
           when `len_writesTo`(`cacheId`, `sysIndex`.SystemIndex) > 0:
             debugPerformance `cacheId`, prefix & ": Writes to: " &
-              `commaSeparate`(`cacheId`, `writesTo`(`cacheId`, `sysIndex`.SystemIndex))
+              `comSep`(`cacheId`, `writesTo`(`cacheId`, `sysIndex`.SystemIndex))
           when `systemCalledDelete`(`cacheId`):
             debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration (source: " &
               `ecsSystemDeleteLoc`(`cacheId`) & ")"
@@ -1586,14 +1616,10 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
         newStmtList()
 
     staticTearDown = quote do:
-
-      `reportPerformance`
-
       # Record exit of system iteration in the static environment.
-
+      `reportPerformance`
       `set_inSystem`(`cacheId`, false)
       `set_inSystemIndex`(`cacheId`, InvalidSystemIndex)
-
       `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
       `set_systemCalledDelete`(`cacheId`, false)
 
@@ -2009,6 +2035,10 @@ macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): unty
   ## This macro outputs uncommitted system execution procedures for
   ## system bodies defined so far in the specified ECS identity.
   ## 
+  ## If the systems have been defined with `ECSSysOptions` with `commit`
+  ## set to `sdcDeferMakeEcs` (the default), the system instance variable
+  ## is also output by `commitSystems`.
+  ## 
   ## Each system procedure is generated as the system name prefixed with
   ## `do`, eg; a system named "foo" generates a `doFoo()` proc.
   ## 
@@ -2059,6 +2089,10 @@ macro commitSystems*(id: static[EcsIdentity], wrapperName: static[string]): unty
 macro commitSystems*(wrapperName: static[string]): untyped =
   ## This macro outputs uncommitted system execution procedures for
   ## system bodies defined so far in the default ECS identity.
+  ## 
+  ## If the systems have been defined with `ECSSysOptions` with `commit`
+  ## set to `sdcDeferMakeEcs` (the default), the system instance variable
+  ## is also output by `commitSystems`.
   ## 
   ## Each system procedure is generated as the system name prefixed with
   ## `do`, eg; a system named "foo" generates a `doFoo()` proc.

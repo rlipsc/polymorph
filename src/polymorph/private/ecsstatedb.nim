@@ -81,10 +81,11 @@ else:
   genItemStates(ComponentTypeId, EcsCompRecyclerFormat, ["recyclerFormat"])
   genItemStates(ComponentTypeId, bool, ["clearAfterDelete", "useThreadVar"])
   genItemStates(ComponentTypeId, EcsCompInvalidAccess, ["invalidAccess"])
+  genItemStates(ComponentTypeId, ECSCompEventTemplates, ["eventTemplates"])
 
   # System properties
   genItemStates(SystemIndex, bool, ["sealed", "useThreadVar", "bodyDefined"])
-  genItemStates(SystemIndex, NimNode, ["instantiation", "ecsSysBodyDefinition", "extraFields"])
+  genItemStates(SystemIndex, NimNode, ["instantiation", "ecsSysBodyDefinition", "extraFields", "ecsSysComponentAliases"])
   genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents", "ecsSysNegations"])
   genItemStates(SystemIndex, NimNode, ["ecsDeferredSysDef", "onEcsCommitSystemCode"])
 
@@ -102,6 +103,7 @@ else:
   genItemStates(SystemIndex, bool, ["assertItem", "orderedRemove"])
   genItemStates(SystemIndex, ECSSysThreading, ["threading"])
   genItemStates(SystemIndex, ECSSysDefCommit, ["ecsSysCommitInstance"])
+  genItemStates(SystemIndex, ECSSysItemTemplates, ["ecsSysItemTemplates"])
 
   # Source locations
   genItemStates(SystemIndex, string, ["ecsSystemSourceLoc", "ecsSystemBodySourceLoc"])
@@ -374,6 +376,7 @@ proc setOptions*(id: EcsIdentity, sysId: SystemIndex, opts: ECSSysOptions) =
   id.set_orderedRemove(sysId, opts.orderedRemove)
   id.set_threading(sysId, opts.threading)
   id.set_ecsSysCommitInstance(sysId, opts.commit)
+  id.set_ecsSysItemTemplates(sysId, opts.itemTemplates)
 
 proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.maxEntities = id.maxEntities(sysId)
@@ -386,3 +389,4 @@ proc getOptions*(id: EcsIdentity, sysId: SystemIndex): ECSSysOptions =
   result.orderedRemove = id.orderedRemove(sysId)
   result.threading = id.threading(sysId)
   result.commit = id.ecsSysCommitInstance(sysId)
+  result.itemTemplates = id.ecsSysItemTemplates(sysId)

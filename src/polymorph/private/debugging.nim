@@ -74,7 +74,7 @@ proc endOperation*(id: EcsIdentity) {.compileTime.} =
 
 template debugPerformance*(id: EcsIdentity, msg: string) =
   when defined(ecsPerformanceHints):
-    const curIndent = id.ecsCurrentOperation.len()
+    const curIndent = `ecsCurrentOperation`(id).len()
     debugMessage(id, "Performance: " & "  ".repeat(curIndent) & msg)
 
 

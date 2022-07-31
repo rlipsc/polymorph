@@ -612,6 +612,42 @@ proc setinvalidAccess*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId;
   CacheSeq(id.string & "invalidAccessComponentTypeId").add(curList)
   {.pop.}
 
+proc eventTemplates*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): ECSCompEventTemplates {.
+    compileTime.} =
+  id.checkId(componentTypeIdValue)
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let
+      key = CacheSeq(id.string & "eventTemplatesComponentTypeId")
+      keyLen = key.len
+      idx = componentTypeIdValue.int
+    if keyLen > 0:
+      let entry = key[keyLen - 1].copy
+      if entry.len > idx and key[key.len - 1][idx].kind != nnkEmpty:
+        ECSCompEventTemplates(intVal(key[key.len - 1][idx]))
+      else:
+        default(ECSCompEventTemplates)
+    else:
+      default(ECSCompEventTemplates)
+  {.pop.}
+
+proc seteventTemplates*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId;
+                        value: ECSCompEventTemplates) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  id.checkId(componentTypeIdValue)
+  let
+    idx = componentTypeIdValue.int
+    keyLen = CacheSeq(id.string & "eventTemplatesComponentTypeId").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "eventTemplatesComponentTypeId")[keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  curList[idx] = newLit(int(value))
+  CacheSeq(id.string & "eventTemplatesComponentTypeId").add(curList)
+  {.pop.}
+
 proc sealed*(id: EcsIdentity; systemIndexValue: SystemIndex): bool {.compileTime.} =
   id.checkId(systemIndexValue)
   {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
@@ -882,6 +918,64 @@ proc appendextraFields*(id: EcsIdentity; systemIndexValue: SystemIndex;
   else:
     curList[idx].add(value)
   CacheSeq(id.string & "extraFieldsSystemIndex").add(curList)
+  {.pop.}
+
+proc ecsSysComponentAliases*(id: EcsIdentity; systemIndexValue: SystemIndex): NimNode {.
+    compileTime.} =
+  id.checkId(systemIndexValue)
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let
+      key = CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex")
+      keyLen = key.len
+      idx = systemIndexValue.int
+    if keyLen > 0:
+      let entry = key[keyLen - 1].copy
+      if entry.len > idx and key[key.len - 1][idx].kind != nnkEmpty:
+        NimNode(key[key.len - 1][idx])
+      else:
+        default(NimNode)
+    else:
+      default(NimNode)
+  {.pop.}
+
+proc setecsSysComponentAliases*(id: EcsIdentity; systemIndexValue: SystemIndex;
+                                value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  id.checkId(systemIndexValue)
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex")[
+        keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  curList[idx] = value
+  CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex").add(curList)
+  {.pop.}
+
+proc appendecsSysComponentAliases*(id: EcsIdentity;
+                                   systemIndexValue: SystemIndex; value: NimNode) {.
+    compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex")[
+        keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  if curList[idx].kind == nnkEmpty:
+    curList[idx] = newStmtList(value)
+  else:
+    curList[idx].add(value)
+  CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex").add(curList)
   {.pop.}
 
 {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
@@ -1464,6 +1558,42 @@ proc setecsSysCommitInstance*(id: EcsIdentity; systemIndexValue: SystemIndex;
     curList.add newEmptyNode()
   curList[idx] = newLit(int(value))
   CacheSeq(id.string & "ecsSysCommitInstanceSystemIndex").add(curList)
+  {.pop.}
+
+proc ecsSysItemTemplates*(id: EcsIdentity; systemIndexValue: SystemIndex): ECSSysItemTemplates {.
+    compileTime.} =
+  id.checkId(systemIndexValue)
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let
+      key = CacheSeq(id.string & "ecsSysItemTemplatesSystemIndex")
+      keyLen = key.len
+      idx = systemIndexValue.int
+    if keyLen > 0:
+      let entry = key[keyLen - 1].copy
+      if entry.len > idx and key[key.len - 1][idx].kind != nnkEmpty:
+        ECSSysItemTemplates(intVal(key[key.len - 1][idx]))
+      else:
+        default(ECSSysItemTemplates)
+    else:
+      default(ECSSysItemTemplates)
+  {.pop.}
+
+proc setecsSysItemTemplates*(id: EcsIdentity; systemIndexValue: SystemIndex;
+                             value: ECSSysItemTemplates) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  id.checkId(systemIndexValue)
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "ecsSysItemTemplatesSystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "ecsSysItemTemplatesSystemIndex")[keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  curList[idx] = newLit(int(value))
+  CacheSeq(id.string & "ecsSysItemTemplatesSystemIndex").add(curList)
   {.pop.}
 
 proc ecsSystemSourceLoc*(id: EcsIdentity; systemIndexValue: SystemIndex): string {.
