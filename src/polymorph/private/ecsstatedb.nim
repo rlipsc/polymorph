@@ -354,6 +354,7 @@ proc setOptions*(id: EcsIdentity, compId: ComponentTypeId, opts: ECSCompOptions)
   id.set_clearAfterDelete(compId, opts.clearAfterDelete)
   id.set_useThreadVar(compId, opts.useThreadVar)
   id.set_invalidAccess(compId, opts.invalidAccess)
+  id.set_eventTemplates(compId, opts.eventTemplates)
 
 proc getOptions*(id: EcsIdentity, compId: ComponentTypeId): ECSCompOptions =
   #id.set_maxEntities(compId, opts.maxEntities)
@@ -364,6 +365,7 @@ proc getOptions*(id: EcsIdentity, compId: ComponentTypeId): ECSCompOptions =
   result.clearAfterDelete = id.clearAfterDelete(compId, )
   result.useThreadVar = id.useThreadVar(compId)
   result.invalidAccess = id.invalidAccess(compId)
+  result.eventTemplates = id.eventTemplates(compId)
 
 proc setOptions*(id: EcsIdentity, sysId: SystemIndex, opts: ECSSysOptions) =
   id.set_maxEntities(sysId, opts.maxEntities)
