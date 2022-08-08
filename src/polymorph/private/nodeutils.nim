@@ -345,6 +345,7 @@ iterator flatten*(objTy: NimNode): FlatIdentDef =
       else:
         yield (path, fieldDef)
 
+
 # ----------------------
 # Source path processing
 # ----------------------

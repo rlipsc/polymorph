@@ -392,6 +392,9 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         ## Returns the source component type of a component instance.
         ## This can also be achieved with `instance.access.type`.
         typedesc[`typeNameIdent`]
+
+      template `eqOp`*(i1, i2: `instanceTypeIdent`): bool = i1.int == i2.int
+
     )
 
     if c.isOwned:
@@ -471,7 +474,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         template ownerSystemIndex*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `sysOwner`.SystemIndex
         template ownerSystem*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `ownerSystem`
       )
-
     else:
       # Non-owned component.
 
@@ -705,7 +707,6 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       )
 
     typeAccess.add(quote do:
-      template `eqOp`*(i1, i2: `instanceTypeIdent`): bool = i1.int == i2.int
 
       template toRef*(inst: `instTypeNode`): ComponentRef =
         ## Utility function that takes this type's distinct `ComponentIndex`,

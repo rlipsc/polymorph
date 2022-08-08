@@ -15,36 +15,26 @@ proc userEntAccess*(entitySym: NimNode): NimNode =
       template curEntity: untyped {.used.} = `ent`
 
 
-proc userCompNameAccess(id: EcsIdentity, compId: ComponentTypeId, comp: NimNode): NimNode =
+proc userCompNameAccess(id: EcsIdentity, compId: ComponentTypeId, comp, ty: NimNode): NimNode =
   ## User access to a component.
   # For owned components, 'comp' should refer to the value rather than an instance.
   let
     tyStr = id.typeName(compId)
     tyIdent = ident tyStr
     field = ident tyStr.unCap
-    ty =
-      if id.isOwned compId: ident tyStr
-      else: ident instanceTypeName(tyStr)
   result = quote do:
     template `field`: `ty` {.used.} = `comp`
-    template access(ty: typedesc[`tyIdent`]): `ty` {.used.} = `field`()
+    template access(ty: typedesc[`tyIdent`] | typedesc[`ty`]): `ty` {.used.} = `comp`
 
 
-proc userCompAccess(id: EcsIdentity, compId: ComponentTypeId, comp: NimNode): NimNode =
+proc userCompAccess(id: EcsIdentity, compId: ComponentTypeId, comp, ty: NimNode): NimNode =
   ## User access to the current component.
-  # For owned components, 'comp' should refer to the value rather than an instance.
-  let
-    tyStr = id.typeName(compId)
-    ty =
-      if isOwned(id, compId): ident tyStr
-      else: ident instanceTypeName(tyStr)
-  
   result = quote do:
     template curComponent: `ty` {.used.} = `comp`
     template component: `ty` {.used.} = `comp`
   
   if id.eventTemplates(compId) == cetEnabled:
-    result.add id.userCompNameAccess(compId, comp)
+    result.add id.userCompNameAccess(compId, comp, ty)
 
 
 proc userSysCompAccess*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNode, sysVar, row: NimNode): NimNode =
@@ -61,16 +51,17 @@ proc userSysCompAccess*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNo
         tyStr = id.typeName(compId)
         tyIdent = ident tyStr
         field = ident tyStr.unCap
+        ownerSys = id.systemOwner compId
+        accessAsValue = ownerSys == sysIndex
         ty =
-          if id.isOwned compId: ident tyStr
+          if accessAsValue: ident tyStr
           else: ident instanceTypeName(tyStr)
-        # The item core is used here to save the extra template expansion
-        # of 'item'.
+        # The item core is used here to save the extra template expansion of 'item'.
         itemCore = systemItemCore(id, sysIndex, rowEntity, sysVar, row)
+        accessCore = newDotExpr(itemCore, field)
       
       result.add(quote do:
-        template `aliasNode`: `ty` {.used.} =
-          `itemCore`.`field`
+        template `aliasNode`: `ty` {.used.} = `accessCore`
         template access(ty: typedesc[`tyIdent`]): `ty` {.used.} = `aliasNode`()
       )
       aliased.add compId
@@ -88,10 +79,14 @@ proc userSysCompAccess*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNo
           # To save these complications, the 'item' internals are used
           # directly.
           itemCore = systemItemCore(id, sysIndex, rowEntity, sysVar, row)
+          ownerSys = id.systemOwner compId
+          tyStr = id.typeName(compId)
+          ty =
+            if ownerSys == sysIndex: ident tyStr
+            else: ident instanceTypeName(tyStr)
+          accessCore = newDotExpr(itemCore, field)
         
-        result.add id.userCompNameAccess(compId, quote do:
-          `itemCore`.`field`
-        )
+        result.add id.userCompNameAccess(compId, accessCore, ty)
 
 
 proc userSysAccess(id: EcsIdentity, sysIndex: SystemIndex, rowEntity: NimNode, sysVar, row: NimNode): NimNode =
@@ -177,21 +172,16 @@ proc newEventContext*(id: EcsIdentity, entity: NimNode, sys: SystemBuildInfo, ro
   )
 
 
-proc maybeDeref(context: EventContext): NimNode =
-  ## Transforms owned component instances to value lookups for user
-  ## access in events.
-  ## 
-  ## When an owned component hosts an event such as 'onAdd', the
-  ## 'context' refers to the instance and needs translating into a value
-  ## lookup with `access(instance)`.
-  ## 
-  ## However, when a system row hosts an event (e.g., 'added'), the
-  ## 'context' refers to 'item.component' which is already the source
-  ## value.
-  if context.component.info.isOwned and context.system.row.isNil:
-    newCall(ident"access", context.component.instance)
+proc accessType(context: EventContext): NimNode =
+  ## Returns the value type for owned components being accessed from
+  ## their host system, otherwise returns the instance type.
+  let
+    tyStr = context.component.info.name
+    owner = context.component.info.owner
+  if owner != InvalidSystemIndex and owner == context.system.info.index:
+    ident tyStr
   else:
-    context.component.instance
+    ident instanceTypeName(tyStr)
 
 
 proc echoRunningEvent(node: var NimNode, id: EcsIdentity, eventKind: EventKind, context: EventContext) =
@@ -214,7 +204,7 @@ proc buildAccess(node: var NimNode, id: EcsIdentity, context: EventContext, acce
       of auEntity:
         node.unpack userEntAccess(context.entity)
       of auComponent:
-        node.unpack id.userCompAccess(context.component.info.typeId, maybeDeref(context))
+        node.unpack id.userCompAccess(context.component.info.typeId, context.component.instance, context.accessType)
       of auSystem:
         let (info, row, _) = context.system
         node.unpack id.userSysAccess(info.index, context.entity, info.variable, row)
@@ -468,7 +458,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     of ekInit, ekUpdate:
       var userAccess = newStmtList()
       # These events occur directly on the component without any other context.
-      userAccess.unpack id.userCompAccess(context.component.info.typeId, maybeDeref(context))
+      userAccess.unpack id.userCompAccess(context.component.info.typeId, context.component.instance, context.accessType)
 
       node.add(quote do:
         block:
@@ -552,12 +542,8 @@ proc buildEventCallback*(id: EcsIdentity, typeId: ComponentTypeId, mutation: Eve
 
   let
     entAccess = userEntAccess(ce)
-    # We don't need 'maybeDefer' here as the callback parameter is always
-    # an instance, even for owned components.
-    comp =
-      if id.isOwned(typeId): newCall(ident"access", cc)
-      else: cc
-    compAccess = id.userCompAccess(typeId, comp)
+    # The callback parameter is always an instance, even for owned components.
+    compAccess = id.userCompAccess(typeId, cc, instTypeName)
 
   body.trackMutation(id, mutation, [typeId.int])
 

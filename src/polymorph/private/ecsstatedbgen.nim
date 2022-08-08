@@ -271,7 +271,7 @@ macro genItemStates*(indexType, itemType: typedesc, itemNames: static[openarray[
       getItem = ident itemStr
       setItem = ident "set" & itemStr
       
-      # NOTE: Calling another generated access procs within this quote
+      # NOTE: Calling another generated access proc within this quote
       # statement may cause the key to be duplicated and therefore incorrect.
       getKey = quote do:
         CacheSeq(`id`.string & `itemKey`)

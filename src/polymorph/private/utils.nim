@@ -355,8 +355,9 @@ proc addUncommitted*(id: EcsIdentity, sys: SystemIndex) =
 
 proc orderedUncommitted*(id: EcsIdentity): seq[SystemIndex] =
   ## Return uncommitted systems in definition order.
-  let toCommit = id.getUncommitted().toHashSet
-  var order = id.systemOrder()
+  let
+    toCommit = id.getUncommitted().toHashSet
+    order = id.systemOrder()
   result = newSeqOfCap[SystemIndex](toCommit.len)
   for sys in order:
     if sys in toCommit:
@@ -1579,108 +1580,6 @@ proc addDeferredDefs*(id: EcsIdentity, systems: SystemIterable, context: ECSSysD
     if defSys.len > 0:
       let sysList = id.commaSeparate defSys
       echo "[ Added deferred systems (" & $context & "): " & sysList & " ]"
-
-
-proc commitSystemList*(id: EcsIdentity, systems: openarray[SystemIndex], runProc: string): NimNode =
-  ## Output any uncommitted system body procs in `systems`.
-  ## 
-  ## If `runProc` is a non-empty string, a wrapper proc is generated to
-  ## call `systems` in the order given.
-
-  result = newStmtList()
-
-  const
-    logOrder = defined(ecsLog) or defined(ecsLogDetails)
-  var
-    sysCalls = newStmtList()
-    noBodies: seq[string]
-    uncommitted = id.getUncommitted()
-  
-  when logOrder:
-    var runOrder: string
-
-  for sys in systems:
-    let
-      definition = id.ecsSysBodyDefinition sys
-      sysName = id.getSystemName sys
-  
-    if definition.len > 0:
-
-      let ucIndex = uncommitted.find sys
-
-      # Add system body proc.
-      if ucIndex > -1:
-        id.startOperation "Adding run proc for system \"" & sysName & "\""
-
-        result.add definition
-        # Mark as committed.
-        id.set_bodyDefined(sys, true)
-        
-        # Now the definition has been added it can be removed from the
-        # uncommitted list.
-        uncommitted.delete ucIndex
-
-        # Add user event for committing specific systems.
-        let sysCode = id.onEcsCommitSystemCode sys
-        if not sysCode.isNil:
-          result.add sysCode
-
-        id.endOperation
-
-      # Call all the parameter systems within the runProc.
-      if runProc.len > 0:
-        sysCalls.add nnkCall.newTree(ident doProcName(sysName))
-
-        when logOrder:
-          runOrder.add "  " & sysName & "\n"
-    else:
-      noBodies.add "\"" & sysName & "\""
-
-  # Write back list with committed systems removed.
-  id.set_uncommitted uncommitted
-
-  if runProc.len > 0:
-    # Include a wrapper proc to execute the above systems.
-
-    when logOrder:
-      echo "Wrapper proc `" & runProc & "()` execution order:"
-      
-      if runOrder.len > 0:
-        echo runOrder
-      else:
-        echo "  <No system bodies found>"
-
-    if noBodies.len > 0:
-      # It's a compile time error to generate a run proc with systems
-      # that don't have bodies defined.
-
-      var outputStr = noBodies[0]
-      for i in 1 ..< noBodies.len:
-        outputStr &= ", " & noBodies[i]
-      
-      error "Systems to be committed were missing bodies: [" &
-        `outputStr` & "]"
-    else:
-      # Generate the run proc.
-      let
-        procIdent = ident runProc
-
-      if sysCalls.len > 0:
-        result.add(quote do:
-          proc `procIdent`* =
-            `sysCalls`
-        )
-      else:
-        # No systems with bodies have been provided.
-        # This isn't an error to allow easier prototyping.
-
-        let emptyProcStr = newLit(
-          "System run procedure `" & runProc & "` does not call any systems")
-        result.add(quote do:
-          proc `procIdent`* =
-            {.warning: `emptyProcStr`.}
-            discard
-        )
 
 
 template ecsImportImpl*(ecsId: EcsIdentity, access: untyped, modules: NimNode) =

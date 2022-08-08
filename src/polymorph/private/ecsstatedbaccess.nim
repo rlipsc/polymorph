@@ -978,6 +978,61 @@ proc appendecsSysComponentAliases*(id: EcsIdentity;
   CacheSeq(id.string & "ecsSysComponentAliasesSystemIndex").add(curList)
   {.pop.}
 
+proc ecsSystemBody*(id: EcsIdentity; systemIndexValue: SystemIndex): NimNode {.
+    compileTime.} =
+  id.checkId(systemIndexValue)
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let
+      key = CacheSeq(id.string & "ecsSystemBodySystemIndex")
+      keyLen = key.len
+      idx = systemIndexValue.int
+    if keyLen > 0:
+      let entry = key[keyLen - 1].copy
+      if entry.len > idx and key[key.len - 1][idx].kind != nnkEmpty:
+        NimNode(key[key.len - 1][idx])
+      else:
+        default(NimNode)
+    else:
+      default(NimNode)
+  {.pop.}
+
+proc setecsSystemBody*(id: EcsIdentity; systemIndexValue: SystemIndex;
+                       value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  id.checkId(systemIndexValue)
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "ecsSystemBodySystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "ecsSystemBodySystemIndex")[keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  curList[idx] = value
+  CacheSeq(id.string & "ecsSystemBodySystemIndex").add(curList)
+  {.pop.}
+
+proc appendecsSystemBody*(id: EcsIdentity; systemIndexValue: SystemIndex;
+                          value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "ecsSystemBodySystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "ecsSystemBodySystemIndex")[keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  if curList[idx].kind == nnkEmpty:
+    curList[idx] = newStmtList(value)
+  else:
+    curList[idx].add(value)
+  CacheSeq(id.string & "ecsSystemBodySystemIndex").add(curList)
+  {.pop.}
+
 {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
 proc lenEcsSysRequirements*(id: EcsIdentity; systemIndexValue: SystemIndex): Natural {.
     compileTime.} =

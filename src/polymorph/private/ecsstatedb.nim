@@ -85,7 +85,7 @@ else:
 
   # System properties
   genItemStates(SystemIndex, bool, ["sealed", "useThreadVar", "bodyDefined"])
-  genItemStates(SystemIndex, NimNode, ["instantiation", "ecsSysBodyDefinition", "extraFields", "ecsSysComponentAliases"])
+  genItemStates(SystemIndex, NimNode, ["instantiation", "ecsSysBodyDefinition", "extraFields", "ecsSysComponentAliases", "ecsSystemBody"])
   genListStates(SystemIndex, ComponentTypeId, ["ecsSysRequirements", "ecsOwnedComponents", "ecsSysNegations"])
   genItemStates(SystemIndex, NimNode, ["ecsDeferredSysDef", "onEcsCommitSystemCode"])
 

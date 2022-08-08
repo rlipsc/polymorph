@@ -973,7 +973,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
     enterIteration = id.enterIteration
     exitIteration = id.exitIteration
 
-    # if `entity` != `item.entity` then this row has been removed.
+    # if 'entity' != 'item.entity' then this row has been removed.
     rowEnt = ident "entity"
     entAccess = userEntAccess(quote do: `sys`.groups[`idx`].entity)
     compAccess = id.userSysCompAccess(sysIndex, rowEnt, sys, groupIndex)
@@ -987,8 +987,7 @@ proc wrapAllBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, options:
         `set_inSystemAll`(`cacheId`, true)
         `enterIteration`
 
-      var
-        `sysLen` = `sys`.count()
+      var `sysLen` = `sys`.count()
 
       if `sysLen` > 0:
         var
@@ -1029,7 +1028,7 @@ type
 
 proc getCommand(node: NimNode): Command =
   if node.kind == nnkIdent:
-    case node.strVal.toLowerAscii
+    case node.strVal.nimIdentNormalize
       of $cmdMultiPass:
         result = cmdMultiPass
       of $cmdStochastic:
@@ -1044,7 +1043,6 @@ proc parseStreamCommands(code: NimNode): tuple[amount: NimNode, command: Command
   #   stream stochastic <optional count>: <code block>
   #     - selects rows to process at random.
   #     - omitting count uses system.streamRate.
-
 
   let formatError =
       "Expected one of:\n" &
@@ -1107,10 +1105,10 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
     groupIndex = ident "groupIndex"
     sysLen = ident "sysLen"
 
-    # if `entity` != `item.entity` then this row has been removed.
+    # If 'entity' != 'item.entity' then this row has been removed.
     rowEnt = ident "entity"
     entAccess = userEntAccess(quote do: `sys`.groups[`groupIndex`].entity)
-
+    compAccess = id.userSysCompAccess(sysIndex, rowEnt, sys, groupIndex)
     sysItem = id.systemItem(sysIndex, rowEnt, sys, groupIndex)
 
     streamDetails = parseStreamCommands(code)
@@ -1168,8 +1166,6 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
       `set_inSystemStream`(`cacheId`, true)
       `enterIteration`
     block:
-      # loop per entity in system
-
       # Note that streaming bodies always check the length each iteration so
       # there's no need to modify generation when a delete is called.
 
@@ -1186,10 +1182,10 @@ proc wrapStreamBlock(id: EcsIdentity, name: string, sysIndex: SystemIndex, optio
 
         `entAccess`
         
-        # System `item` template.
         `sysItem`
-        
-        # Inject stream statements.
+        `compAccess`
+
+        # Inject user's stream statements.
         `streamBody`
         
         `processed` = `processed` + 1
@@ -1217,10 +1213,8 @@ proc isBlockNode(node: NimNode): bool =
 
 iterator blocks(body: NimNode): int =
   ## Return the index of top level nodes that could be blocks.
-  
-  var
-    bodyIdx: int
-  
+  var bodyIdx: int
+
   while bodyIdx < body.len:
     if body[bodyIdx].isBlockNode:  
         yield bodyIdx
@@ -1228,7 +1222,30 @@ iterator blocks(body: NimNode): int =
     bodyIdx.inc
 
 
-proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, systemBody: NimNode): NimNode =
+type
+  SystemBlock = enum
+    sbFields = "fields"
+    sbInit = "init",
+    sbStart = "start",
+    sbAll = "all",
+    sbStream = "stream"
+    sbFinish = "finish"
+    sbAdded = "added"
+    sbRemoved = "removed"
+    sbAddedCallback = "addedcallback"
+    sbRemovedCallback = "removedcallback"
+
+
+const
+  # A string translation of the enum for matching with 'contains'.
+  BlockChoices = block:
+    var blkStrs: array[SystemBlock, string]
+    for b in SystemBlock.low .. SystemBlock.high:
+      blkStrs[b] = $b
+    blkStrs
+
+
+proc generateSystem(id: EcsIdentity, sysIndex: SystemIndex, options: ECSSysOptions, systemBody: NimNode): NimNode =
   ## Create the system proc to 'tick' the system.
 
   if systemBody == nil:
@@ -1236,21 +1253,8 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
   systemBody.expectKind nnkStmtList
 
-  type
-    SystemBlock = enum
-      sbFields = "fields"
-      sbInit = "init",
-      sbStart = "start",
-      sbAll = "all",
-      sbStream = "stream"
-      sbFinish = "finish"
-      sbAdded = "added"
-      sbRemoved = "removed"
-      sbAddedCallback = "addedcallback"
-      sbRemovedCallback = "removedcallback"
-
   let
-    sysId = ident(systemVarName(name))
+    name = id.getSystemName sysIndex
     sys = ident "sys"
     sysType = ident systemTypeName(name)
 
@@ -1258,16 +1262,280 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     sysIdxSearch = id.findSystemIndex(name)
     sysIndex = sysIdxSearch[1]
 
+  # Parse the system system blocks.
+  
   var
+    initBodies = newStmtList()
+    startBodies = newStmtList()   
+    finishBodies = newStmtList()
+    activeBlocks: set[SystemBlockKind]
+
+  const needComponentsMsg = "Cannot use this block as this system has no components: '"
+  let hasComponents = id.ecsSysRequirements(sysIndex).len > 0
+  var blockRemoves: seq[int]
+
+  for blockIndex in systemBody.blocks:
+    
+    template item: NimNode =
+      systemBody[blockIndex]
+
+    let blockTitle = ($item[0]).nimIdentNormalize
+
+    if blockTitle notin BlockChoices:
+      # Not a known block descriptor.
+      continue
+
+    # User code is in 'item[1]'.
+
+    case blockTitle
+
+      of $sbFields:
+        # This block's fields have already been used to create the system
+        # variable and can be removed from the body.
+        activeBlocks.incl sbkFields
+        blockRemoves.add blockIndex
+
+      of $sbInit:
+        activeBlocks.incl sbkInit
+        initBodies.add(item[1])
+        blockRemoves.add blockIndex
+
+      of $sbStart:
+        activeBlocks.incl sbkStart
+        startBodies.add(item[1])
+        blockRemoves.add blockIndex
+
+      of $sbFinish:
+        activeBlocks.incl sbkFinish
+        finishBodies.add(item[1])
+        blockRemoves.add blockIndex
+
+      of $sbAll:
+        if not hasComponents:
+          error needComponentsMsg & $sbAll & "'"
+        activeBlocks.incl sbkAll
+
+      of $sbStream:
+        if not hasComponents:
+          error needComponentsMsg & $sbAdded & "'"
+        activeBlocks.incl sbkStream
+
+  # Remove extracted blocks from the output body.
+  
+  for i in countDown(blockRemoves.high, 0):
+    systemBody.del blockRemoves[i]
+
+  # Search for and wrap 'all' and 'stream' blocks within the body.
+
+  proc applyIterationBlocks(parent: NimNode) =
+    # Recursive search and wrap for 'all' and 'stream' blocks.
+    for blockIndex in 0 ..< parent.len:
+      
+      template curNode: NimNode =
+        parent[blockIndex]
+
+      var handled: bool
+      
+      if curNode.isBlockNode:
+        case ($curNode[0]).nimIdentNormalize
+
+          of $sbAll:
+            parent[blockIndex] = wrapAllBlock(id, name, sysIndex, options, parent[blockIndex][1])
+            handled = true
+
+          of $sbStream:
+            # Note: passes `curNode` rather than the code in [1], as
+            # stream has to further parse the node for commands.
+            parent[blockIndex] = wrapStreamBlock(id, name, sysIndex, options, curNode())
+            handled = true
+          
+      if not handled:
+        # We have to go deeper.
+        curNode.applyIterationBlocks
+
+  systemBody.applyIterationBlocks
+
+  # Set up debug echo statements.
+  
+  var echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
+  case options.echoRunning:
+    of seNone: discard
+    of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
+      if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
+        echoRun = quote do:
+          echo `name` & " running..."
+      if sbkInit in activeBlocks:
+        echoInit = quote do:
+          echo `name` & " initialising"
+      if sbkAll in activeBlocks:
+        echoAll = quote do:
+          echo `name` & " run all"
+      if sbkFinish in activeBlocks:
+        echoFinish = quote do:
+          echo `name` & " run finish"
+      if options.echoRunning == seEchoUsedAndRunningAndFinished:
+        echoCompleted = quote do:
+          echo `name` & " completed"
+    of seEchoAll:
+      echoRun = quote do:
+        echo `name` & " running..."
+      echoInit = quote do:
+        echo `name` & " initialising"
+      echoAll = quote do:
+        echo `name` & " run all"
+      echoFinish = quote do:
+        echo `name` & " run finish"
+      echoCompleted = quote do:
+        echo `name` & " completed"
+
+  # Compile time system state change detection.
+
+  let
+    cacheId = quote do: EcsIdentity(`id`)
+
+    staticInit = quote do:
+      # Record entry into system iteration in the static environment.
+      `set_inSystem`(`cacheId`, true)
+      `set_inSystemIndex`(`cacheId`, `sysIndex`.SystemIndex)
+      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
+      `set_systemCalledDelete`(`cacheId`, false)
+      const
+        errPrelude = "Internal error: "
+        internalError = " macrocache storage is unexpectedly populated for system \"" & `name` & "\""
+      assert `readsFrom`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "readsFrom" & internalError
+      assert `writesTo`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "writesTo" & internalError
+    
+    # Explicitly bind 'commaSeparate' to avoid injection ambiguity.
+    comSep = bindSym("commaSeparate")
+
+    reportPerformance =
+      when defined(ecsPerformanceHints):
+        quote do:
+          # Reports system component access and performance hints.
+          # Each component access is displayed in order of access
+          # within the system.
+          const prefix {.used.} = "System \"" & `name` & "\""
+          when `len_readsFrom`(`cacheId`, `sysIndex`.SystemIndex) > 0:
+            debugPerformance `cacheId`, prefix & ": Reads from: " &
+              `comSep`(`cacheId`, `readsFrom`(`cacheId`, `sysIndex`.SystemIndex))
+          when `len_writesTo`(`cacheId`, `sysIndex`.SystemIndex) > 0:
+            debugPerformance `cacheId`, prefix & ": Writes to: " &
+              `comSep`(`cacheId`, `writesTo`(`cacheId`, `sysIndex`.SystemIndex))
+          when `systemCalledDelete`(`cacheId`):
+            debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration (source: " &
+              `ecsSystemDeleteLoc`(`cacheId`) & ")"
+          elif `sysRemoveAffectedThisSystem`(`cacheId`):
+            debugPerformance `cacheId`, prefix &
+              " can remove items from this system, length must be checked each iteration (source: " &
+              `ecsSystemRemoveLoc`(`cacheId`) & ")"
+
+      else:
+        newStmtList()
+
+    staticTearDown = quote do:
+      # Record exit of system iteration in the static environment.
+      `reportPerformance`
+      `set_inSystem`(`cacheId`, false)
+      `set_inSystemIndex`(`cacheId`, InvalidSystemIndex)
+      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
+      `set_systemCalledDelete`(`cacheId`, false)
+    
+  # Assemble the final system execution procedure.
+
+  var sysTypeNames: string
+
+  for typeName in id.systemTypesStr(sysIndex):
+    if sysTypeNames != "": sysTypeNames &= ", "
+    sysTypeNames &= typeName
+
+  let
+    sysVar = ident(systemVarName(name))
+    systemComment = newCommentStmtNode("System \"" & name & "\", using components: " & sysTypeNames)
+    doSystem = ident doProcName(name)
+    initWrapper =
+      if initBodies.len > 0:
+        quote do:
+          if unlikely(not `sys`.initialised):
+            `echoInit`
+            `initBodies`
+            `sys`.initialised = true
+      else:
+        newStmtList()
+  
+  var runCheck, initRunEvery, timeImports: NimNode
+  
+  case options.timings
+    of stNone:
+      runCheck = quote: not `sys`.disabled
+      initRunEvery = newStmtList()
+      timeImports = newStmtList()
+    
+    of stRunEvery, stProfiling:
+      runCheck = quote do:
+        (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastRun >= `sys`.runEvery))
+      initRunEvery = quote do:
+        # Update last tick time
+        `sys`.lastRun = cpuTime()
+      timeImports = quote do:
+        when not declared(cpuTime):
+          static:
+            if EcsIdentity(`id`).private:
+              error "Need 'times.cpuTime'" & cannotImport
+          from times import cpuTime
+  
+  let
+    sysBody =
+      if systemBody.len == 0 and echoAll.len == 0:
+        nnkDiscardStmt.newTree(newEmptyNode())
+      else:
+        systemBody
+
+  quote do:
+    `timeImports`
+    proc `doSystem`*(`sys`: var `sysType`) =
+      `systemComment`
+
+      `echoRun`
+      if `runCheck`:
+        `initRunEvery`
+        `initWrapper`
+        `startBodies`
+        static:
+          `staticInit`
+
+        if not `sys`.paused:
+          `echoAll`
+          `sysBody`
+
+        static:
+          `staticTearDown`
+
+        `echoFinish`
+        `finishBodies`
+
+        for i in 0 ..< `sys`.deleteList.len:
+          `sys`.deleteList[i].delete
+        `sys`.deleteList.setLen 0
+      `echoCompleted`
+    
+    template `doSystem`*: untyped =
+      `doSystem`(`sysVar`)
+
+
+proc registerSystemBody(id: EcsIdentity, name: string, componentTypes: NimNode, options: ECSSysOptions, systemBody: NimNode): NimNode =
+
+  var
+    sysIdxSearch = id.findSystemIndex(name)
+    sysIndex = sysIdxSearch[1]
     extraFields: NimNode
     hasFieldsBlock: bool
-
+  
   # Extract definitions `fields:` blocks for system variable creation.
   # If the system is previously defined, fields are checked to match.
   for item in systemBody:
     if item.kind == nnkCall and
         item[0].kind in [nnkIdent, nnkOpenSymChoice] and
-        ($item[0]).toLowerAscii == $sbFields:
+        ($item[0]).nimIdentNormalize == $sbFields:
 
       if not hasFieldsBlock:
         hasFieldsBlock = true
@@ -1342,7 +1610,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
             error "Cannot process a type modifier of '" & uArg.prefix.custom.repr & "'"
         if uArg.alias.len > 0:
           let
-            lcAlias = uArg.alias.toLowerAscii
+            lcAlias = uArg.alias.nimIdentNormalize
             aliases = id.ecsSysComponentAliases sysIndex
           var found: bool
 
@@ -1352,7 +1620,7 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
               aliasStr = aliasNode[1].strVal
             if compId == uArg.typeId:
               found = true
-              if not(aliasStr.toLowerAscii == lcAlias):
+              if not(aliasStr.nimIdentNormalize == lcAlias):
                 error "Alias for field " & id.typeName(compId) & " '" & uArg.alias &
                   "' doesn't match definition alias '" & aliasStr & "'"
           if not found:
@@ -1382,36 +1650,27 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
     # Use the new SystemIndex.
     sysIndex = sysIdxSearch.index
 
-  # Parse the system system blocks.
+  # At this point, the system definition has been added to the macrocache.
   
+  # Next, parse the body to extract events.
+
+  const needComponentsMsg = "Cannot use this block as this system has no components: '"
+  let hasComponents = id.ecsSysRequirements(sysIndex).len > 0
   var
-    initBodies = newStmtList()
-    startBodies = newStmtList()   
-    finishBodies = newStmtList()
     onAdded = newStmtList()
     onRemoved = newStmtList()
     onAddedCallback = newStmtList()
     onRemovedCallback = newStmtList()
-
-    activeBlocks: set[SystemBlockKind]
-    blockChoices: array[SystemBlock, string]
-  
-  for b in SystemBlock.low .. SystemBlock.high:
-    blockChoices[b] = $b
-
-  const needComponentsMsg = "Cannot use this block as this system has no components: '"
-  let hasComponents = id.ecsSysRequirements(sysIdxSearch.index).len > 0
-  var blockRemoves: seq[int]
+    blockRemoves: seq[int]
 
   for blockIndex in systemBody.blocks:
     
     template item: NimNode =
       systemBody[blockIndex]
 
-    let
-      blockTitle = ($item[0]).toLowerAscii
+    let blockTitle = ($item[0]).toLowerAscii
 
-    if blockTitle notin blockChoices:
+    if blockTitle notin BlockChoices:
       # Not a known block descriptor.
       continue
 
@@ -1419,90 +1678,41 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
     case blockTitle
 
-      of $sbFields:
-        # This block's fields have already been used to create the system
-        # variable, and can be removed from the body.
-        activeBlocks.incl sbkFields
-        blockRemoves.add blockIndex
-
-      of $sbInit:
-        activeBlocks.incl sbkInit
-        initBodies.add(item[1])
-        blockRemoves.add blockIndex
-
-      of $sbStart:
-        activeBlocks.incl sbkStart
-        startBodies.add(item[1])
-        blockRemoves.add blockIndex
-
-      of $sbFinish:
-        activeBlocks.incl sbkFinish
-        finishBodies.add(item[1])
-        blockRemoves.add blockIndex
-
+      # Event code is extracted from the body.
+      
       of $sbAdded:
         if not hasComponents:
           error needComponentsMsg & $sbAdded & "'"
-        activeBlocks.incl sbkAdded
         onAdded.add item[1]
         blockRemoves.add blockIndex
       
       of $sbRemoved:
         if not hasComponents:
           error needComponentsMsg & $sbRemoved & "'"
-        activeBlocks.incl sbkRemoved
         onRemoved.add item[1]
         blockRemoves.add blockIndex
 
       of $sbAddedCallback:
         if not hasComponents:
           error needComponentsMsg & $sbAddedCallback & "'"
-        activeBlocks.incl sbkAddedCallback
         onAddedCallback.add item[1]
         blockRemoves.add blockIndex
 
       of $sbRemovedCallback:
         if not hasComponents:
           error needComponentsMsg & $sbRemovedCallback & "'"
-        activeBlocks.incl sbkRemovedCallback
         onRemovedCallback = item[1]
         blockRemoves.add blockIndex
 
-  # Search and wrap 'all' and 'stream' blocks within the body.
+      # Sanity checks.
 
-  proc applyIterationBlocks(parent: NimNode) =
-    # Recursive search and wrap for 'all' and 'stream' blocks.
-    for blockIndex in 0 ..< parent.len:
-      
-      template curNode: NimNode =
-        parent[blockIndex]
+      of $sbAll:
+        if not hasComponents:
+          error needComponentsMsg & $sbAll & "'"
 
-      var handled: bool
-      
-      if curNode.isBlockNode:
-        case ($curNode[0]).toLowerAscii
-
-          of $sbAll:
-            if not hasComponents:
-              error needComponentsMsg & $sbAll & "'"
-            activeBlocks.incl sbkAll
-            parent[blockIndex] = id.wrapAllBlock(name, sysIndex, options, parent[blockIndex][1])
-            handled = true
-
-          of $sbStream:
-            if not hasComponents:
-              error needComponentsMsg & $sbAdded & "'"
-            activeBlocks.incl sbkStream
-            # Note: passes `curNode` rather than the code in [1], as
-            # stream has to further parse the node for commands.
-            parent[blockIndex] = wrapStreamBlock(id, name, sysIndex, options, curNode())
-            handled = true
-          
-      if not handled:
-        # We have to go deeper.
-        curNode.applyIterationBlocks
-
-  systemBody.applyIterationBlocks
+      of $sbStream:
+        if not hasComponents:
+          error needComponentsMsg & $sbAdded & "'"
 
   # Add event blocks to the macrocache.
 
@@ -1536,187 +1746,13 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
   for i in countDown(blockRemoves.high, 0):
     systemBody.del blockRemoves[i]
 
-  # Set up debug echo statements.
-  
-  var echoRun, echoInit, echoAll, echoFinish, echoCompleted = newEmptyNode()
-  case options.echoRunning:
-    of seNone: discard
-    of seEchoUsed, seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished:
-      if options.echoRunning in [seEchoUsedAndRunning, seEchoUsedAndRunningAndFinished]:
-        echoRun = quote do:
-          echo `name` & " running..."
-      if sbkInit in activeBlocks:
-        echoInit = quote do:
-          echo `name` & " initialising"
-      if sbkAll in activeBlocks:
-        echoAll = quote do:
-          echo `name` & " run all"
-      if sbkFinish in activeBlocks:
-        echoFinish = quote do:
-          echo `name` & " run finish"
-      if options.echoRunning == seEchoUsedAndRunningAndFinished:
-        echoCompleted = quote do:
-          echo `name` & " completed"
-    of seEchoAll:
-      echoRun = quote do:
-        echo `name` & " running..."
-      echoInit = quote do:
-        echo `name` & " initialising"
-      echoAll = quote do:
-        echo `name` & " run all"
-      echoFinish = quote do:
-        echo `name` & " run finish"
-      echoCompleted = quote do:
-        echo `name` & " completed"
-
-  # Manage the static environment.
-
-  let
-    cacheId = quote do: EcsIdentity(`id`)
-
-    staticInit = quote do:
-      
-      # Record entry into system iteration in the static environment.
-
-      `set_inSystem`(`cacheId`, true)
-      `set_inSystemIndex`(`cacheId`, `sysIndex`.SystemIndex)
-      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
-      `set_systemCalledDelete`(`cacheId`, false)
-      const
-        errPrelude = "Internal error: "
-        internalError = " macrocache storage is unexpectedly populated for system \"" & `name` & "\""
-      assert `readsFrom`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "readsFrom" & internalError
-      assert `writesTo`(`cacheId`, `sysIndex`.SystemIndex).len == 0, errPrelude & "writesTo" & internalError
-    
-    # Explicitly bind 'commaSeparate' to avoid injection ambiguity.
-    comSep = bindSym("commaSeparate")
-
-    reportPerformance =
-      when defined(ecsPerformanceHints):
-        quote do:
-          # Reports system component access and performance hints.
-          # Each component access is displayed in order of access
-          # within the system.
-          const prefix {.used.} = "System \"" & `name` & "\""
-          when `len_readsFrom`(`cacheId`, `sysIndex`.SystemIndex) > 0:
-            debugPerformance `cacheId`, prefix & ": Reads from: " &
-              `comSep`(`cacheId`, `readsFrom`(`cacheId`, `sysIndex`.SystemIndex))
-          when `len_writesTo`(`cacheId`, `sysIndex`.SystemIndex) > 0:
-            debugPerformance `cacheId`, prefix & ": Writes to: " &
-              `comSep`(`cacheId`, `writesTo`(`cacheId`, `sysIndex`.SystemIndex))
-          when `systemCalledDelete`(`cacheId`):
-            debugPerformance `cacheId`, prefix & " uses an arbitrary delete, length must be checked each iteration (source: " &
-              `ecsSystemDeleteLoc`(`cacheId`) & ")"
-          elif `sysRemoveAffectedThisSystem`(`cacheId`):
-            debugPerformance `cacheId`, prefix &
-              " can remove items from this system, length must be checked each iteration (source: " &
-              `ecsSystemRemoveLoc`(`cacheId`) & ")"
-
-      else:
-        newStmtList()
-
-    staticTearDown = quote do:
-      # Record exit of system iteration in the static environment.
-      `reportPerformance`
-      `set_inSystem`(`cacheId`, false)
-      `set_inSystemIndex`(`cacheId`, InvalidSystemIndex)
-      `set_sysRemoveAffectedThisSystem`(`cacheId`, false)
-      `set_systemCalledDelete`(`cacheId`, false)
-
-  var
-    sysTypeNames: string
-  
-  for typeName in id.systemTypesStr(sysIndex):
-    if sysTypeNames != "": sysTypeNames &= ", "
-    sysTypeNames &= typeName
-
-  let
-    systemComment = newCommentStmtNode("System \"" & name & "\", using components: " & sysTypeNames)
-  
-  # Assemble the final system procedure.
-
-  let
-    doSystem = ident doProcName(name)
-  
-  var
-    initWrapper =
-      if initBodies.len > 0:
-        quote do:
-          if unlikely(not `sys`.initialised):
-            `echoInit`
-            `initBodies`
-            `sys`.initialised = true
-      else:
-        newStmtList()
-  
-    runCheck, initRunEvery, timeImports: NimNode
-  
-  case options.timings
-    of stNone:
-      runCheck = quote: not `sys`.disabled
-      initRunEvery = newStmtList()
-      timeImports = newStmtList()
-    of stRunEvery, stProfiling:
-      runCheck = quote do:
-        (not `sys`.disabled) and ((`sys`.runEvery == 0.0) or (cpuTime() - `sys`.lastRun >= `sys`.runEvery))
-      initRunEvery = quote do:
-        # Update last tick time
-        `sys`.lastRun = cpuTime()
-      timeImports = quote do:
-        when not declared(cpuTime):
-          static:
-            if EcsIdentity(`id`).private:
-              error "Need 'times.cpuTime'" & cannotImport
-          from times import cpuTime
-  let
-    sysBody =
-      if systemBody.len == 0 and echoAll.len == 0:
-        nnkDiscardStmt.newTree(newEmptyNode())
-      else:
-        systemBody
-    
-    # This procedure is executes the system.
-
-    systemProc = quote do:
-      `timeImports`
-      proc `doSystem`*(`sys`: var `sysType`) =
-        `systemComment`
-
-        `echoRun`
-        if `runCheck`:
-          `initRunEvery`
-          `initWrapper`
-          `startBodies`
-          static:
-            `staticInit`
-
-          if not `sys`.paused:
-            `echoAll`
-            `sysBody`
-
-          static:
-            `staticTearDown`
-
-          `echoFinish`
-          `finishBodies`
-
-          for i in 0 ..< `sys`.deleteList.len:
-            `sys`.deleteList[i].delete
-          `sys`.deleteList.setLen 0
-        `echoCompleted`
-        
-      
-      template `doSystem`*: untyped =
-        `doSystem`(`sysId`)
-
-  # Store the body of the do proc.
-  # The procs themselves are only accessible after commitSystem is called.
-  id.set_ecsSysBodyDefinition(sysIndex, systemProc)
-
   # Add to the list of systems with a defined body.
   # This allows detection of trying to set a body multiple times.
   id.set_bodyDefined(sysIndex, true)
   id.set_ecsSystemBodySourceLoc(sysIndex, componentTypes.lineInfo)
+  
+  # This is processed into the system run procedure later by generateSystem.
+  id.set_ecsSystemBody(sysIndex, systemBody)
 
   # Add to the current list of systems with uncommitted bodies.
   id.addUncommitted sysIndex
@@ -1729,12 +1765,12 @@ proc generateSystem(id: EcsIdentity, name: string, componentTypes: NimNode, opti
 
 macro makeSystemOpts*(id: static[EcsIdentity], name: static[string], componentTypes: openarray[untyped], options: static[ECSSysOptions], systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using an ECS identity with specific options.
-  generateSystem(id, name, componentTypes, options, systemBody)
+  registerSystemBody(id, name, componentTypes, options, systemBody)
 
 
 macro makeSystemOpts*(name: static[string], componentTypes: untyped, options: static[ECSSysOptions], systemBody: untyped): untyped =
   ## Define a system and/or add a system code body using the default ECS identity with specific options.
-  generateSystem(defaultIdentity, name, componentTypes, options, systemBody)
+  registerSystemBody(defaultIdentity, name, componentTypes, options, systemBody)
 
 
 # --------------------
@@ -1757,7 +1793,7 @@ macro makeSystem*(id: static[EcsIdentity], name: static[string], componentTypes:
   ## 
   ## Previously defined systems carry their options over, otherwise `defaultSystemOptions` is used.
   let (_, options) = id.sysOptionsOrDefault name
-  generateSystem(id, name, componentTypes, options, systemBody)
+  registerSystemBody(id, name, componentTypes, options, systemBody)
 
 
 template makeSystem*(name: static[string], componentTypes: untyped, systemBody: untyped): untyped =
@@ -1781,7 +1817,7 @@ macro makeSystemBody*(id: static[EcsIdentity], name: static[string], systemBody:
   if not opts.found:
     error "`makeSystemBody` requires a 'defineSystem' for \"" & name & "\""
 
-  generateSystem(id, name, newEmptyNode(), opts.options, systemBody)
+  registerSystemBody(id, name, newEmptyNode(), opts.options, systemBody)
 
 
 template makeSystemBody*(name: static[string], systemBody: untyped): untyped =
@@ -1969,10 +2005,113 @@ macro ecsImportCommitFrom*(module: untyped, symbols: varargs[untyped]): untyped 
   newStmtList()
 
 
-
 # ------------------
 # Committing systems
 # ------------------
+
+
+proc commitSystemList(id: EcsIdentity, systems: openarray[SystemIndex], runProc: string): NimNode =
+  ## Output any uncommitted system body procs in `systems`.
+  ## 
+  ## If `runProc` is a non-empty string, a wrapper proc is generated to
+  ## call `systems` in the order given.
+
+  result = newStmtList()
+
+  const
+    logOrder = defined(ecsLog) or defined(ecsLogDetails)
+  var
+    sysCalls = newStmtList()
+    noBodies: seq[string]
+    uncommitted = id.getUncommitted()
+  
+  when logOrder:
+    var runOrder: string
+
+  for sys in systems:
+    let
+      sysName = id.getSystemName sys
+      rawBody = id.ecsSystemBody sys
+      options = id.getOptions sys
+      definition = id.generateSystem(sys, options, rawBody)
+
+    if definition.len > 0:
+
+      let ucIndex = uncommitted.find sys
+
+      # Add system body proc.
+      if ucIndex > -1:
+        id.startOperation "Adding run proc for system \"" & sysName & "\""
+
+        result.add definition
+        # Mark as committed.
+        id.set_bodyDefined(sys, true)
+        
+        # Now the definition has been added it can be removed from the
+        # uncommitted list.
+        uncommitted.delete ucIndex
+
+        # Add user event for committing specific systems.
+        let sysCode = id.onEcsCommitSystemCode sys
+        if not sysCode.isNil:
+          result.add sysCode
+
+        id.endOperation
+
+      # Call all the parameter systems within the runProc.
+      if runProc.len > 0:
+        sysCalls.add nnkCall.newTree(ident doProcName(sysName))
+
+        when logOrder:
+          runOrder.add "  " & sysName & "\n"
+    else:
+      noBodies.add "\"" & sysName & "\""
+
+  # Write back list with committed systems removed.
+  id.set_uncommitted uncommitted
+
+  if runProc.len > 0:
+    # Include a wrapper proc to execute the above systems.
+
+    when logOrder:
+      echo "Wrapper proc `" & runProc & "()` execution order:"
+      
+      if runOrder.len > 0:
+        echo runOrder
+      else:
+        echo "  <No system bodies found>"
+
+    if noBodies.len > 0:
+      # It's a compile time error to generate a run proc with systems
+      # that don't have bodies defined.
+
+      var outputStr = noBodies[0]
+      for i in 1 ..< noBodies.len:
+        outputStr &= ", " & noBodies[i]
+      
+      error "Systems to be committed were missing bodies: [" &
+        `outputStr` & "]"
+    else:
+      # Generate the run proc.
+      let
+        procIdent = ident runProc
+
+      if sysCalls.len > 0:
+        result.add(quote do:
+          proc `procIdent`* =
+            `sysCalls`
+        )
+      else:
+        # No systems with bodies have been provided.
+        # This isn't an error to allow easier prototyping.
+
+        let emptyProcStr = newLit(
+          "System run procedure `" & runProc & "` does not call any systems")
+        result.add(quote do:
+          proc `procIdent`* =
+            {.warning: `emptyProcStr`.}
+            discard
+        )
 
 
 proc commitCommentStr(id: EcsIdentity, title, procName: string): string =
@@ -2016,7 +2155,7 @@ proc doCommitSystems(id: EcsIdentity, procName: string): NimNode =
       # Clear the code for the next commit.
       id.set_onEcsNextCommitCode newStmtList()
 
-  # Add the system body procedures and run proc.
+  # Generate the system body procedures and run proc.
   result.add id.commitSystemList(systems, procName)
 
   if id.private:
