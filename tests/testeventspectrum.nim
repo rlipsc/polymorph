@@ -102,10 +102,11 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
         cs: {sys: {event}}.toTable
       )
 
-  var
-    entityChanges: seq[(int, EventKind, seq[ComponentTypeId])]
+  var entityChanges: seq[(int, EventKind, seq[ComponentTypeId])]
 
   onEntityChange:
+    # This event records all state changes to an entity so they can be
+    # compared with the expected changes afterwards.
     entityChanges.add (entity.entityId.int, state, types)
     for c in types:
       caseComponent c:
@@ -193,6 +194,7 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
 
   # ------------
 
+
   proc `$`(e: Events, indent = 0): string =
     result = "events \"" & e.evName & "\n"
 
@@ -212,7 +214,6 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
     result &= ' '.repeat(indent) & '-'.repeat(10) & "\n"
 
   template checkEvents(task: string, expected: Events) =
-
     let
       cTypeStr = expected.evName
       events = componentEvents.getOrDefault cTypeStr
@@ -262,51 +263,54 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
       et1 = @["simpleEvents1", "simpleEvents2", "simpleEvents3"]
       et2 = @["simpleEvents4"]
 
-    var
-      e1: EntityRef
+    var e1: EntityRef
 
-    test "newEntityWith 1":
+    template testEvents(str: string, actions: untyped) =
+      test str:
+        actions
+      clearEvents()
+
+    macro toIds(types: varargs[untyped]): seq[ComponentTypeId] =
+      # Convert types to a sequence of ComponentTypeId values.
+      result = nnkPrefix.newTree(ident"@", nnkBracket.newTree())
+      for t in types:
+        result[1].add newDotExpr(t, ident"typeId")
+
+    template eId(e: EntityRef): int = e.entityId.int
+
+    testEvents "newEntityWith 1":
       
       e1 = newEntityWith(EventTest1())
       checkEvents("new entity EventTest1", EventTest1.addEvents(et1, {ekNewEntityWith}))
+      check entityChanges == [(e1.eId, ekNewEntityWith, toIds(EventTest1))]
 
-    clearEvents()
-
-    test "delete 1":
+    testEvents "delete 1":
       e1.delete
       checkEvents("delete 1", EventTest1.removeEvents(et1, {ekDeleteEnt}))
+      check entityChanges == [(e1.eId, ekDeleteEnt, toIds(EventTest1))]
 
-    clearEvents()
-
-    test "newEntityWith 2":
-
+    testEvents "newEntityWith 2":
       e1 = newEntityWith(EventTest1(), EventTest2())
-
       checkEvents("new entity EventTest1", EventTest1.addEvents(allSys, {ekNewEntityWith}))
       checkEvents("new entity EventTest2", EventTest2.addEvents(et2, {ekNewEntityWith}))
+      check entityChanges == [(e1.eId, ekNewEntityWith, toIds(EventTest1, EventTest2))]
 
-    clearEvents()
-
-    test "remove 1":
+    testEvents "remove 1":
       e1.remove EventTest1
-
       checkEvents("remove", EventTest1.removeEvents(allSys, {ekRemoveComponents}))
       checkEvents("remove", EventTest2.removeEvents(et2, {ekRemoveComponents}))
-
       # We expect EventTest2 to be removed too as it is dependent on EventTest1.
+      check entityChanges == [(e1.eId, ekRemoveComponents, toIds(EventTest1, EventTest2))]
       check sysSimpleEvents4.count == 0
       check e1.componentCount == 0
 
-    clearEvents()
-
-    test "add 1":
+    testEvents "add 1":
       e1.add EventTest1()
 
       checkEvents("add", EventTest1.addEvents(et1, {ekAddComponents}))
+      check entityChanges == [(e1.eId, ekAddComponents, toIds(EventTest1))]
 
-    clearEvents()
-
-    test "add 2":
+    testEvents "add 2":
       e1.add EventTest2()
       var
         et1expected = EventTest1.addEvents(et2, {})
@@ -316,23 +320,20 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
 
       checkEvents("add 2", et1expected)
       checkEvents("add 2", EventTest2.addEvents(et2, {ekAddComponents}))
+      check entityChanges == [(e1.eId, ekAddComponents, toIds(EventTest2))]
 
-    clearEvents()
-
-    test "remove 2":
+    testEvents "remove 2":
       e1.remove EventTest2()
-      var
-        et1expected = EventTest1.removeEvents(et2, {})
-      
+
+      var et1expected = EventTest1.removeEvents(et2, {})
       # EventTest1 isn't being destroyed.
       et1expected.c.excl {ekRemove, ekRemoveCb, ekDeleteComp}
 
       checkEvents("remove 2", et1expected)
       checkEvents("remove 2", EventTest2.removeEvents(et2, {ekRemoveComponents}))
+      check entityChanges == [(e1.eId, ekRemoveComponents, toIds(EventTest2))]
 
-    clearEvents()
-
-    test "delete 2":
+    testEvents "delete 2":
       e1.add EventTest2()
 
       clearEvents()
@@ -341,16 +342,20 @@ template defineEventSpectrum*(cOpts: ECSCompOptions, sOpts: ECSSysOptions, eOpts
 
       checkEvents("delete 2", EventTest1.removeEvents(allSys, {ekDeleteEnt}))
       checkEvents("delete 2", EventTest2.removeEvents(et2, {ekDeleteEnt}))
-    
-    clearEvents()
+      check entityChanges == [(e1.eId, ekDeleteEnt, toIds(EventTest1, EventTest2))]
 
-    test "construct":
-
+    testEvents "construct":
       let
         e {.used.} = cl(EventTest1(), EventTest2()).construct
-
+      
       checkEvents("construct", EventTest1.addEvents(allSys, {ekConstruct}))
       checkEvents("construct", EventTest2.addEvents(et2, {ekConstruct}))
+
+      e.remove EventTest1
+      check entityChanges == [
+          (e1.eId, ekConstruct, toIds(EventTest1, EventTest2)),
+          (e1.eId, ekRemoveComponents, toIds(EventTest1, EventTest2)),
+        ]
 
   # Make sure onEntityChange doesn't affect other ECS created afterwards.
   clearOnEntityChange()
