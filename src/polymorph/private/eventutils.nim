@@ -17,7 +17,6 @@ proc userEntAccess*(entitySym: NimNode): NimNode =
 
 proc userCompNameAccess(id: EcsIdentity, compId: ComponentTypeId, comp, ty: NimNode): NimNode =
   ## User access to a component.
-  # For owned components, 'comp' should refer to the value rather than an instance.
   let
     tyStr = id.typeName(compId)
     tyIdent = ident tyStr
@@ -28,7 +27,7 @@ proc userCompNameAccess(id: EcsIdentity, compId: ComponentTypeId, comp, ty: NimN
 
 
 proc userCompAccess(id: EcsIdentity, compId: ComponentTypeId, comp, ty: NimNode): NimNode =
-  ## User access to the current component.
+  ## User access to the component hosting an event.
   result = quote do:
     template curComponent: `ty` {.used.} = `comp`
     template component: `ty` {.used.} = `comp`
