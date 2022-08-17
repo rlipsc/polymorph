@@ -1147,7 +1147,8 @@ proc getTypeStr(compNode: NimNode): string =
       tyInst[1].expectKind nnkSym
       return tyInst[1].strVal
     else:
-      error "Cannot process type string for tree:\n" & tyInst.treerepr
+      error "Cannot process type string for tree:\n" & tyInst.treerepr &
+        "\n\nExpression: " & tyInst.repr
   else:
     return tyInst.strVal
 
