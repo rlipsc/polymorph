@@ -2468,3 +2468,40 @@ template clear*(sys: object) =
       `sys`.groups[i].entity.delete
     # The length of `sys`.groups is set by delete.
 
+
+macro addComponents*(sys: object, values: varargs[typed]) =
+  ## Add the components in `types` to all entities in this system.
+  # This macro builds an `addComponents` with `types` and executes it
+  # for each entity in the system, from the last entity backwards to the
+  # first (adding a component can negate systems and remove rows).
+
+  let entity = ident "entity"
+  var `addInner` = nnkCall.newTree(ident "addComponents", entity)
+  
+  for ty in values:
+    
+    case ty.kind
+
+      of nnkSym:
+        `addInner`.add ty
+      
+      of nnkHiddenStdConv:
+        ty.expectMinLen 2
+        ty[1].expectKind nnkBracket
+        
+        for compTy in ty[1]:
+          `addInner`.add compTy
+      
+      else:
+        `addInner`.add ty
+
+  result = quote do:
+    for i in countDown(`sys`.count - 1, 0):
+      let `entity` = `sys`.groups[i].entity
+      discard `addInner`
+
+
+template add*(sys: object, values: varargs[typed]) =
+  ## Add the components in `values` to all entities in this system.
+  addComponents(sys, values)
+
