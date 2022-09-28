@@ -398,7 +398,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
                         1.ComponentGeneration
 
                   `reference` = (
-                    componentId(),
+                    componentId,
                     owningSystem.count.ComponentIndex,
                     nextGen
                   )
@@ -419,7 +419,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
                     1.ComponentGeneration
               
               `reference` = (
-                componentId(),
+                componentId,
                 owningSystem.count.ComponentIndex,
                 nextGen
               )
@@ -543,7 +543,7 @@ proc makeRuntimeConstruction*(id: EcsIdentity): NimNode =
                   #`reference` = compRef
 
                   `reference` = (
-                    componentId(),
+                    componentId,
                     owningSystem.count.ComponentIndex,
                     1.ComponentGeneration # TODO: Update generation.
                   )

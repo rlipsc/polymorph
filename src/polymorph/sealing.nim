@@ -564,7 +564,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
     proc `strOp`*(componentId: ComponentTypeId): string =
       ## Display the name and id for a component type.
       componentId.caseComponent:
-        `res` = `compName`() & " (" & `strOp`(int(componentId)) & ")"
+        `res` = `compName` & " (" & `strOp`(int(componentId)) & ")"
 
     proc `strOp`*(componentIds: seq[ComponentTypeId]): string =
       ## Display the name and id for a list of component types.
@@ -575,13 +575,13 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
 
     func typeName*(componentId: ComponentTypeId): string = 
       componentId.caseComponent:
-        `res` = `compName`()
+        `res` = `compName`
 
     proc toString*(componentRef: ComponentRef, `showData`: bool = `showDataDefault`): string =
       ## Display the name, type and data for a component reference.
       let tId = componentRef.typeId
       tId.caseComponent:
-        `res` = `compName`() & " (id: " & `strOp`(int(tId)) & ", index: " & `strOp`(componentRef.index.int) & ", generation: " & `strOp`(componentRef.generation.int) & ")"
+        `res` = `compName` & " (id: " & `strOp`(int(tId)) & ", index: " & `strOp`(componentRef.index.int) & ", generation: " & `strOp`(componentRef.generation.int) & ")"
         if `showData`:
           `res` &= ":\n"
           try:
@@ -596,7 +596,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       ## `$` function for dynamic component superclass.
       ## Displays the sub-class data according to the component's `typeId`.
       caseComponent comp.typeId:
-        `res` &= `compName`()
+        `res` &= `compName`
         if `showData`:
           `res` &= ":\n" & $componentRefType()(comp).value & "\n"
     
