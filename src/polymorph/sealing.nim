@@ -583,7 +583,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       tId.caseComponent:
         `res` = `compName` & " (id: " & `strOp`(int(tId)) & ", index: " & `strOp`(componentRef.index.int) & ", generation: " & `strOp`(componentRef.generation.int) & ")"
         if `showData`:
-          `res` &= ":\n"
+          `res` &= ": "
           try:
             `res` &= `strOp`(componentInstanceType()(componentRef.index.int).access)
           except:
@@ -598,7 +598,7 @@ proc makeRuntimeStrOutput(id: EcsIdentity): NimNode =
       caseComponent comp.typeId:
         `res` &= `compName`
         if `showData`:
-          `res` &= ":\n" & $componentRefType()(comp).value & "\n"
+          `res` &= ": " & $componentRefType()(comp).value & "\n"
     
     proc `strOp`*(comp: Component): string = comp.toString
 
@@ -719,6 +719,8 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
     fmtSize = bindSym("formatSize", brClosed)
     spaces = bindSym("spaces", brClosed)
     trimZeros = bindSym("trimZeros", brClosed)
+    indentStr = bindSym("indent", brClosed)
+
     entOpts = id.entityOptions
     maxEntId = entityIdUpperBound(entOpts.entityStorageFormat)
     sysStr = bindSym "systemStr"
@@ -743,63 +745,67 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
       ## The parameter `showData` controls whether the component's data is included in the output.
       if entity.alive:
         let entityId = entity.entityId
-        for compRef in entityId.components:
-          let compDesc = toString(compRef, showData)
-          var
-            owned: bool
-            genMax: int
-            genStr: string
-          try:
-            caseComponent compRef.typeId:
-              genMax = componentGenerations().len
-              let gen = componentGenerations()[compRef.index.int]
-              genStr = `strOp`(gen)
-              owned = componentInstanceType().isOwnedComponent
-          except:
-            genStr = " ERROR ACCESSING generations (index: " &
-              `strOp`(compRef.index.int) &
-              ", count: " & `strOp`(genMax) & ")"
+        if entity.componentCount > 0:
+          for compRef in entityId.components:
+            var
+              compDesc = toString(compRef, showData)
+              owned: bool
+              genMax: int
+              genStr: string
+            try:
+              caseComponent compRef.typeId:
+                genMax = componentGenerations().len
+                let gen = componentGenerations()[compRef.index.int]
+                genStr = `strOp`(gen)
+                owned = componentInstanceType().isOwnedComponent
+            except:
+              genStr = " ERROR ACCESSING generations (index: " &
+                `strOp`(compRef.index.int) &
+                ", count: " & `strOp`(genMax) & ")"
 
-          `res` &= compDesc
+            # $typeId returns the string of the storage type for this component.
+            if owned:
+              if not compRef.alive:
+                compDesc &= " <DEAD OWNED COMPONENT Type: " & `strOp`(compRef.typeId) & ", generation: " & genStr & ">\n"
 
-          # $typeId returns the string of the storage type for this component.
-          if owned:
-            if not compRef.alive:
-              `res` &= " <DEAD OWNED COMPONENT Type: " & `strOp`(compRef.typeId) & ", generation: " & genStr & ">\n"
+            else:
+              if not compRef.valid:
+                compDesc &= " <INVALID COMPONENT Type: " & `strOp`(compRef.typeId) & ", generation: " & genStr & ">\n"
+            
+            `res` &= compDesc & "\n"
 
-          else:
-            if not compRef.valid:
-              `res` &= " <INVALID COMPONENT Type: " & `strOp`(compRef.typeId) & ", generation: " & genStr & ">\n"
-
-          let needsNL = `res`[^1] != '\n'
-          if needsNL:
-            `res` &= "\n"
-          if showData:
-            `res` &= "\n"
-
-      else: `res` &= "[Entity not alive, no component item entry]\n"
 
     proc `strOp`*(`entity`: EntityRef, showData = `showDataDefault`): string =
       ## `$` function for `EntityRef`.
       ## List all components and what systems the entity uses.
       ## By default adds data inside components with `repr`.
       ## Set `showData` to false to just display the component types.
-      let id = `entity`.entityId.int
+      let
+        id = `entity`.entityId.int
+        compCount = `entity`.componentCount
+
       `res` = "[EntityId: " & $(id)
 
       if id < 1 or id > `maxEntId`:
         `res` &= " Out of bounds!]"
       else:
         let
-          comps = `entity`.listComponents(showData)
-          systems = `entity`.listSystems()
-          sys = if systems == "": "<No systems used>\n" else: systems
+          compsStr = `entity`.listComponents(showData)
+          # The final \n is removed before indentation.
+          compsIndented =
+            if compCount > 0: "\n" & `indentStr`(compsStr[0..^2], 2)
+            else: " <None>"
+          systemsStr = `entity`.listSystems()
+          sysIndented =
+            if systemsStr.len > 0: "\n" & `indentStr`(systemsStr[0..^2], 2)
+            else: " <None>"
           invalidStr = if not `entity`.entityId.valid: " INVALID/NULL ENTITY ID" else: ""
         `res` &=
           " (generation: " & $(`entity`.instance.int) & ")" &
           invalidStr & "\nAlive: " & $`entity`.alive &
-          "\nComponents:\n" & comps &
-          "Systems:\n" & $sys & "]"
+          "\nComponents:" & compsIndented &
+          "\nSystems:" & $sysIndented &
+          "\n]"
 
     proc `strOp`*(`entity`: EntityId): string =
       ## Display the entity currently instantiated for this `EntityId`.
@@ -1100,11 +1106,8 @@ proc makeListSystem(id: EcsIdentity): NimNode =
     res = ident "result"
     innards = newStmtList()
     entIdent = ident "entity"
-    hasSystems: bool
-
+  
   for sysId in id.unsealedSystems:
-    hasSystems = true
-
     let
       options = id.getOptions sysId
       sysName = id.getSystemName(sysId)
@@ -1154,7 +1157,6 @@ proc makeListSystem(id: EcsIdentity): NimNode =
           `res` &= `sysStr` & " Sync issue " & issue & "\n"
         elif inSys:
           `res` &= `sysStr` & " \n"
-
         )
 
   result = quote do:
