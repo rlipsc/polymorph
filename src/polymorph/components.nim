@@ -468,7 +468,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
         ## `update` operates as a simple assignment into the storage array and therefore operates on the type's `==` proc.
         template update*(`instParam`: `instanceTypeIdent`, `valueParam`: `typeNameIdent`): untyped =
           `standAloneUpdate`
-        template componentCount*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): int = `ownerSystem`.count
+        template componentCount*(value: typedesc[`typeNameIdent`] | typedesc[`instanceTypeIdent`]): int = `ownerSystem`.count
         ## Allows access to the owning system's `groups` field that stores components of this type.
         template componentStorage*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `ownerSystem`.groups
         template ownerSystemIndex*(value: typedesc[`instanceTypeIdent`] | `instanceTypeIdent` | `typeNameIdent`): untyped = `sysOwner`.SystemIndex
@@ -596,7 +596,7 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
               `nextIdxIdent`.int - 1
           of cisSeq:
             quote do:
-              `lcTypeIdent`.len
+              `lcTypeIdent`.len - 1
 
       let
         res = ident "result"
