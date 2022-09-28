@@ -803,13 +803,15 @@ proc systemItemCore*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, ite
     itemCore.add(
       quote do:
         if `itemIdx` notin 0 .. `sys`.high:
-          assert false,
-            "'item' in " & `sys`.name & " is out of bounds. " &
-            "Use of 'item' after remove/delete affected this system?"
+          {.line.}:
+            assert false,
+              "'item' in \"" & `sys`.name & "\" is out of bounds. " &
+              "Use of 'item' after remove/delete affected this system?"
         elif `sys`.groups[`itemIdx`].entity != `rowEntity`:
-          assert false,
-            "'item' in " & `sys`.name & " is being used after a " &
-            "remove or delete affected this system"
+          {.line.}:
+            assert false,
+              "'item' in \"" & `sys`.name & "\" is being used after a " &
+              "remove or delete affected this system"
     )
 
   itemCore.add(quote do:
