@@ -78,11 +78,6 @@ proc checkInit*[T: Component](c: var T) {.inline.} =
   if c.fTypeId.int == 0: c.fTypeId = c.type.typeId()
 
 
-proc nameNode(typeNode: NimNode): NimNode =
-  typeNode.expectKind nnkTypeDef
-  typeNode[0].baseName
-
-
 proc createRefComponent(typeName: string): NimNode =
   # Creates a type inherited from `Component` that contains the fields for this type.
   # This is used for runtime templates, allowing heterogeneous list of components.
@@ -113,42 +108,52 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
     typeDeclarations = newStmtList()
     afterComponentDef = newStmtList()
     registered: seq[string]
+    externalCompDefs: seq[int]  # External component nodes to remove from output.
   let
     previousComponentsDeclared = id.components.len
 
-  for tyDef in body.typeDefs:
-    
-    # Handle {.notComponent.} for simplifying ad hoc types used
-    # inside registerComponents.
-    const
-      notComponentStr = "notComponent"
-      pragExpr = 0
-      pragmaList = 1
+  for i, tyDef in body.typeDefs:
+    var typeNameIdent: NimNode
 
-    var notComponent = -1
-    
-    # Handle {.notComponent.}.
-    if tyDef[pragExpr].kind == nnkPragmaExpr:
-      tyDef[pragExpr].expectMinLen 2
-      let pragma = tyDef[pragExpr][pragmaList]
-      pragma.expectKind nnkPragma
-      if pragma.len > 0:
-        for i in 0 ..< pragma.len:
-          if pragma[i].kind == nnkIdent and pragma[i].strVal == notComponentStr:
-            notComponent = i
-            break
+    case tyDef.kind
+      
+      of nnkTypeDef:
+        typeNameIdent = tyDef[0].basename
+        const
+          notComponentStr = "notComponent"
+          pragExpr = 0
+          pragmaList = 1
 
-      if notComponent > -1:
-        # Remove the {.notComponent.} from the typeDef and ignore.
-        pragma.del(notComponent)
-        if pragma.len == 0:
-          # Remove the empty pragma declaration and transpose ident.
-          let pragmaIdent = 0
-          tyDef[pragExpr] = tyDef[pragExpr][pragmaIdent]
-        continue
+        var notComponent = -1
+        
+        # Handle {.notComponent.}.
+        if tyDef[pragExpr].kind == nnkPragmaExpr:
+          tyDef[pragExpr].expectMinLen 2
+          let pragma = tyDef[pragExpr][pragmaList]
+          pragma.expectKind nnkPragma
+          if pragma.len > 0:
+            for i in 0 ..< pragma.len:
+              if pragma[i].kind == nnkIdent and pragma[i].strVal == notComponentStr:
+                notComponent = i
+                break
+
+          if notComponent > -1:
+            # Remove the {.notComponent.} from the typeDef and ignore.
+            pragma.del(notComponent)
+            if pragma.len == 0:
+              # Remove the empty pragma declaration and transpose ident.
+              let pragmaIdent = 0
+              tyDef[pragExpr] = tyDef[pragExpr][pragmaIdent]
+            continue
+      
+      of nnkIdent:
+        typeNameIdent = tyDef.baseName
+        # Remove the ident from output code.
+        externalCompDefs.add i
+      else:
+        error "Components must be given as a type definition or type ident"
 
     let
-      typeNameIdent = tyDef.nameNode()
       typeNameStr = $typeNameIdent
       # store compInfo for component type and generate id
       typeId = id.addComponentTypeId(typeNameStr)
@@ -159,7 +164,6 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
       refTypeNameIdent = newIdentNode(refTypeName(typeNameStr))
     
     registered.add typeNameStr
-    id.add_componentDefinitions typeId, tyDef
 
     # Update the build list.
     id.add_ecsComponentsToBeSealed typeId
@@ -195,6 +199,11 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   when defined(ecsLogDetails):
     echo "Component options:\n", options.repr, "\n"
 
+
+  # Remove externally defined components given as idents.
+  for line in externalCompDefs:
+    body.del line
+  
   result.add typeDeclarations   # Add declarations for types derived from the components.
   result.add body               # The user's code body gets added unchanged, aside from stripping `{.notComponent.}.
   result.add afterComponentDef  # 'Component' descendant types and utility templates.
@@ -873,7 +882,18 @@ template registerComponents*(compOpts: ECSCompOptions, body: untyped): untyped =
   ##         comp2: Comp2Instance
   ##       Comp2* = object
   ##         comp1: Comp1Instance
-
+  ## 
+  ## Types that have previously been defined can be given as-is in the body:
+  ## 
+  ## .. code-block:: nim
+  ##   type
+  ##     PreviouslyDefined1 = object
+  ##     PreviouslyDefined2 = object
+  ## 
+  ##   registerComponents(myOptions):
+  ##     PreviouslyDefined1
+  ##     PreviouslyDefined2
+  
   defaultIdentity.registerComponents(compOpts, body)
 
 
@@ -913,6 +933,17 @@ template register*(compOpts: ECSCompOptions, body: untyped): untyped =
   ##         comp2: Comp2Instance
   ##       Comp2* = object
   ##         comp1: Comp1Instance
+  ## 
+  ## Types that have previously been defined can be given as-is in the body:
+  ## 
+  ## .. code-block:: nim
+  ##   type
+  ##     PreviouslyDefined1 = object
+  ##     PreviouslyDefined2 = object
+  ## 
+  ##   registerComponents(myOptions):
+  ##     PreviouslyDefined1
+  ##     PreviouslyDefined2
 
   defaultIdentity.registerComponents(compOpts, body)
 

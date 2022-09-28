@@ -71,9 +71,6 @@ else:
   genListStates(ComponentTypeId, SystemIndex, ["systems", "dependentOwners", "linked"])
   genListStates(ComponentTypeId, ComponentTypeId, ["dependentComps"])
 
-  # Raw component type definition AST.
-  genListStates(ComponentTypeId, NimNode, ["componentDefinitions"])
-
   # Component options
   genItemStates(ComponentTypeId, Natural, ["maxComponents"])
   genItemStates(ComponentTypeId, EcsCompItemStorage, ["componentStorageFormat"])
