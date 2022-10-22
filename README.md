@@ -1,32 +1,37 @@
 - [Project overview](#project-overview)
   - [Goals](#goals)
   - [Entity-component-system (ECS)](#entity-component-system-ecs)
-  - [Example code](#example-code)
-  - [Benefits of ECS](#benefits-of-ecs)
-  - [Polymorph](#polymorph)
-  - [Compile time focus](#compile-time-focus)
-    - [Characteristics](#characteristics)
+    - [An example ECS](#an-example-ecs)
+    - [Benefits of ECS](#benefits-of-ecs)
+    - [ECS contrasted with Object Oriented Design](#ecs-contrasted-with-object-oriented-design)
+  - [Polymorph: a generative approach to a queryless, system oriented ECS.](#polymorph-a-generative-approach-to-a-queryless-system-oriented-ecs)
+    - [Compile time focus](#compile-time-focus)
+    - [Features](#features)
   - [Polymers companion library](#polymers-companion-library)
   - [Why Nim?](#why-nim)
 - [Overview of building an ECS](#overview-of-building-an-ecs)
-  - [After `makeEcs`](#after-makeecs)
+  - [After `makeEcs`/`makeEcsCommit`](#after-makeecsmakeecscommit)
 - [Defining components](#defining-components)
   - [`registerComponents` generated types](#registercomponents-generated-types)
   - [Components and instance types](#components-and-instance-types)
   - [Instances in components](#instances-in-components)
+    - [Instance volatility](#instance-volatility)
   - [Component utilities](#component-utilities)
     - [Matching run time `ComponentTypeId`](#matching-run-time-componenttypeid)
 - [Defining systems](#defining-systems)
-  - [System component negation](#system-component-negation)
-  - [Systems without components](#systems-without-components)
-  - [Committing systems](#committing-systems)
-  - [System execution order](#system-execution-order)
-  - [Running systems at time intervals](#running-systems-at-time-intervals)
-  - [Adding fields to systems](#adding-fields-to-systems)
-  - [Grouping systems](#grouping-systems)
   - [System anatomy](#system-anatomy)
     - [System scope blocks](#system-scope-blocks)
     - [Work item blocks](#work-item-blocks)
+    - [Accessing items](#accessing-items)
+      - [Access templates and renaming components](#access-templates-and-renaming-components)
+  - [System component negation](#system-component-negation)
+  - [Systems without components](#systems-without-components)
+  - [Committing systems](#committing-systems)
+  - [`ecsImport`](#ecsimport)
+  - [System execution order](#system-execution-order)
+  - [Running systems at time intervals](#running-systems-at-time-intervals)
+  - [Adding custom fields to systems](#adding-custom-fields-to-systems)
+  - [Grouping systems](#grouping-systems)
     - [Execution control](#execution-control)
     - [Removing components during `all` or `stream` blocks](#removing-components-during-all-or-stream-blocks)
   - [System utilities](#system-utilities)
@@ -86,43 +91,46 @@ A lean, generative abstraction for writing programs with the [entity-component-s
 - Scalable, low boilerplate platform for composing data oriented designs.
 - No runtime, zero system iteration overhead.
 - Leverage static typing and metaprogramming to elide run time work.
+- Support low resource embedded devices.
 - No external dependencies.
+
 
 ## Entity-component-system (ECS)
 
-This pattern lets you combine types at run time and run code for type combinations.
+This pattern lets you build composite types at run time and dispatch program logic for specific sets of types.
 
-- **Entities** are sets of data types.
-- **Components** are types added to `entities`.
-- **Systems** are code running for certain `components`.
+The three elements of ECS are:
 
-Entity-component-systems offer a way to structure programs 'bottom up' using run time composition.
+- **Entity**: a handle that lets you add or remove data types.
+- **Component**: a data type that can be added to an entity.
+- **System**: logic with component parameters that runs for matching entities.
+
+Entity-component-systems offer a way to structure programs 'bottom up' by combining data to compose system behaviour at run time.
 
 
-## Example code
+### An example ECS
 
 ```nim
 import polymorph
 
-# Define component types.
+# Create some component data types.
 register defaultCompOpts:
   type
     Pos = object
       x, y: int
-    
     Vel = object
       x, y: int
 
-# Define some logic for Pos and Vel.
+# Define some logic for when Pos and Vel are together.
 makeSystem "move", [Pos, Vel]:
   all:
-    item.pos.x += item.vel.x
-    item.pos.y += item.vel.y
+    pos.x += vel.x
+    pos.y += vel.y
 
-# Generate the ECS.
+# Generate the ECS for use.
 makeEcsCommit "runSystems"
 
-# Combine Pos and Vel to use "move".
+# Compose Pos and Vel to trigger "move".
 let
   moving = newEntityWith(
     Pos(x: 0, y: 0),
@@ -133,12 +141,12 @@ let
 for i in 0 ..< 4:
   runSystems()
 
-# Pos has been updated.
+# Confirm the updated Pos value.
 let pos = moving.fetch Pos
 assert pos.x == 4 and pos.y == 4
 ```
 
-## Benefits of ECS
+### Benefits of ECS
 
 - [The principles](https://www.sebaslab.com/the-quest-for-maintainable-code-and-the-path-to-ecs/) of [SOLID](https://en.wikipedia.org/wiki/SOLID)
 - [Inversion of control](https://en.wikipedia.org/wiki/Inversion_of_control)
@@ -150,17 +158,38 @@ assert pos.x == 4 and pos.y == 4
 - High performance through machine friendly batch processing with uniform lists
 - Natively asynchronous
 
-## Polymorph
+### ECS contrasted with Object Oriented Design
 
-This library takes a generative, system oriented approach to ECS.
+Objects in OOD describe `is a` relationships with hierarchies of types.
+Subtyping and encapsulation naturally fit a top down design process, where a general overview of a task is split into sub-tasks.
+The mechanics of execution is often bespoke to each solution.
 
-Systems store execution state and require no work to iterate. Adding or removing components generates code to directly update the compile time inferred systems. ECS functionality is built ad hoc to perform the minimum run time work according to the relationship between systems and components.
+By contrast, entities in ECS describe `has a` relationships with sets of types.
+Mutable composition lends itself more to a bottom up design process, where behaviour is built by composing tasks.
+Systems dispatch over matching entities automatically in a fixed order.
 
-The output is statically dispatched with a sequential flow, optimised to each system/component design.
+For a view of ECS from an OOP perspective, see [here](https://mzaks.medium.com/ecs-for-die-hard-oo-developers-2a10cbc1f5db).
 
-## Compile time focus
 
-When adding and removing components, the static type of the components involved is used to generate optimised code to directly update system lists. These system state changes do the minimum run time work the system/component design allows for.
+## Polymorph: a generative approach to a queryless, system oriented ECS.
+
+Traditionally, ECS implementations orient their data model from the perspective of components (aggregate data) or entities (data compositions).
+
+In order to perform work in these models, a system must query a management layer for live data to process. The efficiency of this process can become a key factor in complex designs.
+
+Polymorph instead orients its data model from the perspective of systems (execution); systems hold component state for matching entities, and are updated when entities add or remove components.
+
+By avoiding the disconnect between execution and state, systems are always available to run without any iteration overhead.
+
+Entity operations are transactional system state changes, and the component types involved infer the systems affected.
+
+This allows entity operations to be entirely generated at compile time, guided by system/component relationships to emit pared down system updates that perform the minimum run time work possible.
+
+The output is statically dispatched with a linear execution flow (no need for callbacks), consisting of simple loops over incrementally updated component data.
+
+### Compile time focus
+
+Polymorph takes extensive advantage of Nim's metaprogramming features to shift as much work to compile time as possible.
 
 Functionality such as building entities from blueprints, cloning entities, and debugging utilities are also fully generated from your types and system design at compile time.
 
@@ -168,18 +197,25 @@ The more that state can be determined at compile time, the less run time work is
 
 Adding and removing multiple components at once is also minimised at compile time, outputting single pass inline operations.
 
-### Characteristics
+### Features
 
-- ***Design driven***: run time work is generated from the component/system design. Tiny designs yield tiny outputs, complex designs only pay for what they use.
-- ***No run time manager***: no query engine, no system iteration overhead. Always up to date systems.
-- ***Low cost to change components***: freely evolve entities with wildly disparate components without moving memory.
-- ***Sequential code flow***: flatten run time composition, declarative code execution, and event hooks into a linear flow without needing callbacks or virtual calls.
+- ***Design driven***: code generation directly from component/system interactions.
+- ***Zero system overhead***: no queries or iteration overhead for systems.
+- ***Cheap to change components***: freely evolve entities with wildly disparate components without moving memory.
+- ***Sequential code flow***: flatten run time composition, declarative code execution, and event hooks into a linear execution flow without needing callbacks or virtual calls.
 - ***Architecturally simple output***: outputs simple loops over lists in a set order. Aims to scale from stack only, low resource environments to cache efficient, high performance data processing.
 - ***Granular code generation options***: select different data structures for each component and system, choose error handling mechanisms, system interval execution, indexing and removal strategies, and more - without changing any code.
-
+- ***Compile time checked***:
+  - Event expansions are parsed for conflicting changes and potential cycles.
+  - Iterating systems detect component removals that affect themselves:
+    - Automatically adjust loop generation.
+    - Subsequent access of the iteration entity is a compile time error.
+- ***Compile time optimised***:
+  - Only 
+  
 ## Polymers companion library
 
-The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-made components and systems for various tasks:
+The [**Polymers**](https://github.com/rlipsc/polymers/) library provides ready-made components and systems as both an effort at a data oriented 'stdlib' and as practical examples:
 
   - `OpenGl`: render instanced models using the [glBits](https://github.com/rlipsc/glbits) shader wrapper.
   - `Physics`: components for interacting with the [Chipmunk2D](https://chipmunk-physics.net/) physics engine.
@@ -201,13 +237,9 @@ Extensibility is a core philosophy, with hygienic macros using the language in a
 
 # Overview of building an ECS
 
-Polymorph uses a gather and seal process to generate the output.
-
-This is a three stage process:
-
-1. ***Design the components and systems*** using `registerComponents`, `defineSystems` and/or `makeSystem`.
-2. ***Seal the design*** and generate the ECS interface with `makeEcs`.
-3. ***Output the program logic*** for systems with `commitSystems`.
+1. **Create component types** with `register`/`registerComponents`
+2. **Create system code** to process components with `defineSystems`/`makeSystem`.
+3. ***Generate the code*** with `makeEcs`/`makeEcsCommit`.
 
 For example:
 
@@ -215,29 +247,21 @@ For example:
 import polymorph
 
 # Design stage.
+register defaultCompOpts:
+  type MyComponent = object
+makeSystem "mySystem", [MyComponent]: discard
 
-registerComponents defaultCompOpts:
-  type
-    MyComponent = object
+# Seal the design and generate the ECS and system code.
+makeEcsCommit "runSystems"
 
-makeSystem "mySystem", [MyComponent]:
-  all:
-    echo "MyComponent: ", item.myComponent
-
-# Seal the design and generate the ECS.
-
-makeEcs()
-
-# Output the system code.
-commitSystems "runSystems"
-
-# Run the committed systems in the order they're defined.
+# ECS can now be used.
+let e = newEntityWith(MyComponent())
 runSystems()
 ```
 
-## After `makeEcs`
+## After `makeEcs`/`makeEcsCommit`
 
-Once all the components and systems have been defined, the `makeEcs` macro generates the core entity operations, allowing you to use the design:
+Once all the components and systems have been defined, the `makeEcs` macro generates the ECS:
 
   - Macros:
     - `newEntityWith`: create an entity with a set of components.
@@ -249,6 +273,8 @@ Once all the components and systems have been defined, the `makeEcs` macro gener
     - `delete`: delete the entity.
     - `construct`: build an entity from a list of components.
     - `clone`: copy an entity.
+  - Systems:
+    - By default, system types are created and instantiated.
   - Templates:
     - `caseComponent`: a `case` statement for run time component type ids.
     - `caseSystem`: a `case` statement for run time system ids.
@@ -298,6 +324,20 @@ registerComponents defaultCompOpts:
     Data = object
       value: SubData
 ```
+
+In general, it's recommended to use `object` types for components for convenience.
+For non-object types, for example `type MyComponent = float`, use `access` to read and `update` to write the value.
+
+You can also pass existing types to register them as components:
+
+```nim
+type
+  ExternalType = object
+
+register defaultCompOpts:
+  ExternalType
+```
+
 
 ## `registerComponents` generated types
 
@@ -404,7 +444,17 @@ type
     a: AInstance
 ```
 
-> ***Note***: **instances don't store generation information**. Use `ComponentRef` to include generation checking.
+### Instance volatility
+
+Component instances **don't store generation information**, and should be considered:
+  - **current** within system storages and when directly fetched from entities.
+  - **volatile** when stored in components or other data structures.
+
+Whilst you can check if a stored instance is `valid` or `alive`, potentially the storage it refers to could have been deleted and recreated for another entity.
+
+When storing instances it's up to the user to make sure things make sense, but this is usually easy thanks to the general semantics of how components relate to entities in an ECS and the event system.
+
+For more longer term references, passing a component instance to `toRef` returns a `ComponentRef` and captures the generation for the instance. This can be used to detect if a reference to a particular value no longer exists.
 
 ## Component utilities
 
@@ -414,7 +464,7 @@ type
 
 ### Matching run time `ComponentTypeId`
 
-The `caseComponent` template creates a case statement to handle all components from a run time `ComponentTypeId`. This template includes templates to allow generic code to perform type specific actions with dynamic component types such as in `ComponentList`.
+The `caseComponent` template creates a case statement to handle all components from a run time `ComponentTypeId`. Within a `caseComponent` block the details of a component's type can be accessed with various templates. This allows code to perform type specific actions with dynamic component types such as in `ComponentList`.
 
 Note:
 
@@ -463,7 +513,7 @@ For systems to participate in an ECS, they must first be defined with `defineSys
 
 After a system is defined, it needs program logic assigned to it in order to perform work. Such logic is referred to as a system *body*.
 
-System bodies can only be defined once per system.
+A system can only have one body, and this contains all the code the system needs to perform.
 
 When `defineSystem` is used, you can declare the body of a system later with `makeSystemBody`. This allows you to keep the code for a system separate from its definition.
 
@@ -484,293 +534,41 @@ registerComponents defaultCompOpts:
 # Define a system.
 defineSystem "mySystem1", [Comp1]
 
-# Access the instantiated system.
-assert sysMySystem1.count == 0
-
 # Define a system and pass compile options to it.
 defineSystem "mySystem2", [Comp1, Comp2], defaultSysOpts
 
 # Define a system and code body at the same time.
 makeSystem "mySystem3", [Comp1, Comp2]:
-  all:
-    echo "Comp1: ", item.comp1
+  echo "Hello from system ", sys.name
 
 # Once the ECS is sealed, new systems can't be defined using these components.
+# By default, system types are created and instantiated here.
 makeEcs()
+
+# Access the instantiated system.
+assert sysMySystem1.count == 0
 
 # Define a code body for a previously defined system.
 makeSystemBody "mySystem1":
-  all:
-    echo "Comp1: ", item.comp1
+  echo "Hello from system ", sys.name
 
 # Define a code body for a previously defined system with makeSystem.
 # Options are retrieved from the system's defineSystem.
 makeSystem "mySystem2", [Comp1, Comp2]:
-  all:
-    echo "Comp1: ", item.comp1
+  echo "Hello from system ", sys.name
+
+# Output systems with bodies defined so far.
+commitSystems "runSystems"
+
+runSystems()
+```
+Outputs:
+```
+Hello from system mySystem1
+Hello from system mySystem2
+Hello from system mySystem3
 ```
 
-## System component negation
-
-Systems can also be defined to only match when components are not present:
-
-```nim
-makeSystem "notB", [A, not B]:
-  discard
-```
-
-## Systems without components
-
-Systems can be defined without components in order to run code within the system workflow:
-
-```nim
-makeSystem "noComponents":
-  echo "Runs within the expect system order"
-```
-
-These systems cannot use `all` or `stream` blocks, since they don't store components to process.
-
-## Committing systems
-
-Once committed, each system is output as a procedure named after the system, prefixed with "`do`".
-
-Separating `makeEcs` and `commitSystems` allows for more design flexibility, for example:
-  - to write code that uses the sealed ECS (after `makeEcs`) and is also used within system code,
-  - to allow the sealed ECS and system code as separate imports,
-  - to split systems into separate wrapper procs.
-
-> Note: systems bind at the site they're output, *not* where the body is defined with `makeSystem`. As such, external routines or variables used by systems need to be accessible at the commit site.
-
-```nim
-# CommitSystems uses the string parameter to create a wrapper proc that
-# runs the systems it outputs in order.
-commitSystems "runMySystems"
-
-# Run systems output by `commitSystems` above.
-runMySystems()
-
-# You can run systems individually using their `do` proc.
-doMySystem()
-```
-
-## System execution order
-
-The order systems are run is key in determining how your ECS operates.
-
-Systems are added to the output of `commitSystems` in the order `defineSystem` is encountered.
-
-When no matching `defineSystem` is present, `makeSystem` will invoke `defineSystem` for you, setting the order as it's encountered in the source code.
-
-```nim
-import polymorph
-
-var executionOrder: seq[string]
-
-registerComponents defaultCompOpts:
-  type Foo = object
-
-# The order systems are defined sets the order they're run when output
-# by `commitSystems`.
-defineSystem "a", [Foo], EcsSysOptions(maxEntities: 1)
-defineSystem "b", [Foo]
-
-# Define the system "c" and also add a code body.
-makeSystem "c", [Foo]:
-  executionOrder.add sys.name
-
-# Seal and generate the ECS.
-makeEcs()
-
-# Define the code body for "a".
-makeSystemBody "a":
-  executionOrder.add sys.name
-
-# Both "c" and "a" have bodies waiting to be committed, but "b" doesn't
-# have a code body yet and so is not included in the output of `commitSystems`.
-#
-# As systems are run in the order they're defined, the output proc will
-# run "a" then "c".
-commitSystems "runAC"
-
-# Define the body for "b". This will be included in the next `commitSystems`.
-makeSystemBody "b":
-  executionOrder.add sys.name
-
-# Only "b" has an uncommitted code body so the output will just run "b".
-commitSystems "runB"
-
-# Execute the two run procs.
-runAC()
-runB()
-
-# Check the order of execution is as expected.
-assert executionOrder == @["a", "c", "b"]
-```
-
-## Running systems at time intervals
-
-The `timings` field in `EcsSysOptions` lets you control the type of timing code the system uses:
-
-- `stNone`: the default is to not insert timing code.
-
-- `stRunEvery`: insert code to allow the system to run at intervals.
-
-  Inserts the following fields into the system:
-  - `lastTick`: keeps track of the last time a system was executed.
-  - `runEvery`: when this field is non-zero, the system will only trigger after this many seconds.
-    A value of zero runs the system without delay as if it were defined with `stNone`.
-
-- `stProfiling`: implies `stRunEvery` and adds fields for measuring system performance.
-  
-  The following procedures access per run timings:
-
-  - `timePerRun`: time taken for the last system run.
-  - `timePerItem`: the `timePerRun` divided by the number of items in the system.
-
-  Min/max timing procedures return accumulated times over multiple system runs:
-  
-  - `minTimePerItem`: the minimum time recorded for a single item so far.
-  - `maxTimePerItem`: the maximum time recorded for a single item so far.
-  - `minTimePerRun`: the minimum time recorded for a system run so far.
-  - `maxTimePerRun`: the maximum time recorded for a system run so far.
-  
-  These timings can be manually reset with the `resetMinMax` procedure.
- 
-
-
-```nim
-import polymorph, os, times
-
-registerComponents defaultCompOpts:
-  type Foo = object
-    seen: int
-
-makeSystemOpts "runEvery", [Foo], EcsSysOptions(timings: stRunEvery):
-  all: item.foo.seen += 1
-
-makeSystemOpts "sleepy", [Foo], EcsSysOptions(timings: stProfiling):
-  all: sleep(10)
-
-makeEcs()
-commitSystems "run"
-
-sysRunEvery.runEvery = 0.1
-
-let entity = newEntityWith(Foo())
-
-for i in 0 ..< 200:
-  run()
-
-echo "Last: ", sysSleepy.timePerRun
-echo " Min: ", sysSleepy.minTimePerRun
-echo " Max: ", sysSleepy.maxTimePerRun
-
-let
-  start = cpuTime()
-
-while cpuTime() - start < 1.0:
-  run()
-
-echo "Seen: ", entity.fetch Foo
-```
-
-Output (timings will vary as `sleep` works with OS time slices):
-
-```
-Last: 0.016
- Min: 0.015
- Max: 0.025
-Seen: (seen: 37)
-```
-
-## Adding fields to systems
-
-Passing field definitions to `defineSystem` will add them to the system variable declaration.
-
-```nim
-const sysOpts = EcsSysOptions()
-
-defineSystem "mySystem", [Comp1], sysOpts:
-  myFieldStr: string
-
-sysMySystem.myFieldStr = "Foo"
-
-makeSystemBody "mySystem":
-  echo "myFieldStr = ", sys.myFieldStr
-```
-
-These fields can also be initialised at system creation.
-
-```nim
-defineSystem "mySystem", [Comp1], sysOpts:
-  myFieldStr = "Foo"
-```
-
-When the type cannot be inferred but needs to be initialised, you can explicitly define it.
-
-Since `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
-
-```nim
-defineSystem "mySystem", [Comp1], sysOpts:
-  myFieldStr -> string = "Foo"
-```
-
-Fields can also be added when defining a system and its body with `makeSystem` by using the `fields` block. If the system has already been defined these fields are checked to match the definition.
-
-```nim
-makeSystem "mySystem", [Comp1]:
-  fields:
-    myFieldInt: int
-  echo "This system has a custom field: ", sys.myFieldInt
-```
-
-## Grouping systems
-
-Systems can be extracted into separate procedures using `defineGroup`. Grouping can be useful to separate the concerns of multiple systems to particular procedures.
-
-Systems can be part of *multiple* groups at the same time.
-
-When a system is grouped, it will not be output by `commitSystem` and must be manually output using `commitGroup`.
-
-Grouping can be performed explicitly by passing a list of systems to `defineGroup`, or ad hoc by using `defineGroup` without specifying systems. In the latter case, any systems that have been defined but *not already grouped or committed* are added to the group.
-
-It's a compile time error to try to perform `commitGroup` for systems that don't have bodies.
-
-Grouping can occur before or after `makeEcs`.
-
-Group names are case insensitive.
-
-```nim
-import polymorph
-
-registerComponents defaultCompOpts:
-  type Comp1 = object
-
-makeSystem "g1a", [Comp1]: discard
-makeSystem "g1b", [Comp1]: discard
-
-# Gather previously defined systems into a group.
-defineGroup "group1"
-
-makeSystem "g2a", [Comp1]: discard
-makeSystem "g2b", [Comp1]: discard
-
-# Add specific systems to a group.
-defineGroup "group2", ["g2a", "g2b"]
-
-makeSystem "ungrouped", [Comp1]: discard
-
-makeEcs()
-
-commitGroup "group1", "runGroup1"
-commitGroup "group2", "runGroup2"
-# Commit the remaining "ungrouped" system.
-commitSystems "runUngrouped"
-
-runGroup1()
-runGroup2()
-runUngrouped()
-```
 
 ## System anatomy
 
@@ -885,6 +683,352 @@ System completed.
 Finish: finished execution for allTheBlocks
 ```
 
+### Accessing items
+
+When iterating through a system, such as with an `all` or `stream` block, the current row is accessed with the `item` template.
+
+This template contains the current `entity`, as well as fields for all the components the system uses.
+
+Other components need to be fetched from the entity.
+
+Access to `item` is checked at compile time for 'use after free' - for example when a system [removes rows while iterating](#removing-components-during-all-or-stream-blocks).
+
+The injected variable `entity` contains the entity that the row started with.
+This is the same as `item.entity`, but is still valid if the system removes its own rows during iteration.
+
+
+```nim
+makeSystem "displayItem", [Comp1]:
+  all:
+    echo "Current entity: ", item.entity
+    echo "Comp1: ", item.comp1
+    assert entity == item.entity
+    echo entity.fetch(SomeOtherComponent)
+```
+
+#### Access templates and renaming components
+
+Lots of `item` ends up becoming boilerplate.
+
+For easier reading, a set of templates is created for each component that does the equivalent to `item.component`:
+
+```nim
+makeSystem "displayItem2", [Comp1]:
+  all:
+    echo "Comp1: ", comp1 # Equivalent to item.comp1.
+```
+
+These can be renamed using colons in the component requirements.
+
+Note that this only renames the access template, not the component itself, nor it's field in the current `item`.
+
+```nim
+makeSystem "displayItem2", [c1: Comp1]:
+  all:
+    echo "Comp1: ", c1 # Equivalent to item.comp1.
+```
+
+## System component negation
+
+Systems can also be defined to only match when components are not present:
+
+```nim
+makeSystem "notB", [A, not B]:
+  discard
+```
+
+## Systems without components
+
+Systems can be defined without components in order to run code within the system workflow:
+
+```nim
+makeSystem "noComponents":
+  echo "Runs within the expect system order"
+```
+
+These systems cannot use `all` or `stream` blocks, since they don't store components to process.
+
+## Committing systems
+
+Once committed, each system is output as a procedure named after the system, prefixed with "`do`".
+
+Separating `makeEcs` and `commitSystems` allows for more design flexibility, for example:
+  - to write code that uses the sealed ECS (after `makeEcs`) and is also used within system code,
+  - to allow the sealed ECS and system code as separate imports,
+  - to split systems into separate wrapper procs.
+
+Systems bind at the site they're output, *not* where the body is defined with `makeSystem`.
+
+By default, systems types and instances are emitted by `makeEcs`, and `commitSystems` emits the system procedure.
+
+As such, external routines or variables used by systems need to be accessible at the commit site.
+
+```nim
+# CommitSystems uses the string parameter to create a wrapper proc that
+# runs the systems it outputs in order.
+commitSystems "runMySystems"
+
+# Run systems output by `commitSystems` above.
+runMySystems()
+
+# You can run systems individually using their `do` proc.
+doMySystem()
+```
+
+## `ecsImport`
+
+In this example, `foo` is only visible in `moduleA`, but the "useImported" system is actually output in `moduleB`:
+
+```nim
+# Module A
+from localModule import foo
+makeSystem "useImported": echo foo  # Can't find 'foo'!
+
+# Module B
+import moduleA
+makeEcs()
+commitSystems()  # <- "useImported" is emitted here, where 'foo' is not imported.
+```
+
+To help with this kind of deferred output, `ecsImport` and `ecsImportFrom` allow deferring imports to `makeEcs`.
+Similarly, `ecsImportCommit`/`ecsImportCommitFrom` allows deferring imports to just before the system procedure is emitted.
+
+This offers two advantages.
+
+Firstly it lets you write `ecsImport` alongside your system definitions, and have them emitted where the code is placed.
+
+Secondly, imports are tried relative to the call site path first, and passed through unchanged if that doesn't compile.
+This lets you spread system declarations and support modules into different directory structures and write the imports as if they were run at the call site.
+
+```nim
+# Module A
+ecsImportFrom localModule, foo
+makeSystem "useImported": echo foo  # 'foo' is found!
+
+# Module B
+import moduleA
+makeEcs()       # <- 'from localModule import foo' emitted here.
+commitSystems() # <- "useImported" can now see 'foo'.
+```
+
+## System execution order
+
+The order systems are run defines how your ECS operates.
+
+By default, systems are emitted by `commitSystems` in the order they're defined by `defineSystem`.
+
+When no matching `defineSystem` is present, `makeSystem` will invoke `defineSystem` for you.
+
+```nim
+import polymorph
+
+var executionOrder: seq[string]
+
+registerComponents defaultCompOpts:
+  type Foo = object
+
+# The order systems are defined sets the order they're run when output
+# by `commitSystems`.
+defineSystem "a", [Foo], EcsSysOptions(maxEntities: 1)
+defineSystem "b", [Foo]
+
+# Define the system "c" and also add a code body.
+makeSystem "c", [Foo]:
+  executionOrder.add sys.name
+
+# Seal and generate the ECS.
+makeEcs()
+
+# Define the code body for "a".
+makeSystemBody "a":
+  executionOrder.add sys.name
+
+# Both "c" and "a" have bodies waiting to be committed, but "b" doesn't
+# have a code body yet and so is not included in the output of `commitSystems`.
+#
+# As systems are run in the order they're defined, the output proc will
+# run "a" then "c".
+commitSystems "runAC"
+
+# Define the body for "b". This will be included in the next `commitSystems`.
+makeSystemBody "b":
+  executionOrder.add sys.name
+
+# Only "b" has an uncommitted code body so the output will just run "b".
+commitSystems "runB"
+
+# Execute the two run procs.
+runAC()
+runB()
+
+# Check the order of execution is as expected.
+assert executionOrder == @["a", "c", "b"]
+```
+
+## Running systems at time intervals
+
+The `timings` field in `EcsSysOptions` lets you control the type of timing code the system uses:
+
+- `stNone`: the default is to not insert timing code.
+
+- `stRunEvery`: insert code to allow the system to run at intervals.
+
+  Inserts the following fields into the system:
+  - `lastTick`: keeps track of the last time a system was executed.
+  - `runEvery`: when this field is non-zero, the system will only trigger after this many seconds.
+    A value of zero runs the system without delay as if it were defined with `stNone`.
+
+- `stProfiling`: implies `stRunEvery` and adds fields for measuring system performance.
+  
+  The following procedures access per run timings:
+
+  - `timePerRun`: time taken for the last system run.
+  - `timePerItem`: the `timePerRun` divided by the number of items in the system.
+
+  Min/max timing procedures return accumulated times over multiple system runs:
+  
+  - `minTimePerItem`: the minimum time recorded for a single item so far.
+  - `maxTimePerItem`: the maximum time recorded for a single item so far.
+  - `minTimePerRun`: the minimum time recorded for a system run so far.
+  - `maxTimePerRun`: the maximum time recorded for a system run so far.
+  
+  These timings can be manually reset with the `resetMinMax` procedure.
+ 
+
+```nim
+import polymorph, os, times
+
+registerComponents defaultCompOpts:
+  type Foo = object
+    seen: int
+
+makeSystemOpts "runEvery", [Foo], EcsSysOptions(timings: stRunEvery):
+  all: foo.seen += 1
+
+makeSystemOpts "sleepy", [Foo], EcsSysOptions(timings: stProfiling):
+  all: sleep(10)
+
+makeEcs()
+commitSystems "run"
+
+sysRunEvery.runEvery = 0.1
+
+let entity = newEntityWith(Foo())
+
+for i in 0 ..< 200:
+  run()
+
+echo "Last: ", sysSleepy.timePerRun
+echo " Min: ", sysSleepy.minTimePerRun
+echo " Max: ", sysSleepy.maxTimePerRun
+
+let
+  start = cpuTime()
+
+while cpuTime() - start < 1.0:
+  run()
+
+echo "Seen: ", entity.fetch Foo
+```
+
+Output (timings will vary as `sleep` works with OS time slices):
+
+```
+Last: 0.016
+ Min: 0.015
+ Max: 0.025
+Seen: (seen: 37)
+```
+
+## Adding custom fields to systems
+
+Passing field definitions to `defineSystem` will add them to the system variable declaration.
+
+```nim
+const sysOpts = EcsSysOptions()
+
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr: string
+
+sysMySystem.myFieldStr = "Foo"
+
+makeSystemBody "mySystem":
+  echo "myFieldStr = ", sys.myFieldStr
+```
+
+These fields can also be initialised at system creation.
+
+```nim
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr = "Foo"
+```
+
+When the type cannot be inferred but needs to be initialised, you can explicitly define it.
+
+Since `name: type = value` isn't valid syntax in this context, the type is defined with `->`.
+
+```nim
+defineSystem "mySystem", [Comp1], sysOpts:
+  myFieldStr -> string = "Foo"
+```
+
+Fields can also be added when defining a system and its body with `makeSystem` by using the `fields` block. If the system has already been defined these fields are checked to match the definition.
+
+```nim
+makeSystem "mySystem", [Comp1]:
+  fields:
+    myFieldInt: int
+  echo "This system has a custom field: ", sys.myFieldInt
+```
+
+## Grouping systems
+
+Systems can be extracted into separate procedures using `defineGroup`. Grouping can be useful to separate the concerns of multiple systems to particular procedures.
+
+Systems can be part of *multiple* groups at the same time.
+
+When a system is grouped, it will not be output by `commitSystem` and must be manually output using `commitGroup`.
+
+Grouping can be performed explicitly by passing a list of systems to `defineGroup`, or ad hoc by using `defineGroup` without specifying systems. In the latter case, any systems that have been defined but *not already grouped or committed* are added to the group.
+
+It's a compile time error to try to perform `commitGroup` for systems that don't have bodies.
+
+Grouping can occur before or after `makeEcs`.
+
+Group names are case insensitive.
+
+```nim
+import polymorph
+
+registerComponents defaultCompOpts:
+  type Comp1 = object
+
+makeSystem "g1a", [Comp1]: discard
+makeSystem "g1b", [Comp1]: discard
+
+# Gather previously defined systems into a group.
+defineGroup "group1"
+
+makeSystem "g2a", [Comp1]: discard
+makeSystem "g2b", [Comp1]: discard
+
+# Add specific systems to a group.
+defineGroup "group2", ["g2a", "g2b"]
+
+makeSystem "ungrouped", [Comp1]: discard
+
+makeEcs()
+
+commitGroup "group1", "runGroup1"
+commitGroup "group2", "runGroup2"
+# Commit the remaining "ungrouped" system.
+commitSystems "runUngrouped"
+
+runGroup1()
+runGroup2()
+runUngrouped()
+```
+
 ### Execution control
 
 Systems can be paused by setting the system `paused` field to `true`.
@@ -945,8 +1089,8 @@ To help with these cases without needing run time or compile time checks, the `e
       # Removing a component used by the system will remove
       # the row and invalidates `item`.
       entity.remove SomeComponent
-      # We can still change the original entity even though
-      # `item.entity` may now be different.
+      # Accessing `item` here is a compile error as the row no longer exists.
+      # We can, however, still access the original `entity`.
       entity.add SomeOtherComponent
   ```
 
@@ -1310,15 +1454,15 @@ These events are invoked when system rows are added or removed, and can use the 
 
 ## Mutating entities within events
 
-Events are allowed to add or remove components from their host/calling entity, as long as they don't invalidate other registered events.
+Events are allowed to add or remove components from their host/calling entity, as long as they don't invalidate other events within a state change.
 
-In other words, event execution is **immutable**: once a state change occurs, such as adding a component, all the events associated with that state change *must* be allowed to execute.
+In other words, event execution is **immutable**: once a state change occurs, such as adding or removing components, all the events associated with that state change *must* be allowed to execute.
 
-As long as this condition is respected, events are allowed to freely mutate entities.
+As long as this condition is respected, events are allowed to freely embed further state changes to the entity.
 
-This means, for example, events are free to remove the component being added within an `onAdd` event, as long as, say, an `onAddCallback` event isn't registered for the same component.
+This means, for example, events are free to remove the component being added within an `onAdd` event, as long as there aren't subsequent add events for this component scheduled to execute.
 
-Polymorph guards against these conflict conditions at compile time:
+The compile time expansion of events checks for the following conflicts:
 
 1. Removing components that invalidate a future event from the same state change (as above).
 2. Event cycles, even if called indirectly through other events.
@@ -1500,7 +1644,7 @@ template defineSay*(compOpts: EcsCompOptions, sysOpts: EcsSysOptions) {.dirty.} 
       text*: string
 
   makeSystemOpts "sayer", [Say], sysOpts:
-    all: echo item.say.text
+    all: echo sayOnTick.say.text
     finish: sys.remove Say
 ```
 
@@ -1525,10 +1669,9 @@ registerComponents compOpts:
 
 makeSystemOpts "sayTicks", [SayOnTick], sysOpts:
   all:
-    let sot = item.sayOnTick
-    if sot.current mod sot.ticks == 0:
-      entity.add Say(text: $sot.current)
-    sot.current += 1
+    if sayOnTick.current mod sayOnTick.ticks == 0:
+      entity.add Say(text: $sayOnTick.current)
+    sayOnTick.current += 1
 
 # Seal and generate.
 
