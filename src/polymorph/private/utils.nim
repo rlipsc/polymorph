@@ -1167,7 +1167,7 @@ proc findType*(compNode: NimNode): string =
       if compNode[0].kind == nnkDotExpr:
         compNode[0][1].strVal
       else:
-        compNode[0].strVal
+        compNode[0].repr
 
     of nnkSym:
       compNode.getTypeStr
