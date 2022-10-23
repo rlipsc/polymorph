@@ -6,7 +6,7 @@ var someData*: int
 
 registerComponents defaultCompOpts:
   type Comp1* = object
-    value: int
+    value*: int
 
 makeSystem "test1", [Comp1]:
   all: item.comp1.value += 1
