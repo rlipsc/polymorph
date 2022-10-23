@@ -23,7 +23,7 @@
     - [System scope blocks](#system-scope-blocks)
     - [Work item blocks](#work-item-blocks)
     - [Accessing items](#accessing-items)
-      - [Access templates and renaming components](#access-templates-and-renaming-components)
+      - [Access templates and aliasing](#access-templates-and-aliasing)
   - [System component negation](#system-component-negation)
   - [Systems without components](#systems-without-components)
   - [Committing systems](#committing-systems)
@@ -706,7 +706,7 @@ makeSystem "displayItem", [Comp1]:
     echo entity.fetch(SomeOtherComponent)
 ```
 
-#### Access templates and renaming components
+#### Access templates and aliasing
 
 Lots of `item` ends up becoming boilerplate.
 
@@ -718,7 +718,7 @@ makeSystem "displayItem2", [Comp1]:
     echo "Comp1: ", comp1 # Equivalent to item.comp1.
 ```
 
-These can be renamed using colons in the component requirements.
+These can be aliased using colons in the system's component requirements.
 
 Note that this only renames the access template, not the component itself, nor it's field in the current `item`.
 
@@ -727,6 +727,36 @@ makeSystem "displayItem2", [c1: Comp1]:
   all:
     echo "Comp1: ", c1 # Equivalent to item.comp1.
 ```
+
+Aliasing is also useful for component libraries that combine with externally created components:
+
+```nim
+template systemUsingComp(userComponent: typedesc) {.dirty.} =
+  makeSystem "use" & $userComponent, [uc: userComponent]:
+    echo sys.name
+    all:
+      # 'userComponent' is a type.
+      # To access it in the current row we have to know the ident in
+      # lower case.
+      
+      # We could do this:
+      echo userComponent.access
+      
+      # Aliasing makes things more clear:
+      echo uc
+
+register defaultCompOpts:
+  type
+    MyComp1 = object
+      data: int
+    MyComp2 = object
+      data: int
+
+# Create systems for MyComp1 and MyComp2.
+systemUsingComp(MyComp1)
+systemUsingComp(MyComp2)
+```
+
 
 ## System component negation
 
