@@ -1,3 +1,5 @@
+## Demonstrate basic entity mutation.
+
 import polymorph
 
 registerComponents(defaultCompOpts):
@@ -6,8 +8,6 @@ registerComponents(defaultCompOpts):
       value*: int
     Comp2* = object
       value*: string
-    Comp3* = object
-      value*: float
 
 makeSystem "mySystem", [Comp1, Comp2]:
   all: discard

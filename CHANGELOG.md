@@ -1,5 +1,202 @@
 # Changelog
 
+## v0.3.1 2022-10-22
+
+### Overview
+
+This release focuses on features for organisation and ease of use.
+
+Perhaps the biggest change is that system types and initialisation now
+defaults to being output by `makeEcs`, rather than immediately in the
+module they're defined.
+
+As a result, ECS code output is localised to a single module.
+
+This leads to several improvements for larger projects where components,
+systems, and sealing could be in separate modules:
+
+- A single import to use the sealed ECS (the module with `makeEcs`).
+- Easier scope management for supporting imports.
+- No need to forward system types from where they're defined.
+
+In particular, systems which use `fields:` blocks to initialise values
+are now in the same scope as the ECS output, which is much more
+intuitive. Previously, these initialisation were output in the module
+that created the system definition (with `defineSystem`/`makeSystem`),
+which might not be the same module the system execution procedures were
+output (from `makeEcsCommit`/`commitSystems`), leading to both modules
+needing their support imports and increasing module dependence
+complexity.
+
+To further help with this, `ecsImport` has been added. This instructs
+`makeEcs` to output `import` statements relative to the `ecsImport` call
+site, letting you organise system code and support modules together
+without worrying about where `makeEcs` is run.
+
+There's also a lot of quality of life improvements, including aliasing
+components in systems, being able to register previously defined
+types as components, and better parsing of system bodies.
+
+### Changed
+
+- System registration and generation has been separated.
+  
+  Systems types and instantiation are now deferred to `makeSystem` by
+  default.
+  
+  This means systems always know the full ECS when generated, which can
+  be important if systems defined later claim ownership to components.
+  
+  Another advantage is easier use of imports, since systems are output
+  in one place.
+
+
+### Breaking changes
+
+- The new default is to defer system types and instantiation to `makeEcs`.
+- The previous behaviour of outputting systems when first defined can
+  be obtained by setting `EcsSysOptions.commit` to `sdcInPlace`.
+
+
+### Added
+
+- `access` now works with the component type in systems and events so
+  you can write `ComponentType.access`.
+- Component access/aliasing templates let you omit `item` when accessing
+  components in systems and events:
+  
+  ```nim
+  makeSystem "noItem", [MyComponent]:
+    all:
+      echo myComponent # Equivalent to 'item.myComponent'.
+  ```
+
+  You can rename these components using a colon in the system's
+  requirements:
+
+  ```nim
+  makeSystem "noItem", [mc: MyComponent]:
+    all:
+      echo mc # Equivalent to 'item.myComponent'.
+  ```
+
+  Aside from increasing readability, this can be useful for component
+  libraries that use externally defined components:
+
+  ```nim
+  template systemUsingComp*(userComponent: typedesc) {.dirty.} =
+    makeSystem "useExternalComp", [uc: userComponent]:
+      all:
+        # As 'userComponent' is a type, to access its field in the
+        # system's 'item' we'd have to either know the field name
+        # already, or create a macro to generate the appropriate ident.
+        
+        # Now, we can just use the alias:
+        echo uc
+  ```
+
+  You can control whether access templates are output per system with
+  `EcsSysOptions.itemTemplates`.
+
+- Previously defined types can now be used as components:
+  ```nim
+  type MyType = object
+  register defaultCompOpts:
+    MyType
+  ```
+- Included an `addComponents` that operates on a whole system.
+- `defineToGroup` lets you wrap system definitions to a group.
+- `ecsImport` and `ecsImportFrom` replays imports in `makeEcs` using the
+  call site as a path prefix. If this doesn't compile, the import is
+  passed through verbatim.
+  
+  This allows systems deferred to `makeEcs` to naturally access other
+  modules in a relative context, despite not being instantiated there.
+
+  ```nim
+  # subdir/module_1
+  var foo*: int
+  ```
+  
+  ```nim
+  # subdir/module_2
+  register defaultCompOpts:
+    type Bar* = object
+      value*: int
+
+  # Record import relative to our current path
+  # to be output later by 'makeEcs'.
+  ecsImport module_1
+
+  # This system uses our 'bar' variable from subdir/module_1.
+  makeSystem "bar", [Bar]:
+    all: echo foo + bar.value
+  ```
+
+  ```nim
+  # module_3.nim
+  import module_2
+  # makeEcs now outputs 'import subdir/module_1'.
+  makeEcsCommit "run"
+  ```
+- System option for exporting fields by default.
+- `onEcsCommitAll`, `onEcsCommitGroups`, and `onEcsNextCommit`
+  events that are triggered on system commit.
+- `toTemplate` lets you produce templates of live entities for use with
+  `construct`.
+- A string operator for `seq[ComponentTypeId]`.
+- More examples.
+
+### Fixed
+
+- Off-by-one in `componentCount`.
+- Component template options weren't stored.
+- Inclusion test for multiple negated components.
+- Check for assertions instead of 'defined(debug)'.
+- Wrap 'addComponent' in a block for private ECS.
+- Logging now properly handles identity.
+- Removal of export markers for private scoped ECS now properly copies
+  or passes through nodes instead of modifying in-place.
+- System block parsing no longer skips recursion for call/command nodes
+  that don't match iteration blocks. Iteration blocks are now correctly
+  processed when not at the system body root.
+
+### Improved
+
+- README documentation.
+- Restructured existing examples and added more comments.
+- Moved component removal to after events.
+- Better entity to string output.
+- Included {.line.} for 'item' templates for better line capture when
+  debugging.
+- The expression is now displayed when components can't be parsed.
+- Better event spectrum coverage tests.
+- Handle non-idents in stream command parsing.
+- More line info logging for remove and delete.
+- Update message for unsafe item access.
+- Don't export ecsstatedb and pollute your namespace.
+- Line info is now included for system definitions when logging.
+- Handle nnkConv for findType.
+- `ecsstatedb` is now pregenerated and doesn't need to be rebuilt each
+  compilation.
+- Drop call site path from import uniqueness check.
+- Mark 'curGroup' template as used.
+- Use the base type for metadata lists.
+- Use static analysis for unnested events.
+- 'deExport' now handles 'when', better unused hints.
+- Remove typetraits dependency.
+- No seqs with 'cisArray' and no storage when owned.
+- Remove imports and check within template.
+- When parsing systems the nodes are now checked recursively, allowing
+  things like `all` blocks to be placed within other blocks.
+- Improve event error messages.
+- Add imports for `os`, `times` and `cpuinfo` only when used.
+- Allow the `instanceType` template within `registerComponents` for
+  easier creation of instance fields from component types.
+- `construct` can now be passed a count when building multiple entities
+  from a `ConstructionTemplate`.
+
+
 ## v0.3.0 2022-2-5
 
 

@@ -5,8 +5,8 @@ import polymorph
 var someData*: int
 
 registerComponents defaultCompOpts:
-  type Comp2 = object
-    value: int
+  type Comp2* = object
+    value*: int
 
 makeSystem "test2", [Comp2]:
   all: item.comp2.value += 2

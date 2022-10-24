@@ -803,13 +803,15 @@ proc systemItemCore*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, ite
     itemCore.add(
       quote do:
         if `itemIdx` notin 0 .. `sys`.high:
-          assert false,
-            "'item' in " & `sys`.name & " is out of bounds. " &
-            "Use of 'item' after remove/delete affected this system?"
+          {.line.}:
+            assert false,
+              "'item' in \"" & `sys`.name & "\" is out of bounds. " &
+              "Use of 'item' after remove/delete affected this system?"
         elif `sys`.groups[`itemIdx`].entity != `rowEntity`:
-          assert false,
-            "'item' in " & `sys`.name & " is being used after a " &
-            "remove or delete affected this system"
+          {.line.}:
+            assert false,
+              "'item' in \"" & `sys`.name & "\" is being used after a " &
+              "remove or delete affected this system"
     )
 
   itemCore.add(quote do:
@@ -1127,13 +1129,15 @@ proc commaSeparate*(id: EcsIdentity, list: ComponentIterable or SystemIterable):
   for s in id.commaSeparate(list):
     result &= s
 
-iterator typeDefs*(body: NimNode): NimNode =
-  ## Return the nnkTypeDef nodes in a body.
-  for item in body:
+iterator typeDefs*(body: NimNode): (int, NimNode) =
+  ## Return the nnkTypeDef and nnkIdent nodes in a body.
+  for i, item in body:
+    if item.kind == nnkIdent:
+      yield (i, item)
     if item.kind == nnkTypeSection:
       for def in item:
         if def.kind == nnkTypeDef:
-          yield def
+          yield (i, def)
 
 proc getTypeStr(compNode: NimNode): string =
   ## Extract the type of a symbol.

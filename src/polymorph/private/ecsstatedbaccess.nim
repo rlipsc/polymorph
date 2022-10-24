@@ -319,43 +319,6 @@ proc dependentComps*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): se
       i.inc
 
 {.push, hint[ConvFromXtoItselfNotNeeded]: on.}
-{.push, hint[ConvFromXtoItselfNotNeeded]: off.}
-proc componentDefinitionsNode*(id: EcsIdentity;
-                               componentTypeIdValue: ComponentTypeId): NimNode {.
-    compileTime.} =
-  result = newStmtList()
-  let keyVal = CacheSeq(id.string & "ComponentDefinitionsNimNode" &
-      $uint16(componentTypeIdValue))
-  for event in keyVal.items:
-    result.add(event)
-
-proc lenComponentDefinitions*(id: EcsIdentity;
-                              componentTypeIdValue: ComponentTypeId): Natural {.
-    compileTime.} =
-  CacheSeq(id.string & "ComponentDefinitionsNimNode" &
-      $uint16(componentTypeIdValue)).len
-
-proc addComponentDefinitions*(id: EcsIdentity;
-                              componentTypeIdValue: ComponentTypeId;
-                              value: NimNode) {.compileTime.} =
-  CacheSeq(id.string & "ComponentDefinitionsNimNode" &
-      $uint16(componentTypeIdValue)).add(value)
-
-proc componentDefinitions*(id: EcsIdentity;
-                           componentTypeIdValue: ComponentTypeId): seq[NimNode] {.
-    compileTime.} =
-  let
-    keyVal = CacheSeq(id.string & "ComponentDefinitionsNimNode" &
-        $uint16(componentTypeIdValue))
-    listLen = keyVal.len
-  if listLen > 0:
-    result.setLen listLen
-    var i: int
-    for item in keyVal:
-      result[i] = item
-      i.inc
-
-{.push, hint[ConvFromXtoItselfNotNeeded]: on.}
 proc maxComponents*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): Natural {.
     compileTime.} =
   id.checkId(componentTypeIdValue)
