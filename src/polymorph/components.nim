@@ -160,6 +160,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
       instTypeNode = newIdentNode instanceTypeName(typeNameStr)
       generationTypeNode = newIdentNode generationTypeName(typeNameStr)
       typeIdAccessName = newIdentNode("typeId")
+      refTypeAccessName = newIdentNode("refType")
       tyParam = newIdentNode("ty")
       refTypeNameIdent = newIdentNode(refTypeName(typeNameStr))
     
@@ -183,9 +184,11 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
     # eg; template typeId*(ty: A | ARef | AInstance): ComponentTypeId = 1.ComponentTypeId
     # The same value is returned for a concrete instance, ref instance, and typedesc.
     afterComponentDef.add(quote do:
-      template `typeIdAccessName`*(`tyParam`: `typeNameIdent` | `refTypeNameIdent` | `instTypeNode` |
-        typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`] | typedesc[`instTypeNode`]): ComponentTypeId = `typeId`.ComponentTypeId
-      )
+      func `typeIdAccessName`*(`tyParam`: `typeNameIdent` | `refTypeNameIdent` | `instTypeNode` | typedesc[`typeNameIdent`] | typedesc[`refTypeNameIdent`] | typedesc[`instTypeNode`]): ComponentTypeId =
+        `typeId`.ComponentTypeId
+      
+      template `refTypeAccessName`*(`tyParam`: typedesc[`typeNameIdent`] | typedesc[`instTypeNode`]): typedesc = `refTypeNameIdent`
+    )
 
   if id.components.len == previousComponentsDeclared:
     error "Cannot process registerComponents: No typeDefs can be found to create components from"
@@ -748,8 +751,35 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
     allCompsTC = ident typeClassName()
     allInstTC = ident instanceTypeClassName()
     allRefCompsTc = ident refTypeClassName()
-  
+    iFound = ident "found"
+    iValue = ident "value"
+
+
   result.add(quote do:
+
+
+    template find*[T: `allCompsTC`](compRefs: ComponentList, findType: typedesc[T]): tuple[`iFound`: bool, `iValue`: T] =
+      ## Find and return a component type in a `ComponentList`.
+      ## When the list contains the type, `result.found` is true and a
+      ## copy of the data is placed in `result.value`.
+      ## 
+      ## Example:
+      ## 
+      ##      var myCompList = cl(Foo(value: 1), Bar(value: 2))
+      ##      let findRes = myCompList.find Bar
+      ##      assert findRes.found and findRes.value == Bar(value: 2)
+      
+      let
+        tId = findType.typeId
+        idx = compRefs.findTypeId tId
+      
+      var r: tuple[`iFound`: bool, `iValue`: T]
+
+      r.`iFound` = idx >= 0
+      if r.`iFound`:
+        r.`iValue` = findType.refType()(compRefs[idx]).value
+      r
+
 
     proc add*(items: var ComponentList, component: `allCompsTC`|`allInstTC`|`allRefCompsTc`) =
       ## Add a component to a component list, automatically handling `typeId`.
@@ -767,6 +797,108 @@ proc genTypeAccess*(id: EcsIdentity): NimNode =
       assert items[^1].typeId != InvalidComponent,
         "Could not resolve type id for " & $component.type
     )
+
+
+macro find*(id: static[EcsIdentity], cList: ComponentList, types: varargs[typed]): untyped =
+  ## Build a single pass operation to find the values of particular
+  ## component types in a `ComponentList`.
+  ## 
+  ## The resulting tuple contains a field for each type in `types`.
+  ## 
+  ## Example:
+  ## 
+  ##    let
+  ##      # Create a 'ComponentList' from components 'Foo' and 'Bar'.
+  ##      myList = cl(Foo(), Bar(value: 123))
+  ##
+  ##      # Search the list for the 'Foo' and 'Bar' types.
+  ##      results = myList.find(Foo, Bar)
+  ##
+  ##    assert results.foo.found
+  ##    assert results.foo.value == Foo()
+  ##    assert results.bar.found
+  ##    assert results.bar.value == Bar(value: 123)
+  
+  # The process here is similar to 'buildFetchComponents' but operates
+  # on a seq instead of an entity.
+  # TODO: split the common pattern of fetch parsing to use here and in buildFetchComponents.
+
+  assert types.len > 0, "Need one or more component types to find"
+
+  types.expectKind nnkBracket
+  types.expectMinLen 1
+  types[0].expectKind {nnkSym, nnkHiddenStdConv}
+  let
+    typeList = id.toTypeList(types)
+    res = genSym(nskVar, "result")
+    totalComps = typeList.len
+    multipleFetches = totalComps > 1
+
+    fieldCounter = genSym(nskVar, "fieldCounter")
+    curCompRef = genSym(nskForVar, "curCompRef")
+
+    exitConditions =
+      if multipleFetches:
+        quote do:
+          `fieldCounter`.inc
+          if `fieldCounter` == `totalComps`:
+            break
+      else:
+        quote do:
+          break
+
+  var
+    tupleTy = nnkTupleTy.newTree()
+    inner = newStmtList()
+    blk = newStmtList()
+
+  if multipleFetches:
+    blk.add(quote do:
+      var `fieldCounter`: int
+    )
+
+  var
+    fetchCase = nnkCaseStmt.newTree(quote do:
+      `curCompRef`.typeId.int
+    )
+
+  for i, tyId in typeList:
+    let
+      tyStr = id.typeName(tyId)
+      lcField = ident tyStr.unCap
+      ty = ident tyStr
+      refTy = ident refTypeName(tyStr)
+
+    # Append fields to the result tuple.
+    tupleTy.add newIdentDefs(lcField,
+      nnkTupleTy.newTree(
+        newIdentDefs(ident "found", ident "bool"),
+        newIdentDefs(ident "value", ty)
+      )
+    )
+
+    # Append logic for this component.
+    fetchCase.add nnkOfBranch.newTree(
+      newLit tyId.int,
+      quote do:
+        `res`.`lcField`.found = true
+        `res`.`lcField`.value = `refTy`(`curCompRef`).value
+        `exitConditions`
+    )
+  fetchCase.add nnkElse.newTree(nnkDiscardStmt.newTree(newEmptyNode()))
+
+  blk.add(quote do:
+    var `res`: `tupleTy`
+    for `curCompRef` in `cList`:
+      `fetchCase`
+    `res`
+  )
+
+  result = newBlockStmt(blk)
+
+
+template find*(cList: ComponentList, types: varargs[typed]): untyped =
+  find(defaultIdentity, cList, types)
 
 
 macro cl*(items: varargs[untyped]): untyped =
