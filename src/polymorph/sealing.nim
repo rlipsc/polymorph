@@ -481,7 +481,7 @@ proc makeNewEntity(options: ECSEntityOptions): NimNode =
       else: newStmtList()
 
   result.add(quote do:
-    proc newEntity*: EntityRef =
+    proc allocateEntity*: EntityRef =
       var `entityId`: EntityId
       if `recyclerData`:
         `entityId` = `recyclerGet`

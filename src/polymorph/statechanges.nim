@@ -526,7 +526,7 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
     allEvents = details.allEvents
     defEvents = details.deferredEvents
 
-    opStr =  "newEntityWith: " & id.commaSeparate(details.passed)
+    opStr =  "newEntity(" & id.commaSeparate(details.passed) & ")"
 
   var
     newEntEvent = newStmtList()
@@ -537,7 +537,7 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
   
   var
     body = quote do:
-      let `entitySym` {.inject.} = newEntity()
+      let `entitySym` {.inject.} = allocateEntity()
       `newDecls`
       `sysUpdates`
       `addToEnt`
@@ -758,6 +758,13 @@ proc makeStateChanges*(id: EcsIdentity): NimNode =
 
   result = quote do:
     
+    macro newEntity*(`componentList`: varargs[typed]): untyped =
+      ## Create an entity with the parameter components.
+      ## This macro statically generates updates for only systems
+      ## entirely contained within the parameters and ensures no
+      ## run time component list iterations and associated checks.
+      doNewEntityWith(`identity`, `componentList`)
+
     macro newEntityWith*(`componentList`: varargs[typed]): untyped =
       ## Create an entity with the parameter components.
       ## This macro statically generates updates for only systems
