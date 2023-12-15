@@ -1785,9 +1785,12 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   # Add deferred system definitions.
   result.add id.addDeferredDefs(unsealedSystems, sdcDeferMakeEcs)
 
+  var compCount, sysCount: int
+
   id.ecsBuildOperation "component processing":
 
     for typeId in unsealedComponents:
+      compCount += 1
 
       let
         # Dependent owners are systems that require this typeId for a row to exist.
@@ -1833,6 +1836,8 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   id.ecsBuildOperation "system event processing":
 
     for sys in id.building(unsealedSystems):
+      sysCount += 1
+
       if id.onAddedCallbackNode(sys.index).len > 0:
         let (fwd, body) = id.buildEventCallback(sys, ekRowAddedCb)
         result.add fwd
@@ -1885,7 +1890,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   id.ecsBuildOperation "user event callbacks":
     result.add eventProcs
   
-  id.ecsBuildOperation "sealing ECS":
+  id.ecsBuildOperation "sealing ECS \"" & string(id) & "\"":
     # Flag components as generated.
     for typeId in unsealedComponents:
       id.add_ecsSealedComponents typeId
@@ -1907,7 +1912,7 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
         result.insert(0, startGenLog(id))
 
   when defined(ecsLog) or defined(ecsLogDetails):
-    echo "ECS \"" & id.string & "\" built."
+    echo "ECS \"" & id.string & "\" built with " & $compCount & " components and " & $sysCount & " systems."
 
 
 macro makeEcs*(id: static[EcsIdentity], entityOptions: static[EcsEntityOptions]): untyped =
