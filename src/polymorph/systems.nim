@@ -1270,9 +1270,18 @@ proc generateSystem(id: EcsIdentity, sysIndex: SystemIndex, options: ECSSysOptio
     finishBodies = newStmtList()
     activeBlocks: set[SystemBlockKind]
 
-  const needComponentsMsg = "Cannot use this block as this system has no components: '"
-  let hasComponents = id.ecsSysRequirements(sysIndex).len > 0
-  var blockRemoves: seq[int]
+  const
+    needComponentsMsg = "Cannot use this block as this system has no components: '"
+  let
+    reqCompCount = id.ecsSysRequirements(sysIndex).len
+    reqNegCount = id.ecsSysNegations(sysIndex).len
+    hasComponents = reqCompCount > 0 or reqNegCount > 0
+  var
+    blockRemoves: seq[int]
+
+  if reqCompCount == 0 and reqNegCount > 0:
+    # This system matches component negations.
+    id.add_ecsNegationSystems sysIndex
 
   for blockIndex in systemBody.blocks:
     
@@ -1320,11 +1329,6 @@ proc generateSystem(id: EcsIdentity, sysIndex: SystemIndex, options: ECSSysOptio
           error needComponentsMsg & $sbAdded & "'"
         activeBlocks.incl sbkStream
 
-  # Remove extracted blocks from the output body.
-  
-  for i in countDown(blockRemoves.high, 0):
-    systemBody.del blockRemoves[i]
-
   # Search for and wrap 'all' and 'stream' blocks within the body.
 
   proc applyIterationBlocks(parent: NimNode) =
@@ -1354,6 +1358,11 @@ proc generateSystem(id: EcsIdentity, sysIndex: SystemIndex, options: ECSSysOptio
         curNode.applyIterationBlocks
 
   systemBody.applyIterationBlocks
+
+  # Remove extracted blocks from the output body.
+  
+  for i in countDown(blockRemoves.high, 0):
+    systemBody.del blockRemoves[i]
 
   # Set up debug echo statements.
   
@@ -1655,7 +1664,7 @@ proc registerSystemBody(id: EcsIdentity, name: string, componentTypes: NimNode, 
   # Next, parse the body to extract events.
 
   const needComponentsMsg = "Cannot use this block as this system has no components: '"
-  let hasComponents = id.ecsSysRequirements(sysIndex).len > 0
+  let hasComponents = id.ecsSysRequirements(sysIndex).len > 0 or id.ecsSysNegations(sysIndex).len > 0
   var
     onAdded = newStmtList()
     onRemoved = newStmtList()

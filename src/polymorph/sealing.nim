@@ -1108,6 +1108,9 @@ proc makeListSystem(id: EcsIdentity): NimNode =
     res = ident "result"
     innards = newStmtList()
     entIdent = ident "entity"
+  let
+    sysDesyncMsg = ident "sysDesyncMsg"
+    entDesyncMsg = ident "entDesyncMsg"
   
   for sysId in id.unsealedSystems:
     let
@@ -1120,29 +1123,34 @@ proc makeListSystem(id: EcsIdentity): NimNode =
       doHasKey = indexHasKey(sys, entId, options.indexFormat)
       reqs = id.ecsSysRequirements(sysId)
       negs = id.ecsSysNegations(sysId)
+      sysHasEnts = reqs.len > 0 or negs.len > 0
 
     # Verify component/system relationships.
 
+    if sysHasEnts:
+      innards.add(
+        quote do:
+          var `matchesEnt` = true
+      )
+
     if reqs.len > 0:
-
       innards.add(quote do:
-        var
-          `matchesEnt` = true
-
         for req in `reqs`:
-          if req.ComponentTypeId notin `entIdent`:
+          if req notin `entIdent`:
             `matchesEnt` = false
             break
       )
-      if negs.len > 0:
-        innards.add(quote do:
-          for req in `negs`:
-            if req.ComponentTypeId in `entIdent`:
-              `matchesEnt` = false
-              break
-        )
+    
+    if negs.len > 0:
+      innards.add(quote do:
+        for req in `negs`:
+          if req in `entIdent`:
+            `matchesEnt` = false
+            break
+      )
 
-      # Output string.
+    if sysHasEnts:
+      # This system contributes to the output string.
 
       innards.add(quote do:
         let
@@ -1151,10 +1159,8 @@ proc makeListSystem(id: EcsIdentity): NimNode =
         if `matchesEnt` != inSys:
           let
             issue =
-              if `matchesEnt`:
-                "[System]: entity contains the required components but is missing from the system index"
-              else:
-                "[Entity]: the system index references this entity but the entity doesn't have the required components"
+              if `matchesEnt`: `sysDesyncMsg`
+              else: `entDesyncMsg`
 
           `res` &= `sysStr` & " Sync issue " & issue & "\n"
         elif inSys:
@@ -1163,6 +1169,10 @@ proc makeListSystem(id: EcsIdentity): NimNode =
 
   result = quote do:
     proc listSystems*(`entIdent`: EntityRef): string =
+      const
+        `sysDesyncMsg` = "[System]: entity contains the required components but is missing from the system index"
+        `entDesyncMsg` = "[Entity]: the system index references this entity but the entity doesn't have the required components"
+
       if `entIdent`.alive:
         `innards`
       else:
@@ -1592,94 +1602,110 @@ macro expectSystems*(id: static[EcsIdentity], entity: EntityRef, systems: openAr
   
   let
     missingSystems = genSym(nskVar, "missingSystems")
-    missingCompsStr = genSym(nskVar, "missingComps")
     totalMissing = genSym(nskVar, "totalMissing")
-    allCompsComma = genSym(nskVar, "acComma")
-    joinComma = genSym(nskTemplate, "joinComma")
+    totalNegated = genSym(nskVar, "totalNegated")
+    indentStr = bindSym("indent")
+    addSepStr = bindSym("addSep")
+    capAscii = bindSym("capitalizeAscii")
 
   var
     checks = newStmtList()
     allSystemsStr: string
-    checkedComps: HashSet[ComponentTypeId]
+  
   # Fixed checks are built using the parameter systems.
   for sys in systemIdxs:
     let
       sysName = id.getSystemName sys
       sysVar = id.instantiation sys
-      sysMissingStr = newLit(systemStr(sysName) & " uses " &
-        id.commaSeparate(id.ecsSysRequirements(sys)) & ": ")
+      reqStr = id.commaSeparate(id.ecsSysRequirements(sys))
+      negStr = id.commaSeparate(id.ecsSysNegations(sys))
+      sysDesc =
+        (if reqStr.len > 0: " uses [" & reqStr & "]" else: "") &
+        (if negStr.len > 0: " negates [" & negStr & "]" else: "")
+      sysMissingStr = newLit(
+        systemStr(sysName) & sysDesc & " because:\n    "
+      )
+      missingCompsStr = genSym(nskVar, "missingComps")
+      negatedCompsStr = genSym(nskVar, "negatedComps")
     
     var
       compCheck = newStmtList()
-      first = true
-    let
-      sysCompComma = genSym(nskVar, "cComma")
     
     for compId in id.ecsSysRequirements(sys):
-      checkedComps.incl compId
-      
       let
         tyName = id.typeName(compId)
-        compStr =
-          if first: tyName
-          else:
-            first = false
-            ", " & tyName
         compTy = ident tyName
     
       compCheck.add(quote do:
         if not(`entity`.hasComponent `compTy`):
-          `joinComma`(`missingCompsStr`, `compStr`, `sysCompComma`)
+          `addSepStr` `missingCompsStr`
+          `missingCompsStr` &= `tyName`
           if `compId`.ComponentTypeId notin `totalMissing`:
             `totalMissing`.add `compId`.ComponentTypeId
       )
     
-    # "incInt" (uses: AddOne, IntCont) is missing component(s): AddOne
+    for compId in id.ecsSysNegations(sys):
+      let
+        tyName = id.typeName(compId)
+        compTy = ident tyName
+    
+      compCheck.add(quote do:
+        if `entity`.hasComponent `compTy`:
+          `addSepStr` `negatedCompsStr`
+          `negatedCompsStr` &= `tyName`
+          if `compId`.ComponentTypeId notin `totalNegated`:
+            `totalNegated`.add `compId`.ComponentTypeId
+      )
+    
     checks.add(quote do:
       if `entity` notin `sysVar`:
-        var
-          `missingCompsStr` = "missing "
-          `sysCompComma`: bool
+        var `missingCompsStr`, `negatedCompsStr`: string
         `compCheck`
-        `missingSystems` &= `sysMissingStr` & `missingCompsStr` & "\n"
+        let
+          missing = if `missingCompsStr`. len > 0: "missing [" & `missingCompsStr` & "] " else: ""
+          negations = if `negatedCompsStr`. len > 0: "contains [" & `negatedCompsStr` & "]" else: ""
+          sep = if missing.len > 0 and negations.len > 0: "and " else: ""
+          msg = missing & sep & negations
+        
+        `missingSystems` &= "  " & `sysMissingStr` & `capAscii`(msg) & "\n"
     )
 
-    #"System \"" & sys.name & "\" (" & $int(sysIdx) & ")"
-
-    allSystemsStr &= systemStr(sysName) & "\n"
+    allSystemsStr &= "  " & systemStr(sysName) & "\n"
 
   result = quote do:
     block:
       {.line.}:
-        template `joinComma`(str1, str2, comma: untyped) =
-          if comma:
-            str1 &= ", " & str2
-          else:
-            comma = true
-            str1 &= str2
-        
         var
           `missingSystems`: string
-          `totalMissing`: seq[ComponentTypeId]
+          `totalMissing`, `totalNegated`: seq[ComponentTypeId]
 
         `checks`
+
         if `missingSystems`.len > 0:
           var
-            `allCompsComma`: bool
-            allMissingStr: string
+            allMissingStr, allNegatedStr: string
             existingSystems = `entity`.listSystems
+
           if existingSystems.len == 0:
-            existingSystems = "<No systems used>\n"
+            existingSystems = "  <No systems used>\n"
+          
           for c in `totalMissing`:
             let tn = c.typeName
-            `joinComma`(allMissingStr, tn, `allCompsComma`)
+            `addSepStr` allMissingStr
+            allMissingStr &= tn
             
-          doAssert false, "\nEntityId " & $`entity`.entityId.int & 
-            " expected systems:\n" & `allSystemsStr` &
-            "\nCurrent systems:\n" & existingSystems & "\nMissing systems:\n" &
-            $`missingSystems` & "\nCurrent components:\n" &
-            `entity`.listComponents(false) & "\nComponents required: " &
-            allMissingStr & "\n"
+          for c in `totalNegated`:
+            let tn = c.typeName
+            `addSepStr` allNegatedStr
+            allNegatedStr &= tn
+            
+          doAssert false, "\nFailed 'expectSystems' for [\n" & `allSystemsStr` &
+            "]\n\nEntityId " & $`entity`.entityId.int & 
+            "\n\nCurrent components:\n" & `indentStr`(`entity`.listComponents(false), 2) &
+            "\nCurrent systems:\n" & `indentStr`(existingSystems, 2) &
+            "\nMissing systems:\n" & `missingSystems` &
+            (if allMissingStr.len > 0: "\nTotal missing components: " & allMissingStr else: "") &
+            (if allNegatedStr.len > 0: "\nTotal blocking components: " & allNegatedStr else: "") & "\n\n"
 
 
 template expectSystems*(entity: EntityRef, systems: openArray[string]): untyped =

@@ -50,21 +50,29 @@ iterator satisfiedSystems*(id: EcsIdentity, compList: ComponentIterable): System
       if sys notin sysProcessed:
         sysProcessed.incl sys
         
-        var found = true
-
-        for req in id.ecsSysRequirements(sys):
-          if req notin compList:
-            found = false
-            break
-    
-        if found:
+        block checkReqs:
+          for req in id.ecsSysRequirements(sys):
+            if req notin compList:
+              break checkReqs
+      
           for neg in id.ecsSysNegations(sys):
             if neg in compList:
-              found = false
-              break
+              break checkReqs
           
-          if found:
-            yield sys
+          yield sys
+
+  # Handle systems with only negations.
+  for sys in id.ecsNegationSystems:
+
+    if sys notin sysProcessed:
+      sysProcessed.incl sys
+      
+      block checkNegs:
+        for neg in id.ecsSysNegations(sys):
+          if neg in compList:
+            break checkNegs
+        
+        yield sys
 
 
 type
@@ -239,7 +247,6 @@ proc buildVars*(node: var NimNode, id: EcsIdentity, components: ComponentIterabl
   
   for c in id.building components:
     let
-      #field = c.fetchedIdent(suffix)
       field = c.compAccess(suffix)
       instTypeIdent = c.instanceTy
     
