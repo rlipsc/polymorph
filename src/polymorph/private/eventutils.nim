@@ -217,12 +217,17 @@ proc read*(id: EcsIdentity, eventKind: EventKind, context: EventContext): NimNod
 
   case eventKind
     of ekNoEvent,
-      ekNewEntityWith,
-      ekAddComponents,
-      ekConstruct,
-      ekClone,
-      ekRemoveComponents,
-      ekDeleteEnt:            id.onEntityStateChange
+      # Entity state change events.
+      ekEntityNew,
+      ekEntityAdd,
+      ekEntityRemove,
+      ekEntityConstruct,
+      ekEntityClone,
+      ekEntityDelete:         id.onEntityStateChange
+    
+    of ekConstruct:           id.onEntityConstruct
+    of ekClone:               id.onEntityClone
+    of ekBindConstruct:       id.onEntityBindingNode typeInfo.typeId
 
     of ekAdd:                 id.onAddToEntCodeNode typeInfo.typeId
     of ekRemove:              id.onRemoveFromEntCodeNode typeInfo.typeId
@@ -231,6 +236,9 @@ proc read*(id: EcsIdentity, eventKind: EventKind, context: EventContext): NimNod
     of ekInit:                id.onInitCodeNode typeInfo.typeId
     of ekUpdate:              id.onInterceptUpdateNode typeInfo.typeId
     of ekDeleteComp:          id.onFinalisationCodeNode typeInfo.typeId
+
+    of ekConstructComp:       id.onConstructCodeNode typeInfo.typeId
+    of ekCloneComp:           id.onCloneCodeNode typeInfo.typeId
 
     of ekSystemAddAny:        id.onAddAnySystemCodeNode typeInfo.typeId
     of ekSystemRemoveAny:     id.onRemoveAnySystemCodeNode typeInfo.typeId
@@ -244,7 +252,7 @@ proc read*(id: EcsIdentity, eventKind: EventKind, context: EventContext): NimNod
     of ekRowRemovedCb:        id.onRemovedCallbackNode sysInfo.index
 
 
-proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext, eventKind: EventKind) =
+proc invokeEvent*(node: NimNode, id: EcsIdentity, context: var EventContext, eventKind: EventKind) =
 
   if eventKind == ekNoEvent:
     return
@@ -266,6 +274,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
 
     ek = newLit $eventKind
     ecsId = quote do: EcsIdentity(`id`)
+    types = ident "types"
 
   const
     ie = "Internal error: "
@@ -288,7 +297,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     
     case eventDir
 
-      of ekAddComponents:
+      of ekEntityAdd:
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowRemoved}, [`sysInt`]):
@@ -297,7 +306,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
                 eventMutationsStr(`ecsId`)
         )
 
-      of ekRemoveComponents:
+      of ekEntityRemove:
         checks.add(
           quote do:
             if `mutOccur`(`ecsId`, {ekRowAdded}, [`sysInt`]):
@@ -323,7 +332,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
       checks = newStmtList()
 
     case eventDir
-      of ekAddComponents:
+      of ekEntityAdd:
 
         if not defined(ecsPermissive):
           checks.add(quote do:
@@ -331,7 +340,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
               error "Event '" & `ek` & "'" & `ei` & "removing [" & `compStr` & "]" & `br` & eventMutationsStr(`ecsId`)
           )
 
-      of ekRemoveComponents:
+      of ekEntityRemove:
 
         if not defined(ecsPermissive):
           checks.add(quote do:
@@ -349,7 +358,6 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
 
   proc checkRecursion(data: openarray[int]) =
     ## Catch endlessly recursing events at compile time.
-    
     if id.eventOccurred({eventKind}, data):
       error de & $eventKind & "'" & br & id.eventMutationsStr
 
@@ -397,63 +405,25 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
 
   # Build the event.
 
+  let
+    # Return the run time components.
+    entity = context.entity
+    readEntityComponents =
+      quote do:
+        block:
+          var
+            compIds = newSeq[ComponentTypeId](`entity`.componentCount)
+            i: int
+          for c in `entity`:
+            compIds[i] = c.typeId
+            i.inc
+          compIds
+
   case eventKind
 
     of ekNoEvent:
       discard
 
-    of  ekNewEntityWith, ekAddComponents,
-        ekConstruct, ekClone,
-        ekRemoveComponents, ekDeleteEnt:
-      
-      # Entity events.
-
-      let
-        entity = context.entity
-        typeId = context.component.info.typeId
-
-        tIds =
-          if context.entityComps.len > 0:
-            # Component parameters are available at compile time.
-            var
-              compIds = nnkBracket.newTree
-            
-            for c in context.entityComps:
-              compIds.add newLit(c.int).newDotExpr ident"ComponentTypeId"
-            
-            quote do:
-              @`compIds`
-
-          elif typeId != InvalidComponent:
-            # A single component parameter is available at compile time.
-            quote do:
-              @[`typeId`.ComponentTypeId]
-
-          else:
-            # Evaluate all components on the entity at run time.
-            quote do:
-              block:
-                var
-                  compIds = newSeq[ComponentTypeId](`entity`.componentCount)
-                  i: int
-                for c in `entity`:
-                  compIds[i] = c.typeId
-                  i.inc
-                compIds
-
-        st = ident "state"
-        types = ident "types"
-      
-      let userAccess = userEntAccess(context.entity)
-      node.add(quote do:
-        block:
-          const `st` {.inject, used.} = `eventKind`.EventKind
-          let `types` {.inject, used.} = `tIds`
-          
-          `userAccess`
-          `eventCode`
-      )
-  
     of ekInit, ekUpdate:
       var userAccess = newStmtList()
       # These events occur directly on the component without any other context.
@@ -465,7 +435,7 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
           `eventCode`
       )
 
-    of ekAdd, ekRemove, ekDeleteComp:
+    of ekAdd, ekConstructComp, ekCloneComp, ekBindConstruct, ekRemove, ekDeleteComp:
       var userAccess = newStmtList()
       userAccess.buildAccess(id, context, {auEntity, auComponent})
 
@@ -513,6 +483,59 @@ proc invokeEvent*(node: var NimNode, id: EcsIdentity, context: var EventContext,
     of ekRowRemovedCb:
       # Callbacks allow recursion at run time.
       node.eventSystemCb(id, sysInfo, context.system.row, ident systemRemovedCBName(sysInfo.name))
+
+
+    of ekConstruct, ekClone:
+      # Run post-construction events.
+      var userAccess = newStmtList()
+      userAccess.buildAccess(id, context, {auEntity})
+      node.add(quote do:
+        block:
+          `userAccess`
+          `eventCode`
+      )
+
+    of  ekEntityNew, ekEntityAdd,
+        ekEntityConstruct, ekEntityClone,
+        ekEntityRemove, ekEntityDelete:
+      
+      # Entity state change event.
+
+      let
+        typeId = context.component.info.typeId
+
+        tIds =
+          if context.entityComps.len > 0:
+            # Component parameters are available at compile time.
+            var
+              compIds = nnkBracket.newTree
+            
+            for c in context.entityComps:
+              compIds.add newLit(c.int).newDotExpr ident"ComponentTypeId"
+            
+            quote do:
+              @`compIds`
+
+          elif typeId != InvalidComponent:
+            # A single component parameter is available at compile time.
+            quote do:
+              @[`typeId`.ComponentTypeId]
+
+          else:
+            readEntityComponents
+
+      let
+        userAccess = userEntAccess(context.entity)
+        state = ident "state"
+      
+      node.add(quote do:
+        block:
+          const `state` {.inject, used.} = `eventKind`.EventKind
+          let `types` {.inject, used.} = `tIds`
+          
+          `userAccess`
+          `eventCode`
+      )
 
 
 proc buildEventCallback*(id: EcsIdentity, typeId: ComponentTypeId, mutation: EventKind): tuple[forwardDecl, procDecl: NimNode] =
@@ -587,10 +610,10 @@ proc buildEventCallback*(id: EcsIdentity, sys: SystemBuildInfo, mutation: EventK
   body.trackMutation(id, mutation, [sys.index.int])
   
   result.forwardDecl = quote do:
-    proc `cbProcName`(`procParam`: var `sysType`, `gi`: int)
+    proc `cbProcName`*(`procParam`: var `sysType`, `gi`: int)
   
   result.procDecl = quote do:
-    proc `cbProcName`(`procParam`: var `sysType`, `gi`: int) =
+    proc `cbProcName`*(`procParam`: var `sysType`, `gi`: int) =
       let `startEntity` = `procParam`.groups[`gi`].entity
       `sysItem`
       `entAccess`

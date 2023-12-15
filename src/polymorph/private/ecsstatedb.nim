@@ -97,7 +97,7 @@ else:
   genItemStates(SystemIndex, ECSSysIndexFormat, ["indexFormat"])
   genItemStates(SystemIndex, ECSSysTimings, ["timings"])
   genItemStates(SystemIndex, ECSSysEcho, ["echoRunning"])
-  genItemStates(SystemIndex, bool, ["assertItem", "orderedRemove"])
+  genItemStates(SystemIndex, bool, ["assertItem", "orderedRemove", "runtimeConstructionHooks"])
   genItemStates(SystemIndex, ECSSysThreading, ["threading"])
   genItemStates(SystemIndex, ECSSysDefCommit, ["ecsSysCommitInstance"])
   genItemStates(SystemIndex, ECSSysItemTemplates, ["ecsSysItemTemplates"])
@@ -118,9 +118,15 @@ else:
   genGlobalStates(int, ["codeLogStart", "ecsSysIterating"])
 
   genGlobalListStates(SystemIndex, [
-    "ecsSysDefined",  # Stores a list of defined systems.
-    "systemOrder"]    # Stores the order of systems for `commitSystems`.
-    )
+    "ecsSysDefined",      # Stores a list of defined systems.
+    "systemOrder",        # Stores the order of systems for `commitSystems`.
+    "ecsNegationSystems", # Systems with only negations and no components.
+  ])
+
+  genGlobalListStates(NimNode, [
+    "ecsOpCacheAdd",
+  ])
+
 
   # State tracking for system execution.
   genGlobalStates(bool, [
@@ -129,8 +135,12 @@ else:
     "logInitialised"  # Perform one log clear per unique path.
     ])
 
-  # Use the NimNode as a seq[int] as a mutable seq[SystemIndex].
-  genGlobalStates(NimNode, ["uncommittedSystems"])
+  
+  genGlobalStates(NimNode, [
+    "uncommittedSystems", # Use the NimNode as a seq[int] as a mutable seq[SystemIndex].
+    "disabledOperations",
+    ]
+  )
 
   # Which system is responsible for the current code.
   genGlobalStates(SystemIndex, ["inSystemIndex"])
@@ -146,7 +156,10 @@ else:
     "onRemoveFromEntCode", "onAddCallback", "onRemoveCallback",
     "onAddAnySystemCode", "onRemoveAnySystemCode",
     "onInterceptUpdate", "onAddCallbackForwardDecl",
-    "onRemoveCallbackForwardDecl"])
+    "onRemoveCallbackForwardDecl",
+    "onConstructCode", "onCloneCode",
+    "onEntityBinding",
+    ])
 
   #-------------------
   # Events for systems
@@ -154,7 +167,7 @@ else:
 
   genListStates(SystemIndex, NimNode, [
     "onAdded", "onRemoved",
-    "onAddedCallback", "onRemovedCallback"
+    "onAddedCallback", "onRemovedCallback",
     ])
 
   # Events for systems with particular components.
@@ -178,6 +191,9 @@ else:
       "ecsCurrentOperation",
 
       "onEntityStateChange",
+      "onEntityConstruct",
+      "onEntityClone",
+
       "onEcsBuildingCode",
       "onEcsBuiltCode",
       "onEcsCommitAllCode",
@@ -190,6 +206,7 @@ else:
     ]
   )
   
+  # Generate 'id.fieldName' and 'id.set_fieldName value' for entity options.
   genObjAccessor(entityOptions, EcsEntityOptions)
 
   # State tracking for events.
@@ -214,8 +231,6 @@ proc findCompId*(id: EcsIdentity, typeName: string): ComponentTypeId {.compileTi
 
   var i: int
   for ty in key:
-    ty.expectKind nnkStrLit
-
     if ty.strVal.toUpperAscii == fTypeName:
       return ComponentTypeId(i)
     i += 1

@@ -29,6 +29,7 @@ type
     errCaseComponent*: ECSErrorResponse
     errCaseSystem*: ECSErrorResponse  # TODO: needs implementation.
     errIncompleteOwned*: ECSErrorResponse
+  ECSDynamicOp* = enum edoConstruct, edoClone
   ECSStrDefault* = enum sdShowData, sdHideData
 
   ECSEntityOptions* = object
@@ -54,6 +55,7 @@ type
     useSet*: bool ## Use a set for hasComponent.
     errors*: ECSErrorResponses  ## Control how errors are generated.
     strDefault*: ECSStrDefault ## Defines if the `$` operator should default to displaying component field data or just listing the components.
+    runtimeConstructionHooks*: bool ## Register `construct` and `clone` callbacks at run time.
 
   # Component storage options
   ECSAccessMethod* = enum amDotOp
@@ -173,36 +175,43 @@ type
   Entities* = seq[EntityRef]
 
   EventKind* = enum
-    ekNoEvent =           "<none>",
+    ekNoEvent =             "<none>",
 
-    # Entity events.
-    ekConstruct =         "construct",
-    ekClone =             "clone",
-    ekDeleteEnt =         "delete",
-    ekNewEntityWith =     "newEntityWith",
-    ekAddComponents =     "addComponents",
-    ekRemoveComponents =  "removeComponents",
+    # Entity state change events.
+    ekEntityConstruct =     "entityConstruct",
+    ekEntityClone =         "entityClone",
+    ekEntityDelete =        "entityDelete",
+    ekEntityNew =           "entityNew",
+    ekEntityAdd =           "entityAdd",
+    ekEntityRemove =        "entityRemove",
+
+    # Construction events.
+    ekConstruct =           "construct",
+    ekClone =               "clone",
+    ekBindConstruct =       "bindingConstruct",
 
     # Component events.
-    ekInit =              "onInit",
-    ekUpdate =            "onUpdate",
-    ekAdd =               "onAdd",
-    ekRemove =            "onRemove",
-    ekAddCB =             "onAddCallback",
-    ekRemoveCB =          "onRemoveCallback",
-    ekDeleteComp =        "onDelete",
-  
+    ekInit =                "onInit",
+    ekUpdate =              "onUpdate",
+    ekAdd =                 "onAdd",
+    ekRemove =              "onRemove",
+    ekAddCB =               "onAddCallback",
+    ekRemoveCB =            "onRemoveCallback",
+    ekDeleteComp =          "onDelete",
+    ekConstructComp =       "onConstructing",
+    ekCloneComp =           "onCloning",
+    
     # Component-system events.
-    ekSystemAddAny =      "onSystemAdd",
-    ekSystemRemoveAny =   "onSystemRemove",
-    ekCompAddTo =         "onSystemAddTo",
-    ekCompRemoveFrom =    "onSystemRemoveFrom",
+    ekSystemAddAny =        "onSystemAdd",
+    ekSystemRemoveAny =     "onSystemRemove",
+    ekCompAddTo =           "onSystemAddTo",
+    ekCompRemoveFrom =      "onSystemRemoveFrom",
 
     # System events.
-    ekRowAdded =          "added",
-    ekRowRemoved =        "removed",
-    ekRowAddedCB =        "addedCallback",
-    ekRowRemovedCB =      "removedCallback"
+    ekRowAdded =            "added",
+    ekRowRemoved =          "removed",
+    ekRowAddedCB =          "addedCallback",
+    ekRowRemovedCB =        "removedCallback"
 
   CommitContext* = enum ccCommitSystems, ccCommitGroup
 

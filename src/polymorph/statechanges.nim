@@ -15,8 +15,8 @@
 # limitations under the License.
 
 import macros, sharedtypes, components
-import private/[statechangeutils, statechangegen, utils, ecsstatedb, eventutils, mutationtracking]
-import strutils, tables, sets, macrocache
+import private/[statechangeutils, statechangegen, utils, ecsstatedb, eventutils, mutationtracking, replacesyms]
+import strutils, tables, sets, macrocache, algorithm
 
 macro componentToSysRequirements*(id: static[EcsIdentity], varName: untyped): untyped =
   ## Create a static sequence that matches componentTypeId to an array of indexes into systemNodes
@@ -34,9 +34,11 @@ macro componentToSysRequirements*(id: static[EcsIdentity], varName: untyped): un
   result = quote do:
     const `varName` = `res`
 
+
 #---------------
 # User event API
 #---------------
+
 
 proc setupOnAddCallback(id: EcsIdentity, typeToUse: NimNode, actions: NimNode): NimNode =
   let
@@ -311,6 +313,82 @@ macro onSystemRemoveFrom*(typeToUse: typedesc, systemName: static[string], actio
   defaultIdentity.setupOnSystemRemoveFrom(typeToUse, systemName, actions)
 
 
+# --------------------------------------
+# Inline events for dynamic construction
+# --------------------------------------
+
+
+# Entity construct events.
+
+macro onConstruct*(id: static[EcsIdentity], actions: untyped): untyped =
+  ## Add some code to be executed after an entity has been created by `construct`.
+  ## Each invocation will append to the code that will be inserted.
+  id.append_onEntityConstruct(actions)
+  newStmtList()
+
+template onConstruct*(actions: untyped): untyped =
+  ## Add some code to be executed after an entity has been created by `construct`.
+  ## Each invocation will append to the code that will be inserted.
+  onConstruct(defaultIdentity, actions)
+
+
+macro onClone*(id: static[EcsIdentity], actions: untyped): untyped =
+  ## Add some code to be executed after an entity has been created by `clone`.
+  ## Each invocation will append to the code that will be inserted.
+  id.append_onEntityClone(actions)
+  newStmtList()
+
+template onClone*(actions: untyped): untyped =
+  ## Add some code to be executed after an entity has been created by `clone`.
+  ## Each invocation will append to the code that will be inserted.
+  onClone(defaultIdentity, actions)
+
+
+# Component construct events.
+
+macro onConstruct*(id: static[EcsIdentity], typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when a component is initialised by `construct`.
+  ## Each invocation will append to the code that will be inserted.
+  id.add_onConstructCode(typeStringToId(id, $typeToUse), actions)
+  newStmtList()
+
+template onConstruct*(typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when a component is initialised by `construct`.
+  ## Each invocation will append to the code that will be inserted.
+  onConstruct(defaultIdentity, typeToUse, actions)
+
+
+macro onClone*(id: static[EcsIdentity], typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when a component is initialised by `clone`.
+  ## Each invocation will append to the code that will be inserted.
+  id.add_onCloneCode(typeStringToId(id, $typeToUse), actions)
+  newStmtList()
+
+template onClone*(typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when a component is initialised by `clone`.
+  ## Each invocation will append to the code that will be inserted.
+  onClone(defaultIdentity, typeToUse, actions)
+
+
+macro onBindConstruct*(id: static[EcsIdentity], typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when `construct` has finished building
+  ## multiple entities.
+  ## Each invocation will append to the code that will be inserted.
+  id.add_onEntityBinding(typeStringToId(id, $typeToUse), actions)
+  newStmtList()
+
+template onBindConstruct*(typeToUse: typedesc, actions: untyped): untyped =
+  ## Add some code to be executed when `construct` has finished building
+  ## multiple entities.
+  ## Each invocation will append to the code that will be inserted.
+  onBindConstruct(defaultIdentity, typeToUse, actions)
+
+
+# --------------------
+# Global entity events
+# --------------------
+
+
 proc addEntityStateChange(id: EcsIdentity, actions: NimNode) =
   var
     curCode = id.onEntityStateChange
@@ -409,9 +487,7 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
 
   let entitySym = genSym(nskLet, "entity")
   var details = id.newStateChangeDetails(scdkNewEntity, passedValues)
-  details.suffix =
-    if defined(ecsNoMangle): ""
-    else: signatureHash entitySym
+  details.suffix = entitySym.getSuffix
   
   var satisfied: SystemSet
   for sys in id.satisfiedSystems(details.passed):
@@ -456,7 +532,8 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
     newEntEvent = newStmtList()
     newEntCtx = newEventContext(entitySym, details.passed)
 
-  newEntEvent.invokeEvent(id, newEntCtx, ekNewEntityWith)
+  newEntEvent.invokeEvent(id, newEntCtx, ekEntityNew)
+  # TODO: Should construct invoke ekEntityNew?
   
   var
     body = quote do:
@@ -470,13 +547,13 @@ proc doNewEntityWith(id: EcsIdentity, passedValues: NimNode): NimNode {.compileT
   let
     compInts = details.passed.toInts
   
-  body.trackMutation(id, ekNewEntityWith, compInts, announce = false)
+  body.trackMutation(id, ekEntityNew, compInts, announce = false)
 
   result = quote do:
     block:
-      static: startOperation(EcsIdentity(`id`), `opStr`)
+      static: startOperation(`id`, `opStr`)
       `body`
-      static: endOperation(EcsIdentity(`id`))
+      static: endOperation(`id`)
       `entitySym`
 
   id.genLog "\n# macro newEntityWith(" & id.commaSeparate(details.passed) & ") " &
@@ -494,6 +571,12 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
         let `entitySym` = `entity`
 
   var details = id.newStateChangeDetails(scdkAdd, componentValues)
+  
+  let typeSig = details.passed.toIntList.sorted
+  var typeSigNode = nnkBracketExpr.newTree()
+  for comp in typeSig:
+    typeSigNode.add newLit comp
+
   details.suffix =
     if defined(ecsNoMangle): ""
     else: signatureHash entitySym
@@ -539,7 +622,7 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
     compInts = details.passed.toInts
     negatedSystemsSeq = negatedSystems.toSeq
   
-  addEntEvent.invokeEvent(id, addEntCtx, ekAddComponents)
+  addEntEvent.invokeEvent(id, addEntCtx, ekEntityAdd)
 
   op.add defineEntity
   op.add details.asserts
@@ -552,11 +635,12 @@ proc doAddComponents(id: EcsIdentity, entity: NimNode, componentValues: NimNode)
   op.add details.allEvents
   op.add details.deferredEvents
 
-  op.trackMutation(id, ekAddComponents, compInts, announce = false)
+  op.trackMutation(id, ekEntityAdd, compInts, announce = false)
 
   let
-    cacheId = quote do: EcsIdentity(`id`)
+    cacheId = quote do: `id`
     locStr = $componentValues.lineInfo
+
   result = quote do:
     block:
       static:
@@ -599,9 +683,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
   # Extend to include dependent owned components.
   details.passed = id.inclDependents(details.passed)
   details.passedSet = details.passed.toHashSet
-  details.suffix =
-    if defined(ecsNoMangle): ""
-    else: signatureHash entitySym
+  details.suffix = entitySym.getSuffix
 
   var relevantSystems: SystemSet
   for change in id.removeStateChanges(details.passed):
@@ -645,7 +727,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
     remEntEvent = newStmtList()
     remEntCtx = newEventContext(entitySym, details.passed)
   
-  remEntEvent.invokeEvent(id, remEntCtx, ekRemoveComponents)
+  remEntEvent.invokeEvent(id, remEntCtx, ekEntityRemove)
 
   op.unpack catchUseInSystem
   op.unpack defineEntity
@@ -659,7 +741,7 @@ proc doRemoveComponents(id: EcsIdentity, entity: NimNode, componentList: NimNode
   op.unpack endOperation
 
   let compInts = details.passed.toInts
-  op.trackMutation(id, ekRemoveComponents, compInts, announce = false)
+  op.trackMutation(id, ekEntityRemove, compInts, announce = false)
 
   result = newBlockStmt(op)
 
@@ -912,10 +994,7 @@ proc doFetchComponents(id: EcsIdentity, entity: NimNode, components: NimNode): N
     resultTuple = nnkTupleConstr.newTree()
     resultSym = genSym(nskLet, "fetch")
   let
-    suffix =
-      if defined(ecsNoMangle): ""
-      else: signatureHash resultSym
-    
+    suffix = resultSym.getSuffix
     passedTypes = toTypeList(id, components)
 
   for c in building(id, passedTypes):
@@ -1045,9 +1124,7 @@ proc makeDelete*(id: EcsIdentity): NimNode =
     curComp = genSym(nskForVar, "curComp")
     sysProcessed = genSym(nskVar, "sysProcessed")
 
-    suffix =
-      if defined(ecsNoMangle): ""
-      else: signatureHash sysProcessed
+    suffix = sysProcessed.getSuffix
 
   var
     deleteCore = newStmtList()
@@ -1151,8 +1228,8 @@ proc makeDelete*(id: EcsIdentity): NimNode =
     entContext = newEventContext(deleteEntParam)
     userStateChangeEvent = newStmtList()
 
-  userStateChangeEvent.invokeEvent(id, entContext, ekDeleteEnt)
-  userStateChangeEvent.trackMutation(id, ekDeleteEnt, [0], announce = false)
+  userStateChangeEvent.invokeEvent(id, entContext, ekEntityDelete)
+  userStateChangeEvent.trackMutation(id, ekEntityDelete, [0], announce = false)
 
   result = quote do:
     proc doDelete(`entitySym`: EntityRef) =

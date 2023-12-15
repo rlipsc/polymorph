@@ -12,11 +12,11 @@ type
 
 func getParamKind*(eventKind: EventKind): ParamKind =
   case eventKind
-    of ekNoEvent .. ekDeleteEnt:
+    of ekNoEvent, ekEntityConstruct, ekEntityClone, ekEntityDelete, ekConstruct, ekClone, ekBindConstruct:
       pkNone
-    of ekNewEntityWith .. ekRemoveComponents:
+    of ekEntityNew .. ekEntityRemove:
       pkCompCT
-    of ekInit .. ekDeleteComp:
+    of ekInit .. ekCloneComp:
       pkComp
     of ekSystemAddAny .. ekSystemRemoveAny, ekRowAdded .. ekRowRemovedCb:
       pkSys
@@ -29,11 +29,11 @@ func getEventDir*(eventKind: EventKind): EventKind =
 
   case eventKind
     
-    of ekAddComponents, ekAdd, ekAddCB, ekInit, ekSystemAddAny, ekCompAddTo, ekRowAdded, ekRowAddedCB:
-      ekAddComponents
+    of ekEntityAdd, ekAdd, ekAddCB, ekInit, ekSystemAddAny, ekCompAddTo, ekRowAdded, ekRowAddedCB:
+      ekEntityAdd
 
-    of ekRemoveComponents, ekRemove, ekRemoveCB, ekDeleteComp, ekSystemRemoveAny, ekCompRemoveFrom, ekRowRemoved, ekRowRemovedCB:
-      ekRemoveComponents
+    of ekEntityRemove, ekRemove, ekRemoveCB, ekDeleteComp, ekSystemRemoveAny, ekCompRemoveFrom, ekRowRemoved, ekRowRemovedCB:
+      ekEntityRemove
     
     else:
       ekNoEvent
@@ -126,11 +126,11 @@ proc mutationOccurred*(id: EcsIdentity, mutations: set[EventKind], indexes: open
 
 
 proc addOccurred*(id: EcsIdentity, indexes: openarray[int]): bool =
-  id.mutationOccurred({ekAddComponents}, indexes)
+  id.mutationOccurred({ekEntityAdd}, indexes)
 
 
 proc removeOccurred*(id: EcsIdentity, indexes: openarray[int]): bool =
-  id.mutationOccurred({ekRemoveComponents}, indexes)
+  id.mutationOccurred({ekEntityRemove}, indexes)
 
 
 proc eventOccurred*(id: EcsIdentity, events: set[EventKind], indexes: openarray[int]): bool =
@@ -287,7 +287,7 @@ proc trackMutation*(node: var NimNode, id: EcsIdentity, mutationType: EventKind,
     br.add newLit(idx)
   
   let
-    ecsId = quote do: EcsIdentity(`id`)
+    ecsId = quote do: `id`
     mutParams = prefix(br, "@")
 
     startOp =

@@ -285,6 +285,10 @@ proc curComponent*(typeInfo: ComponentBuildInfo, suffix: string): NimNode =
   ## Coordinate fetched ident use in generated code.
   ident "curComp" & suffix
 
+proc getSuffix*(node: NimNode): string =
+  if defined(ecsNoMangle): ""
+  else: signatureHash(node)[2..^1]
+
 type
   ComponentAccessProc* = proc(typeInfo: ComponentBuildInfo, suffix: string): NimNode
   ComponentValidProc* =  proc(typeInfo: ComponentBuildInfo, suffix: string): NimNode
@@ -366,6 +370,17 @@ proc orderedUncommitted*(id: EcsIdentity): seq[SystemIndex] =
         result.add sys
 
 
+proc getDisabledOps*(id: EcsIdentity): set[EcsDynamicOp]  {.compileTime.} =
+  for node in id.disabledOperations:
+    result.incl node.intVal.EcsDynamicOp
+
+proc setDisabledOps*(id: EcsIdentity, value: set[EcsDynamicOp]) {.compileTime.} =
+  var node = nnkBracket.newTree()
+  for v in value:
+    node.add newLit(ord(v))
+  id.set_disabledOperations node
+
+
 # --------------------
 # Generating set types
 # --------------------
@@ -442,14 +457,15 @@ proc genSystemSet*(id: EcsIdentity): NimNode =
 
 proc enterIteration*(id: EcsIdentity): NimNode =
   ## Statically mark the start of an iteration block.
-  let cacheId = quote do: EcsIdentity(`id`)
+  let cacheId = quote do: `id`
   quote do:
-    static: `set_ecsSysIterating`(`cacheId`, `ecsSysIterating`(`cacheId`) + 1)
+    static:
+      `set_ecsSysIterating`(`cacheId`, `ecsSysIterating`(`cacheId`) + 1)
 
 
 proc exitIteration*(id: EcsIdentity): NimNode =
   ## Statically mark the end of an iteration block.
-  let cacheId = quote do: EcsIdentity(`id`)
+  let cacheId = quote do: `id`
   quote do:
     {.line.}:
       static:
@@ -536,7 +552,7 @@ proc addToEntityList*(id: EcsIdentity, entity: NimNode, passed: ComponentIterabl
   if id.ecsEventEnv.len > 0:
     result.add(quote do:
       static:
-        EcsIdentity(`id`).recordMutation(ekAddComponents, `mutationLog`)
+        `id`.recordMutation(ekEntityAdd, `mutationLog`)
     )
 
 
@@ -691,7 +707,7 @@ proc removeFromEntityList*(id: EcsIdentity, entity: NimNode, passed: ComponentIt
 
   mutUpdates.add(
     quote do:
-      EcsIdentity(`id`).recordMutation(ekRemoveComponents, `mutationLog`)
+      `id`.recordMutation(ekEntityRemove, `mutationLog`)
   )
 
   result.add(quote do:
@@ -751,7 +767,7 @@ proc strictCatchCheck(node: NimNode, id: EcsIdentity, sysIndex: SystemIndex) =
   ## Note that this doesn't handle conditional delete/removes.
 
   let
-    cacheId = quote do: EcsIdentity(`id`)
+    cacheId = quote do: `id`
     undefinedItemMsg = "potentially unsafe access of 'item' due to a "
     undefinedItemRemoveMsg = undefinedItemMsg & "removal of component(s) that affect this system (source: "
     undefinedItemDeleteMsg = undefinedItemMsg & "deletion of an entity (source: "
@@ -803,15 +819,13 @@ proc systemItemCore*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, ite
     itemCore.add(
       quote do:
         if `itemIdx` notin 0 .. `sys`.high:
-          {.line.}:
-            assert false,
-              "'item' in \"" & `sys`.name & "\" is out of bounds. " &
-              "Use of 'item' after remove/delete affected this system?"
+          assert false,
+            "'item' in \"" & `sys`.name & "\" is out of bounds. " &
+            "Use of 'item' after remove/delete affected this system?"
         elif `sys`.groups[`itemIdx`].entity != `rowEntity`:
-          {.line.}:
-            assert false,
-              "'item' in \"" & `sys`.name & "\" is being used after a " &
-              "remove or delete affected this system"
+          assert false,
+            "'item' in \"" & `sys`.name & "\" is being used after a " &
+            "remove or delete affected this system"
     )
 
   itemCore.add(quote do:
@@ -821,7 +835,7 @@ proc systemItemCore*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, ite
 proc systemItem*(id: EcsIdentity, sysIndex: SystemIndex, rowEntity, sys, itemIdx: NimNode): NimNode =
   ## Creates an `item` template to access the system row represented by `itemIdx`.
   let
-    itemCore = systemItemCore(id, sysindex, rowEntity, sys, itemIdx)
+    itemCore = systemItemCore(id, sysIndex, rowEntity, sys, itemIdx)
     sysItemType = ident itemTypeName(id.getSystemName sysIndex)
 
   result = quote do:
@@ -984,6 +998,7 @@ proc assignSysItemGetRow*(id: EcsIdentity, sys: SystemBuildInfo, value, row: Nim
 
 proc unregister*(id: EcsIdentity, systemIndex: SystemIndex, sys, rowIdent, entIdIdent: NimNode): NimNode =
   ## Remove an entity's row in a system.
+  
   # - Does not update the entity's storage.
   # - Does not invoke events.
   # - Assumes the row is valid.
@@ -1157,7 +1172,7 @@ proc getTypeStr(compNode: NimNode): string =
     return tyInst.strVal
 
 proc findType*(compNode: NimNode): string =
-  ## Expects a typed node and tries to extract the type name.
+  ## Tries to extract the type name from the node.
   ## Note: converts typedesc[Type] to Type.
   case compNode.kind
     of nnkObjConstr:
@@ -1372,7 +1387,6 @@ proc doFlushGenLog*(id: EcsIdentity): NimNode =
     let
       fn = id.getCodeLogFilename
       cs = id.cacheSeq_ecsCodeLog
-      #log = id.ecsCodeLog()
       first = id.codeLogStart()
       lines = cs.len - first
 

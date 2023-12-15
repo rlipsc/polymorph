@@ -24,8 +24,10 @@ export
   onAddCallback, onRemoveCallback,
   onAdd, onRemove, onInit, onInterceptUpdate, onUpdate, onDelete,
   onSystemAdd, onSystemAddTo, onSystemRemove, onSystemRemoveFrom,
+  onConstruct, onClone, onBindConstruct,
   onEntityChange, clearOnEntityChange,
-  newEcsIdentity, defaultIdentity, private, set_private, typeIdRange
+  newEcsIdentity, defaultIdentity, private, set_private, typeIdRange,
+  getDisabledOps, setDisabledOps, identities
 
 
 # ---------------------
@@ -1845,8 +1847,9 @@ proc makeEcs(id: EcsIdentity, entityOptions: EcsEntityOptions): NimNode =
   if invalidEvents[0]:
     error invalidEvents[1]
 
-  id.ecsBuildOperation "run time construction":
-    result.add makeRuntimeConstruction(id)
+  if id.getDisabledOps.len < ord(ECSDynamicOp.high) + 1:
+    id.ecsBuildOperation "run time construction":
+      result.add makeRuntimeConstruction(id)
 
   # User code to run after everything's defined.
   if id.onEcsBuiltCode.len > 0:

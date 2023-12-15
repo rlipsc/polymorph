@@ -93,6 +93,18 @@ proc createRefComponent(typeName: string): NimNode =
       `value`*: `typeIdent`
 
 
+proc getIdentName(n: NimNode): NimNode =
+  ## Like `macros.basename` but returns an ident for symbols.
+  case n.kind
+    of nnkIdent: n
+    of nnkSym: ident n.strVal
+    of nnkPostfix, nnkPrefix: n[1]
+    of nnkPragmaExpr: getIdentName(n[0])
+    else:
+      error "Cannot get name of component from '" & $n.kind & ":\n" & n.treerepr
+      newEmptyNode()
+
+
 proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNode): NimNode =
   ## Registers types in a block as components.
   ## For each type provided in `body`, this macro generates:
@@ -145,6 +157,8 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
               let pragmaIdent = 0
               tyDef[pragExpr] = tyDef[pragExpr][pragmaIdent]
             continue
+
+        typeNameIdent = tyDef[0].getIdentName 
       
       of nnkIdent:
         typeNameIdent = tyDef.baseName

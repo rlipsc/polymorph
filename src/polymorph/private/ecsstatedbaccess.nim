@@ -1506,6 +1506,44 @@ proc setorderedRemove*(id: EcsIdentity; systemIndexValue: SystemIndex;
   CacheSeq(id.string & "orderedRemoveSystemIndex").add(curList)
   {.pop.}
 
+proc runtimeConstructionHooks*(id: EcsIdentity; systemIndexValue: SystemIndex): bool {.
+    compileTime.} =
+  id.checkId(systemIndexValue)
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let
+      key = CacheSeq(id.string & "runtimeConstructionHooksSystemIndex")
+      keyLen = key.len
+      idx = systemIndexValue.int
+    if keyLen > 0:
+      let entry = key[keyLen - 1].copy
+      if entry.len > idx and key[key.len - 1][idx].kind != nnkEmpty:
+        bool(boolVal(key[key.len - 1][idx]))
+      else:
+        default(bool)
+    else:
+      default(bool)
+  {.pop.}
+
+proc setruntimeConstructionHooks*(id: EcsIdentity;
+                                  systemIndexValue: SystemIndex; value: bool) {.
+    compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  id.checkId(systemIndexValue)
+  let
+    idx = systemIndexValue.int
+    keyLen = CacheSeq(id.string & "runtimeConstructionHooksSystemIndex").len
+  var curList = newStmtList()
+  if keyLen > 0:
+    for n in CacheSeq(id.string & "runtimeConstructionHooksSystemIndex")[
+        keyLen - 1]:
+      curList.add(n)
+  while curList.len <= idx:
+    curList.add newEmptyNode()
+  curList[idx] = newLit(bool(value))
+  CacheSeq(id.string & "runtimeConstructionHooksSystemIndex").add(curList)
+  {.pop.}
+
 proc threading*(id: EcsIdentity; systemIndexValue: SystemIndex): ECSSysThreading {.
     compileTime.} =
   id.checkId(systemIndexValue)
@@ -1877,6 +1915,56 @@ proc systemOrder*(id: EcsIdentity): seq[SystemIndex] {.compileTime.} =
       i.inc
 
 {.pop.}
+{.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+proc lenEcsNegationSystems*(id: EcsIdentity): Natural {.compileTime.} =
+  CacheSeq(id.string & "EcsNegationSystemsSystemIndex").len
+
+proc cacheSeqEcsNegationSystems*(id: EcsIdentity): CacheSeq {.compileTime.} =
+  CacheSeq(id.string & "EcsNegationSystemsSystemIndex")
+
+proc addEcsNegationSystems*(id: EcsIdentity; value: SystemIndex) {.compileTime.} =
+  CacheSeq(id.string & "EcsNegationSystemsSystemIndex").add(newLit(int(value)))
+
+proc ecsNegationSystems*(id: EcsIdentity): seq[SystemIndex] {.compileTime.} =
+  let
+    keyVal = CacheSeq(id.string & "EcsNegationSystemsSystemIndex")
+    lenEcsNegationSystems = keyVal.len
+  if lenEcsNegationSystems > 0:
+    result.setLen lenEcsNegationSystems
+    var i: int
+    for item in keyVal.items:
+      result[i] = SystemIndex(item.intVal)
+      i.inc
+
+{.pop.}
+proc ecsOpCacheAddNode*(id: EcsIdentity): NimNode {.compileTime.} =
+  result = newStmtList()
+  let keyVal = CacheSeq(id.string & "EcsOpCacheAddNimNode")
+  for item in keyVal.items:
+    result.add item
+
+{.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+proc lenEcsOpCacheAdd*(id: EcsIdentity): Natural {.compileTime.} =
+  CacheSeq(id.string & "EcsOpCacheAddNimNode").len
+
+proc cacheSeqEcsOpCacheAdd*(id: EcsIdentity): CacheSeq {.compileTime.} =
+  CacheSeq(id.string & "EcsOpCacheAddNimNode")
+
+proc addEcsOpCacheAdd*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  CacheSeq(id.string & "EcsOpCacheAddNimNode").add(value)
+
+proc ecsOpCacheAdd*(id: EcsIdentity): seq[NimNode] {.compileTime.} =
+  let
+    keyVal = CacheSeq(id.string & "EcsOpCacheAddNimNode")
+    lenEcsOpCacheAdd = keyVal.len
+  if lenEcsOpCacheAdd > 0:
+    result.setLen lenEcsOpCacheAdd
+    var i: int
+    for item in keyVal.items:
+      result[i] = item
+      i.inc
+
+{.pop.}
 proc inSystem*(id: EcsIdentity): bool {.compileTime.} =
   {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
   result = block:
@@ -2009,6 +2097,35 @@ proc appenduncommittedSystems*(id: EcsIdentity; value: NimNode) {.compileTime.} 
     curNode = newStmtList()
   curNode.add(value)
   CacheSeq(id.string & "uncommittedSystems").add(curNode)
+  {.pop.}
+
+proc disabledOperations*(id: EcsIdentity): NimNode {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let keyVal = CacheSeq(id.string & "disabledOperations")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  {.pop.}
+
+proc setdisabledOperations*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  CacheSeq(id.string & "disabledOperations").add(value)
+  {.pop.}
+
+proc appenddisabledOperations*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  var curNode = block:
+    let keyVal = CacheSeq(id.string & "disabledOperations")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  if curNode.isNil:
+    curNode = newStmtList()
+  curNode.add(value)
+  CacheSeq(id.string & "disabledOperations").add(curNode)
   {.pop.}
 
 proc inSystemIndex*(id: EcsIdentity): SystemIndex {.compileTime.} =
@@ -2437,6 +2554,96 @@ proc onRemoveCallbackForwardDecl*(id: EcsIdentity;
       result[i] = item
       i.inc
 
+proc onConstructCodeNode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): NimNode {.
+    compileTime.} =
+  result = newStmtList()
+  let keyVal = CacheSeq(id.string & "OnConstructCodeNimNode" &
+      $uint16(componentTypeIdValue))
+  for event in keyVal.items:
+    result.add(event)
+
+proc lenOnConstructCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): Natural {.
+    compileTime.} =
+  CacheSeq(id.string & "OnConstructCodeNimNode" & $uint16(componentTypeIdValue)).len
+
+proc addOnConstructCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId;
+                         value: NimNode) {.compileTime.} =
+  CacheSeq(id.string & "OnConstructCodeNimNode" & $uint16(componentTypeIdValue)).add(
+      value)
+
+proc onConstructCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): seq[
+    NimNode] {.compileTime.} =
+  let
+    keyVal = CacheSeq(id.string & "OnConstructCodeNimNode" &
+        $uint16(componentTypeIdValue))
+    listLen = keyVal.len
+  if listLen > 0:
+    result.setLen listLen
+    var i: int
+    for item in keyVal:
+      result[i] = item
+      i.inc
+
+proc onCloneCodeNode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): NimNode {.
+    compileTime.} =
+  result = newStmtList()
+  let keyVal = CacheSeq(id.string & "OnCloneCodeNimNode" &
+      $uint16(componentTypeIdValue))
+  for event in keyVal.items:
+    result.add(event)
+
+proc lenOnCloneCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): Natural {.
+    compileTime.} =
+  CacheSeq(id.string & "OnCloneCodeNimNode" & $uint16(componentTypeIdValue)).len
+
+proc addOnCloneCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId;
+                     value: NimNode) {.compileTime.} =
+  CacheSeq(id.string & "OnCloneCodeNimNode" & $uint16(componentTypeIdValue)).add(
+      value)
+
+proc onCloneCode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): seq[
+    NimNode] {.compileTime.} =
+  let
+    keyVal = CacheSeq(id.string & "OnCloneCodeNimNode" &
+        $uint16(componentTypeIdValue))
+    listLen = keyVal.len
+  if listLen > 0:
+    result.setLen listLen
+    var i: int
+    for item in keyVal:
+      result[i] = item
+      i.inc
+
+proc onEntityBindingNode*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): NimNode {.
+    compileTime.} =
+  result = newStmtList()
+  let keyVal = CacheSeq(id.string & "OnEntityBindingNimNode" &
+      $uint16(componentTypeIdValue))
+  for event in keyVal.items:
+    result.add(event)
+
+proc lenOnEntityBinding*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): Natural {.
+    compileTime.} =
+  CacheSeq(id.string & "OnEntityBindingNimNode" & $uint16(componentTypeIdValue)).len
+
+proc addOnEntityBinding*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId;
+                         value: NimNode) {.compileTime.} =
+  CacheSeq(id.string & "OnEntityBindingNimNode" & $uint16(componentTypeIdValue)).add(
+      value)
+
+proc onEntityBinding*(id: EcsIdentity; componentTypeIdValue: ComponentTypeId): seq[
+    NimNode] {.compileTime.} =
+  let
+    keyVal = CacheSeq(id.string & "OnEntityBindingNimNode" &
+        $uint16(componentTypeIdValue))
+    listLen = keyVal.len
+  if listLen > 0:
+    result.setLen listLen
+    var i: int
+    for item in keyVal:
+      result[i] = item
+      i.inc
+
 {.push, hint[ConvFromXtoItselfNotNeeded]: on.}
 {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
 proc onAddedNode*(id: EcsIdentity; systemIndexValue: SystemIndex): NimNode {.
@@ -2783,6 +2990,64 @@ proc appendonEntityStateChange*(id: EcsIdentity; value: NimNode) {.compileTime.}
     curNode = newStmtList()
   curNode.add(value)
   CacheSeq(id.string & "onEntityStateChange").add(curNode)
+  {.pop.}
+
+proc onEntityConstruct*(id: EcsIdentity): NimNode {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let keyVal = CacheSeq(id.string & "onEntityConstruct")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  {.pop.}
+
+proc setonEntityConstruct*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  CacheSeq(id.string & "onEntityConstruct").add(value)
+  {.pop.}
+
+proc appendonEntityConstruct*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  var curNode = block:
+    let keyVal = CacheSeq(id.string & "onEntityConstruct")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  if curNode.isNil:
+    curNode = newStmtList()
+  curNode.add(value)
+  CacheSeq(id.string & "onEntityConstruct").add(curNode)
+  {.pop.}
+
+proc onEntityClone*(id: EcsIdentity): NimNode {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let keyVal = CacheSeq(id.string & "onEntityClone")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  {.pop.}
+
+proc setonEntityClone*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  CacheSeq(id.string & "onEntityClone").add(value)
+  {.pop.}
+
+proc appendonEntityClone*(id: EcsIdentity; value: NimNode) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  var curNode = block:
+    let keyVal = CacheSeq(id.string & "onEntityClone")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].NimNode
+    else:
+      default(NimNode)
+  if curNode.isNil:
+    curNode = newStmtList()
+  curNode.add(value)
+  CacheSeq(id.string & "onEntityClone").add(curNode)
   {.pop.}
 
 proc onEcsBuildingCode*(id: EcsIdentity): NimNode {.compileTime.} =
@@ -3154,6 +3419,21 @@ proc setstrDefault*(id: EcsIdentity; value: ECSStrDefault) {.compileTime.} =
   CacheSeq(id.string & "strDefault").add(newLit(int(value)))
   {.pop.}
 
+proc runtimeConstructionHooks*(id: EcsIdentity): bool {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  result = block:
+    let keyVal = CacheSeq(id.string & "runtimeConstructionHooks")
+    if keyVal.len > 0:
+      keyVal[keyVal.len - 1].boolVal.bool
+    else:
+      default(bool)
+  {.pop.}
+
+proc setruntimeConstructionHooks*(id: EcsIdentity; value: bool) {.compileTime.} =
+  {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
+  CacheSeq(id.string & "runtimeConstructionHooks").add(newLit(bool(value)))
+  {.pop.}
+
 proc errDuplicates*(id: EcsIdentity): ECSErrorResponse {.compileTime.} =
   {.push, hint[ConvFromXtoItselfNotNeeded]: off.}
   result = block:
@@ -3240,6 +3520,7 @@ proc setentityOptions*(id: EcsIdentity; value: ECSEntityOptions) =
   id.setrecyclerFormat(value.recyclerFormat)
   id.setuseSet(value.useSet)
   id.setstrDefault(value.strDefault)
+  id.setruntimeConstructionHooks(value.runtimeConstructionHooks)
   id.seterrDuplicates(value.errors.errDuplicates)
   id.seterrEntityOverflow(value.errors.errEntityOverflow)
   id.seterrCaseComponent(value.errors.errCaseComponent)
@@ -3254,6 +3535,7 @@ proc entityOptions*(id: EcsIdentity): ECSEntityOptions =
   result.recyclerFormat = id.recyclerFormat
   result.useSet = id.useSet
   result.strDefault = id.strDefault
+  result.runtimeConstructionHooks = id.runtimeConstructionHooks
   result.errors.errDuplicates = id.errDuplicates
   result.errors.errEntityOverflow = id.errEntityOverflow
   result.errors.errCaseComponent = id.errCaseComponent

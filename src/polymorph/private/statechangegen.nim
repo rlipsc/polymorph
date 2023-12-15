@@ -226,7 +226,7 @@ proc removeComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateC
         details.compFetches.incl c.typeId
 
 
-proc buildAddCompEvents(node: var NimNode, id: EcsIdentity, context: var EventContext, c: ComponentBuildInfo) =
+proc buildAddCompEvents(node: NimNode, id: EcsIdentity, context: var EventContext, c: ComponentBuildInfo) =
   if c.isOwned:
     node.invokeEvent(id, context, ekInit)
   
@@ -238,12 +238,16 @@ proc addComponentEvents(id: EcsIdentity, entity: NimNode, details: var StateChan
   # Invoke component add events for details.passed.
 
   if not details.iterating.isNil:
+    # We are processing a run time entity.
+    # Since delete never calls add events, this means either 'construct' or 'clone'.
     assert details.passed.len > 0, "Internal error: there must be at least one component when iterating"
     let c = id.getInfo(details.passed[0])
     var context = newEventContext(entity, c, details.iterating)
+
     details.allEvents.buildAddCompEvents(id, context, c)
 
   else:
+    # We know the components given to us at compile time.
     for c in id.building(details.passed):
       let fetchedIdent = details.compAccess(c, details.suffix)
       var context = newEventContext(entity, c, fetchedIdent)
@@ -410,7 +414,7 @@ proc addToSystem(id: EcsIdentity, entity: NimNode, details: var StateChangeDetai
     if not defined(ecsPermissive):
       stateUpdate.add(quote do:
         static:
-          recordMutation(EcsIdentity(`id`), ekRowAdded, [`sysInt`])
+          recordMutation(`id`, ekRowAdded, [`sysInt`])
       )
 
     if ownedStateUpdates.len > 0:
@@ -512,6 +516,8 @@ proc removeFromSystem(id: EcsIdentity, entity: NimNode, details: var StateChange
   
   removeSystemRow.sysFetches.incl sys.index
   if sys.isOwner:
+    # Removing a row from an owner system removes all of that system's
+    # owned components from the entity.
     for c in id.ecsOwnedComponents(sys.index):
       details.compRemoves.incl c
 
@@ -527,7 +533,7 @@ proc removeFromSystem(id: EcsIdentity, entity: NimNode, details: var StateChange
   if not defined(ecsPermissive):
     removeSystemRow.update.add(quote do:
       static:
-        recordMutation(EcsIdentity(`id`), ekRowRemoved, [`sysInt`])
+        recordMutation(`id`, ekRowRemoved, [`sysInt`])
     )
 
   # Events
@@ -574,6 +580,10 @@ proc applyChange*(id: EcsIdentity, entity: NimNode, details: var StateChangeDeta
 
 
 proc doSysUpdate(id: EcsIdentity, entity: NimNode, sysUpdate: SystemUpdate, guard: NimNode, details: var StateChangeDetails) =
+  ## Generate code that removes this entity from relevant systems.
+  ## 
+  ## Removal code is gated by 'guard' checks to ensure the entity is a
+  ## member of the system.
   var
     updateRows = sysUpdate.update
   

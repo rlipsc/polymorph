@@ -494,8 +494,8 @@ macro genGlobalListStates*(itemType: typedesc, listNames: static[openarray[strin
         proc `listGetNode`*(`id`: EcsIdentity): `itemType` {.compileTime.} =
           `res` = newStmtList()
           let `fetchedKey` = `key`
-          for item in `fetchedKey`.items:
-            `res`.add item
+          for `item` in `fetchedKey`.items:
+            `res`.add `item`
       )
 
     result.add(quote do:
