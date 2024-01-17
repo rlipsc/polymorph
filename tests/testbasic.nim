@@ -148,6 +148,9 @@ template runBasic*(entOpts: ECSEntityOptions, compOpts: ECSCompOptions, sysOpts:
   proc runBasicTests() =
     suite "Basic operations":
       var ents = newSeq[EntityRef]()
+
+      test "Clear empty storage":
+        resetEntityStorage()
       
       test "New entity":
         let e = newEntity()

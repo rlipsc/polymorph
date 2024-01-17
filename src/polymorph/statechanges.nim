@@ -1191,10 +1191,11 @@ proc makeDelete*(id: EcsIdentity): NimNode =
 
     proc resetEntityStorage* =
       ## This deletes all entities, removes them from associated systems and resets next entity.
-      for i in 0 ..< `storageVar`.nextEntityId.int:
-        let ent = (i.EntityId).makeRef
-        ent.delete
-      `recyclerClear`
-      `storageVar`.nextEntityId = FIRST_ENTITY_ID
-      `storageVar`.entityCounter = 0
+      if entityCount() != 0:
+        for i in 0 ..< `storageVar`.nextEntityId.int:
+          let ent = (i.EntityId).makeRef
+          ent.delete
+        `recyclerClear`
+        `storageVar`.nextEntityId = FIRST_ENTITY_ID
+        `storageVar`.entityCounter = 0
 

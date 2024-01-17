@@ -880,7 +880,7 @@ proc indexTryGet*(sysNode, entIdNode, rowNode: NimNode, idxFmt: ECSSysIndexForma
   of sifTable:
     quote do:
       `rowNode` = `sysNode`.index.getOrDefault(`entIdNode`, -1)
-      `rowNode` >= 0:
+      `rowNode` >= 0
   of sifArray, sifAllocatedSeq:
     quote do:
       let rowData = `sysNode`.index[`entIdNode`.int]
