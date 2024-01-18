@@ -1289,12 +1289,14 @@ proc varArgsLen(params: NimNode): int =
 
 proc toTypeList*(id: EcsIdentity, componentList: NimNode): seq[ComponentTypeId] =
   ## Convert a list of nodes, such as from varargs[untyped], to a list of type ids.
-  template process(compNode: NimNode): ComponentTypeId =
+  result.setLen componentList.varArgsLen
+
+  for i, node in componentList.varArgsNodePairs:
     let
-      tyName = compNode.findType
+      tyName = node.findType
     
     if tyName == "":
-      error "Cannot find the type '" & compNode.repr & "' in identity \"" & id.string & "\""
+      error "Cannot find the type '" & node.repr & "' in identity \"" & id.string & "\""
 
     let typeId = id.typeStringToId(tyName)
     
@@ -1303,14 +1305,7 @@ proc toTypeList*(id: EcsIdentity, componentList: NimNode): seq[ComponentTypeId] 
     if typeId in result:
       error "Passed more than one component of type " & tyName
     
-    typeId
-
-  result.setLen componentList.varArgsLen
-
-  for i, node in componentList.varArgsNodePairs:
-    result[i] = node.process
-
-  assert result.len > 0, "Expected a list of component types"
+    result[i] = typeId
 
 proc toIntList*(list: ComponentIterable or SystemIterable): seq[int] =
   result.setLen list.len
