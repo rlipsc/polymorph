@@ -14,7 +14,7 @@ makeSystem "test1", [Comp1]:
 makeEcs()
 commitSystems("run")
 
-let e = newEntityWith(Comp1(value: 2))
+let e = newEntity(Comp1(value: 2))
 
 run()
 someData = e.fetch(Comp1).value

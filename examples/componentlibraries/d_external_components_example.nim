@@ -41,7 +41,7 @@ makeClampXYSystem(Pos, posRange)
 
 makeEcsCommit "run"
 
-let e = newEntityWith(
+let e = newEntity(
   Pos(x: 10.5, y: -20.0),
   Scale(x: 100.0, y: 0.5)
 )

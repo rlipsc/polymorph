@@ -33,5 +33,5 @@ makeEcsCommit "run"
 
 # Try out the ECS.
 
-let entity = newEntityWith(SayOnTick(ticks: 25))
+let entity = newEntity(SayOnTick(ticks: 25))
 for i in 0 ..< 100: run()

@@ -12,7 +12,7 @@ makeEcs()
 
 when false:
   # Error: we're missing B and C to create a row in "fullyOwned".
-  let e1 = newEntityWith(A())
+  let e1 = newEntity(A())
 
 when false:
   let e2 = newEntity()

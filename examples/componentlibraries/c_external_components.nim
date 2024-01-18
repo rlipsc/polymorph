@@ -40,6 +40,6 @@ systemUsingComp(MyComp2)
 
 makeEcsCommit "run"
 
-let e = newEntityWith(MyComp1(data: 2), MyComp2(data: 3))
+let e = newEntity(MyComp1(data: 2), MyComp2(data: 3))
 
 run()
