@@ -21,10 +21,11 @@ export macros
 
 
 macro componentNames*(id: static[EcsIdentity]): untyped =
-  ## Creates a runtime accessible array of typenames of all known components.
-  ## This should map directly to componentTypeId.
+  ## Creates a runtime accessible array of type names of all known components
+  ## that maps directly to componentTypeId.
   var comps = nnkBracket.newTree
-  for i in 0 ..< id.components.len:
+  comps.add newLit("InvalidComponent")
+  for i in 1 ..< id.components.len:
     comps.add newLit id.typeName(i.ComponentTypeId)
   result = quote do:
     @`comps`
