@@ -217,10 +217,9 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
   when defined(ecsLogDetails):
     echo "Component options:\n", options.repr, "\n"
 
-
   # Remove externally defined components given as idents.
-  for line in externalCompDefs:
-    body.del line
+  for i in countDown(externalCompDefs.high, 0):
+    body.del externalCompDefs[i]
   
   result.add typeDeclarations   # Add declarations for types derived from the components.
   result.add body               # The user's code body gets added unchanged, aside from stripping `{.notComponent.}.
