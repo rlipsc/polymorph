@@ -1188,10 +1188,19 @@ proc findType*(compNode: NimNode): string =
       compNode.getTypeStr
 
     of nnkCall:
-      let caller = compNode[0].getImpl()
-      caller.expectKind nnkProcDef
-      let callerTypeStr = $caller[3][0]
-      callerTypeStr
+      case compNode[0].kind
+        of nnkSym:
+          let caller = compNode[0].getType()
+          case caller.kind
+            of nnkProcDef:
+              $caller[3][0]
+            of nnkBracketExpr:
+              $caller[1]
+            else:
+              error "Cannot process type:" & $caller.repr.indent(2)
+              ""
+        else:
+          compNode[0].repr
     
     of nnkConv:
       compNode[0].expectKind {nnkSym, nnkIdent}
