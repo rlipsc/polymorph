@@ -213,7 +213,7 @@ proc doRegisterComponents(id: EcsIdentity, options: ECSCompOptions, body: NimNod
 
   when defined(ecsLog) or defined(ecsLogDetails):
     echo  "[ Component generation ]\n",
-          "Registered: ", registered.join(", ")
+          "Registered (", registered.len, "): ", registered.join(", ")
   when defined(ecsLogDetails):
     echo "Component options:\n", options.repr, "\n"
 
