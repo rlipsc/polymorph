@@ -21,7 +21,12 @@ template defineConstructAndClone*(entOpts: ECSEntityOptions, compOpts: ECSCompOp
   makeSystem "test", [AC, BC]:
     discard
 
-  makeEcs(entOpts)
+  const ccOpts = block:
+    var curOpts = entOpts
+    curOpts.runtimeConstructionHooks = true
+    curOpts
+    
+  makeEcs(ccOpts)
   commitSystems("run")
 
   proc runConstructAndClone() =
@@ -102,6 +107,7 @@ template defineConstructAndClone*(entOpts: ECSEntityOptions, compOpts: ECSCompOp
         check ents[0].fetchComponent(ReplacedTo).val == 123 * 2
         check ents[0] in sysTest3
 
+      # TODO: use CT events.
       registerCloneConstructor ReplacedFrom, proc(entity: EntityRef, component: ComponentRef): seq[Component] =
         let rf = ReplacedFromInstance(component.index)
         result.add ReplacedTo(val: rf.val)
