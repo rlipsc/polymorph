@@ -757,13 +757,16 @@ proc makeRuntimeDebugOutput(id: EcsIdentity): NimNode =
             try:
               caseComponent compRef.typeId:
                 genMax = componentGenerations().len
-                let gen = componentGenerations()[compRef.index.int]
-                genStr = `strOp`(gen)
+                if compRef.index.int < genMax:
+                  let gen = componentGenerations()[compRef.index.int]
+                  genStr = `strOp`(gen)
+                else:
+                  genStr = "out of bounds (value: " & $compRef.index.int & ", max: " & $(genMax - 1) & ")" 
                 owned = componentInstanceType().isOwnedComponent
-            except:
+            except CatchableError as err:
               genStr = " ERROR ACCESSING generations (index: " &
                 `strOp`(compRef.index.int) &
-                ", count: " & `strOp`(genMax) & ")"
+                ", count: " & `strOp`(genMax) & "), error: " & err.msg
 
             # $typeId returns the string of the storage type for this component.
             if owned:
